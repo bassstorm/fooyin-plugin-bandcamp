@@ -1,7 +1,6 @@
 #include "bandcampservice.h"
 
 #include "bandcamplogging.h"
-#include "bandcamplegacyadapter.h"
 #include "bandcamppostprocessor.h"
 
 #include <QFutureWatcher>
@@ -14,54 +13,47 @@
 
 namespace Fooyin::Bandcamp {
 namespace {
-constexpr int DefaultItemsInProgress = 2;
-constexpr int MinItemsInProgress     = 1;
-constexpr int MaxItemsInProgress     = 8;
+constexpr int DefaultItemsInProgress      = 2;
+constexpr int MinItemsInProgress          = 1;
+constexpr int MaxItemsInProgress          = 8;
+constexpr int ServiceDefaultItemTimeoutMs = 10000;
+constexpr int ServiceMinItemTimeoutMs     = 1;
+constexpr int ServiceMaxItemTimeoutMs     = 120000;
 
-constexpr int DefaultItemTimeoutMs = 10000;
-// Internal floor and ceiling in milliseconds. The user-facing setting is limited to 1-120 s separately.
-constexpr int MinItemTimeoutMs = 1;
-constexpr int MaxItemTimeoutMs = 120000;
-
-BandcampResolvedPage parsePage(const BandcampPageUrl& page, const QByteArray& body, CorrelationContext context)
+ResolutionError operationFailure(ResolutionErrorCode code, ResolutionStage stage, const QUrl& resource, qint64 trackId,
+                                 const QString& field, const QString& reason)
 {
-    BandcampResolvedPage result;
-    result.page = page;
-    const QUrl pageUrl = context.resourceUrl.isValid() ? context.resourceUrl : QUrl(page.url);
+    return {code, stage, resource, trackId, field, reason};
+}
 
-    if(page.kind == BandcampPageKind::Album) {
-        auto parsed     = parseLegacyAlbumPage(body, pageUrl, context);
-        result.error    = parsed.error;
-        result.warnings = parsed.warnings;
-        result.album    = std::move(parsed.value);
-        if(result.error.isEmpty()) {
-            postProcessAlbum(result.album, result.warnings);
-        }
-    }
-    else {
-        auto parsed     = parseLegacyTrackPage(body, pageUrl, context);
-        result.error    = parsed.error;
-        result.warnings = parsed.warnings;
-        result.track    = std::move(parsed.value);
-        if(result.error.isEmpty()) {
-            postProcessTrack(result.track, result.warnings);
-        }
-    }
+ResolutionError parentFailure(const ResolutionError& cause, const QUrl& parentUrl, qint64 trackId,
+                              ResolutionStage stage = ResolutionStage::Acquire)
+{
+    return operationFailure(ResolutionErrorCode::ParentUnavailable, stage, parentUrl, trackId,
+                            cause.field.isEmpty() ? QStringLiteral("parent") : cause.field,
+                            QStringLiteral("required album parent failed: %1").arg(cause.reason));
+}
 
-    return result;
+void processAlbum(AlbumAdmission& admission)
+{
+    postProcessAlbum(admission);
+}
+
+void processTrack(TrackAdmission& admission)
+{
+    postProcessTrack(admission);
 }
 } // namespace
 
 BandcampService::BandcampService(QNetworkAccessManager* network, QObject* parent)
-    : QObject(parent)
+    : QObject{parent}
     , m_client{new BandcampClient(network, this)}
     , m_maxItemsInProgress{DefaultItemsInProgress}
-    , m_itemTimeoutMs{DefaultItemTimeoutMs}
+    , m_itemTimeoutMs{ServiceDefaultItemTimeoutMs}
 { }
 
 BandcampService::~BandcampService()
 {
-    // A parse task cannot be cancelled, and it reads memory owned by its future, so wait for it to end.
     for(auto parse : std::as_const(m_parses)) {
         parse.waitForFinished();
     }
@@ -75,7 +67,7 @@ void BandcampService::setMaxItemsInProgress(int count)
 
 void BandcampService::setItemTimeoutMs(int timeoutMs)
 {
-    m_itemTimeoutMs = std::clamp(timeoutMs, MinItemTimeoutMs, MaxItemTimeoutMs);
+    m_itemTimeoutMs = std::clamp(timeoutMs, ServiceMinItemTimeoutMs, ServiceMaxItemTimeoutMs);
 }
 
 void BandcampService::resolve(const QList<BandcampPageUrl>& urls)
@@ -85,7 +77,6 @@ void BandcampService::resolve(const QList<BandcampPageUrl>& urls)
     }
 
     const quint64 batchId = m_nextBatchId++;
-
     Batch batch;
     batch.remaining = static_cast<int>(urls.size());
     batch.results.resize(urls.size());
@@ -97,7 +88,6 @@ void BandcampService::resolve(const QList<BandcampPageUrl>& urls)
     for(qsizetype i = 0; i < urls.size(); ++i) {
         m_queued.append(Job{m_nextJobId++, batchId, static_cast<int>(i), urls.at(i)});
     }
-
     startNextJobs();
 }
 
@@ -105,25 +95,19 @@ void BandcampService::startNextJobs()
 {
     while(!m_queued.isEmpty() && static_cast<int>(m_active.size()) < m_maxItemsInProgress) {
         const Job job = m_queued.takeFirst();
-
-        // Discography expansion arrives in Step 3. Until then it is reported, not fetched.
         if(job.page.kind == BandcampPageKind::Discography) {
-            qCInfo(BANDCAMP_RESOLVE) << "Discography resolution is not supported yet, skipping" << job.page.url;
-            BandcampResolvedPage result;
-            result.page  = job.page;
-            result.error = tr("Discography resolution is not supported yet");
-            recordResult(job, std::move(result));
+            recordResult(job,
+                         ResolutionFailure{operationFailure(
+                             ResolutionErrorCode::UnsupportedRequest, ResolutionStage::Acquire, QUrl(job.page.url), 0,
+                             QStringLiteral("resource"), QStringLiteral("discography expansion is not implemented"))});
             continue;
         }
-
         startJob(job);
     }
 }
 
 void BandcampService::startJob(const Job& job)
 {
-    qCInfo(BANDCAMP_RESOLVE) << "Resolving" << pageKindName(job.page.kind) << job.page.url;
-
     ActiveJob active;
     active.job     = job;
     active.timeout = new QTimer(this);
@@ -131,108 +115,197 @@ void BandcampService::startJob(const Job& job)
     active.timeout->setInterval(m_itemTimeoutMs);
     connect(active.timeout, &QTimer::timeout, this, [this, jobId = job.jobId]() { onTimedOut(jobId); });
     active.timeout->start();
-    m_active.insert(job.jobId, active);
-
+    active.correlation = {.jobId = static_cast<qint64>(job.jobId), .resourceUrl = QUrl(job.page.url)};
+    m_active.insert(job.jobId, std::move(active));
     startFetch(job.jobId, job.page.url);
 }
 
 void BandcampService::startFetch(quint64 jobId, const QString& url)
 {
-    // The client never calls back synchronously, so the job is still active when its request id is stored.
+    const auto active = m_active.constFind(jobId);
+    const qint64 trackId
+        = active != m_active.cend() && active->trackCandidate && active->trackCandidate->track.id.isUsable()
+            ? active->trackCandidate->track.id.value
+            : 0;
     const BandcampClient::RequestId request = m_client->fetch(
-        QUrl(url), [this, jobId](BandcampFetchResponse response) { onFetched(jobId, std::move(response)); },
-        CorrelationContext{.jobId = static_cast<qint64>(jobId), .resourceUrl = QUrl(url)});
+        QUrl(url), [this, jobId](BandcampFetchOutcome response) { onFetched(jobId, std::move(response)); },
+        CorrelationContext{.jobId = static_cast<qint64>(jobId), .resourceUrl = QUrl(url), .trackId = trackId});
 
     if(auto it = m_active.find(jobId); it != m_active.end()) {
         it->request = request;
     }
 }
 
-void BandcampService::onFetched(quint64 jobId, BandcampFetchResponse response)
+void BandcampService::onFetched(quint64 jobId, BandcampFetchOutcome response)
 {
     auto it = m_active.find(jobId);
     if(it == m_active.end()) {
         return;
     }
 
-    const auto requestId = it->request;
-    it->request = 0;
-
-    if(!response.isValid()) {
+    const auto requestId   = it->request;
+    it->request            = 0;
+    const QUrl resourceUrl = it->awaitingAlbum ? QUrl(it->albumPage.url) : QUrl(it->job.page.url);
+    if(const auto* failed = std::get_if<ResolutionFailure>(&response)) {
         if(it->awaitingAlbum) {
-            // The track itself is still valid, so only its album details are lost.
-            BandcampResolvedPage result = std::move(it->partial);
-            result.warnings.append(tr("Album page could not be fetched, album artist and track total are unknown: %1")
-                                       .arg(response.error));
-            finishJob(jobId, std::move(result));
-            return;
+            const qint64 trackId = it->trackCandidate && it->trackCandidate->track.id.isUsable()
+                                     ? it->trackCandidate->track.id.value
+                                     : 0;
+            finishFailure(jobId, parentFailure(failed->error, resourceUrl, trackId));
         }
-
-        BandcampResolvedPage result;
-        result.page  = it->job.page;
-        result.error = response.error;
-        finishJob(jobId, std::move(result));
+        else {
+            finishFailure(jobId, failed->error);
+        }
+        return;
+    }
+    if(std::holds_alternative<ResolutionCancelled>(response)) {
+        finishJob(jobId, ResolutionCancelled{});
         return;
     }
 
+    const auto& fetched        = std::get<ResolutionSuccess<BandcampFetchResponse>>(response).value;
+    it->correlation            = CorrelationContext{.jobId       = static_cast<qint64>(jobId),
+                                                    .requestId   = static_cast<qint64>(requestId),
+                                                    .resourceUrl = fetched.url,
+                                                    .trackId     = it->trackCandidate && it->trackCandidate->track.id.isUsable()
+                                                                     ? it->trackCandidate->track.id.value
+                                                                     : 0};
     const BandcampPageUrl page = it->awaitingAlbum ? it->albumPage : it->job.page;
-    startParse(jobId, page, std::move(response.body),
-               CorrelationContext{.jobId = static_cast<qint64>(jobId),
-                                  .requestId = static_cast<qint64>(requestId), .resourceUrl = response.url});
+    startParse(jobId, page, fetched.body, it->correlation);
 }
 
-void BandcampService::startParse(quint64 jobId, const BandcampPageUrl& page, QByteArray body, CorrelationContext context)
+void BandcampService::startParse(quint64 jobId, const BandcampPageUrl& page, QByteArray body,
+                                 CorrelationContext context)
 {
-    // Parsing runs on the thread pool, so the UI thread never waits on it.
-    QFuture<BandcampResolvedPage> future
-        = QtConcurrent::run([page, body = std::move(body), context]() { return parsePage(page, body, context); });
+    QFuture<ReleaseParseOutcome> future = QtConcurrent::run([page, body = std::move(body), context]() {
+        const QUrl effectiveUrl = context.resourceUrl.isValid() ? context.resourceUrl : QUrl(page.url);
+        return parseReleasePage(body, effectiveUrl, context);
+    });
     m_parses.insert(jobId, future);
 
-    auto* watcher = new QFutureWatcher<BandcampResolvedPage>(this);
+    auto* watcher = new QFutureWatcher<ReleaseParseOutcome>(this);
     connect(watcher, &QFutureWatcherBase::finished, this, [this, jobId, watcher]() {
-        BandcampResolvedPage result = watcher->result();
+        ReleaseParseOutcome result = watcher->result();
         watcher->deleteLater();
         m_parses.remove(jobId);
-        // Dropped by onParsed if the item has already timed out.
         onParsed(jobId, std::move(result));
     });
     watcher->setFuture(future);
 }
 
-void BandcampService::onParsed(quint64 jobId, BandcampResolvedPage result)
+void BandcampService::onParsed(quint64 jobId, ReleaseParseOutcome result)
 {
     auto it = m_active.find(jobId);
     if(it == m_active.end()) {
         return;
     }
-
-    if(it->awaitingAlbum) {
-        BandcampResolvedPage track = std::move(it->partial);
-        if(result.isValid()) {
-            postProcessAlbumTrack(track.track, result.album, track.warnings);
+    if(const auto* failed = std::get_if<ResolutionFailure>(&result)) {
+        if(it->awaitingAlbum) {
+            const qint64 trackId = it->trackCandidate && it->trackCandidate->track.id.isUsable()
+                                     ? it->trackCandidate->track.id.value
+                                     : 0;
+            finishFailure(jobId,
+                          parentFailure(failed->error, QUrl(it->albumPage.url), trackId, ResolutionStage::Parse));
         }
         else {
-            track.warnings.append(tr("Album page could not be parsed, album artist, release date and track total are "
-                                     "unknown: %1")
-                                      .arg(result.error));
+            finishFailure(jobId, failed->error);
         }
-        finishJob(jobId, std::move(track));
+        return;
+    }
+    if(std::holds_alternative<ResolutionCancelled>(result)) {
+        finishJob(jobId, ResolutionCancelled{});
         return;
     }
 
-    if(result.isValid() && result.page.kind == BandcampPageKind::Track && !result.track.sourceUrl.isEmpty()) {
-        const BandcampPageUrl albumPage = parseBandcampPageUrl(result.track.sourceUrl);
-        if(albumPage.isValid() && albumPage.kind == BandcampPageKind::Album) {
-            qCDebug(BANDCAMP_RESOLVE) << "Fetching album for track" << result.page.url << albumPage.url;
-            it->awaitingAlbum = true;
-            it->albumPage     = albumPage;
-            it->partial       = std::move(result);
-            startFetch(jobId, albumPage.url);
+    ReleaseCandidate candidate = std::get<ResolutionSuccess<ReleaseCandidate>>(std::move(result)).value;
+    if(it->awaitingAlbum) {
+        auto* album = std::get_if<AlbumCandidate>(&candidate);
+        const qint64 trackId
+            = it->trackCandidate && it->trackCandidate->track.id.isUsable() ? it->trackCandidate->track.id.value : 0;
+        if(!album || !it->trackCandidate) {
+            finishFailure(jobId, operationFailure(ResolutionErrorCode::ParentUnavailable, ResolutionStage::Parse,
+                                                  QUrl(it->albumPage.url), trackId, QStringLiteral("parent.resource"),
+                                                  QStringLiteral("parent response did not identify an album")));
             return;
         }
+        auto admission = admitAlbumTrack(*it->trackCandidate, *album, it->correlation);
+        if(const auto* admitted = std::get_if<ResolutionSuccess<TrackAdmission>>(&admission)) {
+            TrackAdmission refined = admitted->value;
+            processTrack(refined);
+            finishJob(jobId, ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(refined.result)}});
+        }
+        else if(const auto* failed = std::get_if<ResolutionFailure>(&admission)) {
+            finishFailure(jobId, failed->error);
+        }
+        else {
+            finishJob(jobId, ResolutionCancelled{});
+        }
+        return;
     }
 
-    finishJob(jobId, std::move(result));
+    if(it->job.page.kind == BandcampPageKind::Album) {
+        auto* album = std::get_if<AlbumCandidate>(&candidate);
+        if(!album) {
+            finishFailure(jobId, operationFailure(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse,
+                                                  it->correlation.resourceUrl, 0, QStringLiteral("identity"),
+                                                  QStringLiteral("parsed resource is not an album")));
+            return;
+        }
+        auto admission = admitAlbum(*album, it->correlation);
+        if(const auto* admitted = std::get_if<ResolutionSuccess<AlbumAdmission>>(&admission)) {
+            AlbumAdmission refined = admitted->value;
+            processAlbum(refined);
+            finishJob(jobId, ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(refined.album)}});
+        }
+        else if(const auto* failed = std::get_if<ResolutionFailure>(&admission)) {
+            finishFailure(jobId, failed->error);
+        }
+        else {
+            finishJob(jobId, ResolutionCancelled{});
+        }
+        return;
+    }
+
+    auto* track = std::get_if<TrackPageCandidate>(&candidate);
+    if(!track) {
+        finishFailure(jobId, operationFailure(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse,
+                                              it->correlation.resourceUrl, 0, QStringLiteral("identity"),
+                                              QStringLiteral("parsed resource is not a track")));
+        return;
+    }
+    const ParentRequirement requirement = classifyParentEvidence(*track, it->correlation);
+    if(const auto* failed = std::get_if<ResolutionFailure>(&requirement)) {
+        finishFailure(jobId, failed->error);
+        return;
+    }
+    if(std::holds_alternative<StandaloneParentEvidence>(requirement)) {
+        auto admission = admitStandaloneTrack(*track, it->correlation);
+        if(const auto* admitted = std::get_if<ResolutionSuccess<TrackAdmission>>(&admission)) {
+            TrackAdmission refined = admitted->value;
+            processTrack(refined);
+            finishJob(jobId, ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(refined.result)}});
+        }
+        else if(const auto* failed = std::get_if<ResolutionFailure>(&admission)) {
+            finishFailure(jobId, failed->error);
+        }
+        else {
+            finishJob(jobId, ResolutionCancelled{});
+        }
+        return;
+    }
+
+    const RequiredAlbumParent parent = std::get<RequiredAlbumParent>(requirement);
+    const BandcampPageUrl albumPage  = parseBandcampPageUrl(parent.url.toString(QUrl::FullyEncoded));
+    if(!albumPage.isValid() || albumPage.kind != BandcampPageKind::Album) {
+        finishFailure(jobId, operationFailure(ResolutionErrorCode::ParentUnavailable, ResolutionStage::Acquire,
+                                              parent.url, track->track.id.value, QStringLiteral("parent.albumUrl"),
+                                              QStringLiteral("required parent location is not an album URL")));
+        return;
+    }
+    it->awaitingAlbum  = true;
+    it->albumPage      = albumPage;
+    it->trackCandidate = *track;
+    startFetch(jobId, albumPage.url);
 }
 
 void BandcampService::onTimedOut(quint64 jobId)
@@ -241,24 +314,24 @@ void BandcampService::onTimedOut(quint64 jobId)
     if(it == m_active.end()) {
         return;
     }
-
-    const BandcampPageUrl page = it->job.page;
-    qCWarning(BANDCAMP_RESOLVE) << "Timed out after" << m_itemTimeoutMs << "ms:" << page.url;
-
     if(it->awaitingAlbum) {
-        BandcampResolvedPage result = std::move(it->partial);
-        result.warnings.append(tr("Album page timed out, album artist and track total are unknown"));
-        finishJob(jobId, std::move(result));
+        const qint64 trackId
+            = it->trackCandidate && it->trackCandidate->track.id.isUsable() ? it->trackCandidate->track.id.value : 0;
+        finishFailure(jobId, operationFailure(ResolutionErrorCode::ParentUnavailable, ResolutionStage::Acquire,
+                                              QUrl(it->albumPage.url), trackId, QStringLiteral("parent"),
+                                              QStringLiteral("required album parent timed out")));
         return;
     }
-
-    BandcampResolvedPage result;
-    result.page  = page;
-    result.error = tr("Timed out after %1 s").arg(QString::number(m_itemTimeoutMs / 1000.0));
-    finishJob(jobId, std::move(result));
+    finishFailure(jobId, operationFailure(ResolutionErrorCode::Timeout, ResolutionStage::Fetch, QUrl(it->job.page.url),
+                                          0, QStringLiteral("resource"), QStringLiteral("resolution timed out")));
 }
 
-void BandcampService::finishJob(quint64 jobId, BandcampResolvedPage result)
+void BandcampService::finishFailure(quint64 jobId, ResolutionError error)
+{
+    finishJob(jobId, ResolutionFailure{std::move(error)});
+}
+
+void BandcampService::finishJob(quint64 jobId, BandcampResolutionOutcome result)
 {
     auto it = m_active.find(jobId);
     if(it == m_active.end()) {
@@ -267,35 +340,76 @@ void BandcampService::finishJob(quint64 jobId, BandcampResolvedPage result)
 
     ActiveJob active = std::move(it.value());
     m_active.erase(it);
-
     if(active.request != 0) {
         m_client->cancel(active.request);
     }
     active.timeout->stop();
     active.timeout->deleteLater();
 
-    // A track page without a stream cannot be played, and the processors cannot fail an item.
-    if(result.isValid() && result.page.kind == BandcampPageKind::Track && result.track.streamUrl.isEmpty()) {
-        result.error = tr("track has no usable stream");
-        qCWarning(BANDCAMP_RESOLVE) << "Track rejected:" << result.page.url << result.error;
-    }
-
     recordResult(active.job, std::move(result));
     startNextJobs();
 }
 
-void BandcampService::recordResult(const Job& job, BandcampResolvedPage result)
+void BandcampService::recordResult(const Job& job, BandcampResolutionOutcome result)
 {
     auto it = m_batches.find(job.batchId);
     if(it == m_batches.end()) {
         return;
     }
 
-    it->results[job.index] = std::move(result);
+    auto& pageResult    = it->results[job.index];
+    pageResult.page     = job.page;
+    pageResult.outcome  = std::move(result);
+    const auto& outcome = *pageResult.outcome;
+    const auto& error   = std::get_if<ResolutionFailure>(&outcome);
+    if(error) {
+        CorrelationContext context{.jobId       = static_cast<qint64>(job.jobId),
+                                   .resourceUrl = error->error.resourceUrl,
+                                   .trackId     = error->error.trackId};
+        qCWarning(BANDCAMP_RESOLVE).noquote() << formatTraceEvent(
+            context, QStringLiteral("resolution_failed"),
+            {DiagnosticField::text(QStringLiteral("code"), resolutionErrorCodeName(error->error.code)),
+             DiagnosticField::text(QStringLiteral("stage"), resolutionStageName(error->error.stage)),
+             DiagnosticField::text(QStringLiteral("field"), error->error.field),
+             DiagnosticField::text(QStringLiteral("reason"), error->error.reason)});
+        qCInfo(BANDCAMP_RESOLVE).noquote() << formatTraceEvent(
+            context, QStringLiteral("resolution_finished"),
+            {DiagnosticField::text(QStringLiteral("outcome"), QStringLiteral("failure")),
+             DiagnosticField::text(QStringLiteral("code"), resolutionErrorCodeName(error->error.code))});
+    }
+    else if(const auto* success = std::get_if<ResolutionSuccess<BandcampResolvedData>>(&outcome)) {
+        qint64 trackId = 0;
+        QString kind;
+        if(const auto* album = std::get_if<BandcampAlbum>(&success->value)) {
+            kind = QStringLiteral("album");
+            qCInfo(BANDCAMP_RESOLVE).noquote()
+                << formatTraceEvent({.jobId = static_cast<qint64>(job.jobId), .resourceUrl = QUrl(job.page.url)},
+                                    QStringLiteral("resolution_finished"),
+                                    {DiagnosticField::text(QStringLiteral("outcome"), QStringLiteral("success")),
+                                     DiagnosticField::text(QStringLiteral("kind"), kind),
+                                     DiagnosticField::number(QStringLiteral("tracks"), album->tracks.size())});
+        }
+        else {
+            const auto& track = std::get<BandcampResolvedTrack>(success->value);
+            trackId           = track.track.id;
+            kind              = track.album ? QStringLiteral("album_track") : QStringLiteral("standalone_track");
+            qCInfo(BANDCAMP_RESOLVE).noquote() << formatTraceEvent(
+                {.jobId = static_cast<qint64>(job.jobId), .resourceUrl = QUrl(job.page.url), .trackId = trackId},
+                QStringLiteral("resolution_finished"),
+                {DiagnosticField::text(QStringLiteral("outcome"), QStringLiteral("success")),
+                 DiagnosticField::text(QStringLiteral("kind"), kind)});
+        }
+    }
+    else {
+        qCInfo(BANDCAMP_RESOLVE).noquote()
+            << formatTraceEvent({.jobId = static_cast<qint64>(job.jobId), .resourceUrl = QUrl(job.page.url)},
+                                QStringLiteral("resolution_finished"),
+                                {DiagnosticField::text(QStringLiteral("outcome"), QStringLiteral("cancelled"))});
+    }
+
     if(--it->remaining > 0) {
         return;
     }
-
     QList<BandcampResolvedPage> results = std::move(it->results);
     m_batches.erase(it);
     emit batchResolved(results);

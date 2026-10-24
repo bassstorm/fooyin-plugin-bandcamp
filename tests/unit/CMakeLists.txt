@@ -7,6 +7,7 @@ add_executable(bandcamp_unit_tests
     bandcampcontracttests.cpp
     bandcampdiagnosticstests.cpp
     bandcampclienttests.cpp
+    bandcampservicetests.cpp
 )
 
 target_link_libraries(bandcamp_unit_tests PRIVATE bandcamp_core Qt6::Core Qt6::Test)

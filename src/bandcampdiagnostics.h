@@ -37,6 +37,9 @@ struct DiagnosticField
 // Drops the query, fragment, and userinfo. Queries carry signed stream tokens.
 QString redactUrlForLog(const QUrl& url);
 
+// Redacts any embedded URL before text is included in diagnostics.
+QString redactDiagnosticText(const QString& text);
+
 // Escapes control characters, separators, backslashes, and quotes so the text stays on one line.
 // Output is capped at MaxDiagnosticFieldChars.
 QString escapeDiagnosticText(const QString& text);

@@ -1,5 +1,6 @@
 #include "bandcampdiagnostics.h"
 
+#include <QRegularExpression>
 #include <QStringBuilder>
 
 namespace Fooyin::Bandcamp {
@@ -9,18 +10,18 @@ constexpr auto Ellipsis = u"...";
 QString escapedChar(QChar ch)
 {
     switch(ch.unicode()) {
-    case u'\\':
-        return QStringLiteral("\\\\");
-    case u'"':
-        return QStringLiteral("\\\"");
-    case u'\n':
-        return QStringLiteral("\\n");
-    case u'\r':
-        return QStringLiteral("\\r");
-    case u'\t':
-        return QStringLiteral("\\t");
-    default:
-        break;
+        case u'\\':
+            return QStringLiteral("\\\\");
+        case u'"':
+            return QStringLiteral("\\\"");
+        case u'\n':
+            return QStringLiteral("\\n");
+        case u'\r':
+            return QStringLiteral("\\r");
+        case u'\t':
+            return QStringLiteral("\\t");
+        default:
+            break;
     }
 
     const QChar::Category category = ch.category();
@@ -61,7 +62,7 @@ CorrelationContext CorrelationContext::withTrack(qint64 id) const
 
 DiagnosticField DiagnosticField::text(QString name, const QString& value)
 {
-    return DiagnosticField{std::move(name), value};
+    return DiagnosticField{std::move(name), redactDiagnosticText(value)};
 }
 
 DiagnosticField DiagnosticField::number(QString name, qint64 value)
@@ -79,8 +80,24 @@ QString redactUrlForLog(const QUrl& url)
     if(!url.isValid()) {
         return QStringLiteral("<invalid url>");
     }
-    return url.adjusted(QUrl::RemoveQuery | QUrl::RemoveFragment | QUrl::RemoveUserInfo)
-        .toString(QUrl::FullyEncoded);
+    return url.adjusted(QUrl::RemoveQuery | QUrl::RemoveFragment | QUrl::RemoveUserInfo).toString(QUrl::FullyEncoded);
+}
+
+QString redactDiagnosticText(const QString& text)
+{
+    static const QRegularExpression urls(QStringLiteral(R"((?:[A-Za-z][A-Za-z0-9+.-]*:)?//[^\s"'<>\\]+)"));
+    const auto matches = urls.globalMatch(text);
+    QList<QRegularExpressionMatch> found;
+    auto iter = matches;
+    while(iter.hasNext()) {
+        found.append(iter.next());
+    }
+
+    QString redacted = text;
+    for(auto it = found.crbegin(); it != found.crend(); ++it) {
+        redacted.replace(it->capturedStart(), it->capturedLength(), redactUrlForLog(QUrl(it->captured())));
+    }
+    return redacted;
 }
 
 QString escapeDiagnosticText(const QString& text)
@@ -127,8 +144,7 @@ QString formatTraceEvent(const CorrelationContext& context, const QString& event
         record += QLatin1Char(' ') + keyValue(escapeDiagnosticText(fields.at(i).name), fields.at(i).value);
     }
     if(fields.size() > shown) {
-        record += QLatin1Char(' ')
-                + keyValue(QStringLiteral("fields_omitted"), QString::number(fields.size() - shown));
+        record += QLatin1Char(' ') + keyValue(QStringLiteral("fields_omitted"), QString::number(fields.size() - shown));
     }
 
     if(record.size() > MaxDiagnosticRecordChars) {

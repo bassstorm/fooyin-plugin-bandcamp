@@ -21,10 +21,11 @@ const QUrl AlbumUrl{u"https://artist.bandcamp.com/album/record?token=SECRET#frag
 struct Fetched
 {
     BandcampClient::RequestId id{0};
-    std::optional<BandcampFetchResponse> response;
+    std::optional<BandcampFetchOutcome> response;
 };
 
-// Runs a fetch and spins the event loop until it calls back. The response stays empty on timeout.
+// Runs a fetch and spins the event loop until it calls back. The response stays
+// empty on timeout.
 Fetched fetchAndWait(BandcampClient& client, const QUrl& url, CorrelationContext context = {})
 {
     Fetched fetched;
@@ -36,7 +37,7 @@ Fetched fetchAndWait(BandcampClient& client, const QUrl& url, CorrelationContext
 
     fetched.id = client.fetch(
         url,
-        [&fetched, &loop](BandcampFetchResponse response) {
+        [&fetched, &loop](BandcampFetchOutcome response) {
             fetched.response = std::move(response);
             loop.quit();
         },
@@ -65,16 +66,16 @@ private slots:
     void successReturnsBody()
     {
         FakeNetworkManager network;
-        network.setResponder([](const QNetworkRequest&) {
-            return FakeResponse{.status = 200, .body = "<html>ok</html>"};
-        });
+        network.setResponder(
+            [](const QNetworkRequest&) { return FakeResponse{.status = 200, .body = "<html>ok</html>"}; });
         BandcampClient client{&network};
 
         const Fetched fetched = fetchAndWait(client, AlbumUrl);
         QVERIFY(fetched.response.has_value());
-        QVERIFY(fetched.response->isValid());
-        QCOMPARE(fetched.response->status, 200);
-        QCOMPARE(fetched.response->body, QByteArray("<html>ok</html>"));
+        QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampFetchResponse>>(*fetched.response));
+        const auto& response = std::get<ResolutionSuccess<BandcampFetchResponse>>(*fetched.response).value;
+        QCOMPARE(response.status, 200);
+        QCOMPARE(response.body, QByteArray("<html>ok</html>"));
         QCOMPARE(network.requested.size(), 1);
         QCOMPARE(network.requested.first(), AlbumUrl);
     }
@@ -87,28 +88,28 @@ private slots:
 
         const Fetched fetched = fetchAndWait(client, AlbumUrl);
         QVERIFY(fetched.response.has_value());
-        QVERIFY(!fetched.response->isValid());
-        QCOMPARE(fetched.response->error, u"HTTP 404"_s);
-        QCOMPARE(fetched.response->status, 404);
-        QVERIFY(fetched.response->body.isEmpty());
+        const auto* failure = std::get_if<ResolutionFailure>(&*fetched.response);
+        QVERIFY(failure);
+        QCOMPARE(failure->error.code, ResolutionErrorCode::FetchFailed);
+        QCOMPARE(failure->error.field, u"httpStatus"_s);
+        QCOMPARE(failure->error.reason, u"HTTP 404"_s);
     }
 
     void transportErrorIsReported()
     {
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) {
-            return FakeResponse{.status = 0,
-                                .error     = QNetworkReply::ConnectionRefusedError,
-                                .errorText = u"connection refused"_s};
+            return FakeResponse{
+                .status = 0, .error = QNetworkReply::ConnectionRefusedError, .errorText = u"connection refused"_s};
         });
         BandcampClient client{&network};
 
         const Fetched fetched = fetchAndWait(client, AlbumUrl);
         QVERIFY(fetched.response.has_value());
-        QVERIFY(!fetched.response->isValid());
-        QCOMPARE(fetched.response->error, u"connection refused"_s);
-        QCOMPARE(fetched.response->status, 0);
-        QVERIFY(fetched.response->body.isEmpty());
+        const auto* failure = std::get_if<ResolutionFailure>(&*fetched.response);
+        QVERIFY(failure);
+        QCOMPARE(failure->error.code, ResolutionErrorCode::FetchFailed);
+        QCOMPARE(failure->error.reason, u"connection refused"_s);
     }
 
     void oversizedBodyIsRejected()
@@ -121,9 +122,9 @@ private slots:
 
         const Fetched fetched = fetchAndWait(client, AlbumUrl);
         QVERIFY(fetched.response.has_value());
-        QVERIFY(!fetched.response->isValid());
-        QVERIFY(fetched.response->error.startsWith(u"page exceeds"_s));
-        QVERIFY(fetched.response->body.isEmpty());
+        const auto* failure = std::get_if<ResolutionFailure>(&*fetched.response);
+        QVERIFY(failure);
+        QCOMPARE(failure->error.code, ResolutionErrorCode::PageTooLarge);
     }
 
     void unsupportedSchemeIsRefusedWithoutRequest()
@@ -134,7 +135,9 @@ private slots:
         const Fetched fetched = fetchAndWait(client, QUrl(u"ftp://artist.bandcamp.com/album"_s));
         QCOMPARE(fetched.id, BandcampClient::RequestId{0});
         QVERIFY(fetched.response.has_value());
-        QCOMPARE(fetched.response->error, u"unsupported request"_s);
+        const auto* failure = std::get_if<ResolutionFailure>(&*fetched.response);
+        QVERIFY(failure);
+        QCOMPARE(failure->error.code, ResolutionErrorCode::UnsupportedRequest);
         QVERIFY(network.requested.isEmpty());
     }
 
@@ -147,12 +150,13 @@ private slots:
         BandcampClient client{&network};
 
         int cancelledCalls = 0;
-        const auto id      = client.fetch(AlbumUrl, [&cancelledCalls](BandcampFetchResponse) { ++cancelledCalls; });
+        const auto id      = client.fetch(AlbumUrl, [&cancelledCalls](BandcampFetchOutcome) { ++cancelledCalls; });
         QVERIFY(id != 0);
         client.cancel(id);
         client.cancel(id); // Cancelling twice is a no-op.
 
-        // The next fetch finishes after the cancelled reply, so its callback proves the cancelled one was drained.
+        // The next fetch finishes after the cancelled reply, so its callback proves
+        // the cancelled one was drained.
         const Fetched later = fetchAndWait(client, u"https://artist.bandcamp.com/track/later"_s);
         QVERIFY(later.response.has_value());
         QCOMPARE(cancelledCalls, 0);
@@ -164,7 +168,7 @@ private slots:
         int calls = 0;
         {
             BandcampClient client{&network};
-            client.fetch(AlbumUrl, [&calls](BandcampFetchResponse) { ++calls; });
+            client.fetch(AlbumUrl, [&calls](BandcampFetchOutcome) { ++calls; });
         }
 
         QEventLoop loop;
@@ -182,10 +186,11 @@ private slots:
         BandcampClient client{&network};
 
         CorrelationContext context;
-        context.jobId       = 7;
-        context.resourceUrl = AlbumUrl;
+        context.jobId         = 7;
+        context.resourceUrl   = AlbumUrl;
         const Fetched fetched = fetchAndWait(client, AlbumUrl, context);
         QVERIFY(fetched.response.has_value());
+        QVERIFY(isSuccess(*fetched.response));
         QCOMPARE(fetched.id, BandcampClient::RequestId{1});
 
         const QStringList started  = traceLines(u"request.started"_s);
@@ -215,8 +220,8 @@ private slots:
         BandcampClient client{&network};
 
         CorrelationContext context;
-        context.jobId       = 9;
-        const auto id       = client.fetch(AlbumUrl, [](BandcampFetchResponse) {}, context);
+        context.jobId = 9;
+        const auto id = client.fetch(AlbumUrl, [](BandcampFetchOutcome) { }, context);
         client.cancel(id);
 
         const QStringList cancelled = traceLines(u"request.cancelled"_s);

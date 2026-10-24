@@ -10,8 +10,8 @@ set(BANDCAMP_CORE_SOURCES
     ${BANDCAMP_SRC_DIR}/bandcamplogging.cpp
     ${BANDCAMP_SRC_DIR}/bandcamplogging.h
     ${BANDCAMP_SRC_DIR}/bandcampmodel.h
-    ${BANDCAMP_SRC_DIR}/bandcamplegacyadapter.cpp
-    ${BANDCAMP_SRC_DIR}/bandcamplegacyadapter.h
+    ${BANDCAMP_SRC_DIR}/bandcampassembly.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampassembly.h
     ${BANDCAMP_SRC_DIR}/bandcampparser.cpp
     ${BANDCAMP_SRC_DIR}/bandcampparser.h
     ${BANDCAMP_SRC_DIR}/bandcampdirtytitle.cpp

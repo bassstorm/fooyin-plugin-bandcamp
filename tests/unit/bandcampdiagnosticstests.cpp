@@ -43,13 +43,13 @@ void DiagnosticsTests::escapesDelimitersAndControls()
 void DiagnosticsTests::capsFieldLengthWithoutSplittingSurrogates()
 {
     const QString longText = QString(1000, u'a');
-    const QString capped = escapeDiagnosticText(longText);
+    const QString capped   = escapeDiagnosticText(longText);
     QCOMPARE(capped.size(), MaxDiagnosticFieldChars);
     QVERIFY(capped.endsWith(u"..."_s));
 
     // 252 ASCII characters, then one surrogate pair that would straddle the cap.
     const QString straddling = QString(252, u'a') + u"\U0001F600"_s + u"b"_s;
-    const QString cut = escapeDiagnosticText(straddling);
+    const QString cut        = escapeDiagnosticText(straddling);
     QVERIFY(cut.endsWith(u"..."_s));
     QVERIFY(!cut.chopped(3).back().isHighSurrogate());
 }
@@ -62,6 +62,9 @@ void DiagnosticsTests::redactsUrlsForLogs()
 
     const DiagnosticField field = DiagnosticField::url(u"url"_s, QUrl(u"https://a.bandcamp.com/t/z?sig=SECRET"_s));
     QCOMPARE(field.value, u"https://a.bandcamp.com/t/z"_s);
+    const auto text
+        = DiagnosticField::text(u"detail"_s, u"failed at https://user:pass@cdn.example.com/song.mp3?sig=SECRET"_s);
+    QCOMPARE(text.value, u"failed at https://cdn.example.com/song.mp3"_s);
 }
 
 void DiagnosticsTests::formatsCorrelatedSingleLineRecord()

@@ -43,9 +43,10 @@ build/install steps and set `CMAKE_PREFIX_PATH` to that package instead.
 
 ### Unit tests
 
-The unit tests cover URL validation, the post-processors, malformed input,
-settings, the shared contracts, TRACE diagnostics, and the network client. They
-are off by default. To run them:
+The unit tests cover URL validation, typed parser candidates, metadata admission
+and parent relationships, isolated and composed semantic processors,
+required-parent service behavior, settings, TRACE diagnostics, and the network
+client. They are off by default. To run them:
 
 ```sh
 cmake -S . -B build-tests -DBANDCAMP_BUILD_TESTS=ON -DCMAKE_PREFIX_PATH="$PWD/build/fooyin-install"
@@ -61,7 +62,7 @@ the number of mutation iterations (default 10000).
 ### Live probe
 
 The live probe is the current manual tool for fetching real Bandcamp pages and
-checking the parser against them. It is not wired into the plugin build or
+checking the production resolution path against them. It is not wired into the plugin build or
 CTest. It needs network access and saves nothing to disk. Its replacement with
 production-chain integration tests is covered by
 [the development plan](DEVELOPMENT_PLAN.md#increment-6---live-integration-tests-and-probe-retirement).
@@ -96,17 +97,16 @@ For each album and track page, the output shows:
   URL queries, fragments and credentials are redacted. The probe enables this
   category; it no longer extracts raw JSON or fetches pages twice.
 - `album:` and `tracks:`, or `track:`: every resolved field, including empty
-  ones shown as `""`. Durations are in milliseconds. Each value's source is logged
-  by the post-processors as `fy.bandcamp.tracks` debug lines on stderr, for
-  example `release-artist-fallback: track 1 artist = ... (from page artist)`.
-  The probe enables these lines itself.
-- `FAIL` and `note` lines from the checks, and `warn` lines from the
-  post-processors.
+  ones shown as `""`. Durations are in milliseconds. Effective processor changes
+  are logged with old/new values, provenance, and reason in correlated
+  `fy.trace.bandcamp.tracks` records. The probe enables these lines itself.
+- `FAIL` and `note` lines from the checks. Admission failures are structured
+  outcomes; no partial album or warning list is presented as a successful result.
 
 Expected values for the agreed set are in the `Snapshots` table in
-[bandcamp_probe.cpp](tests/integration/bandcamp_probe.cpp). A mismatch means
-Bandcamp changed its pages or the model, or the parser regressed. The probe
-exits with 1 when any page fails.
+[bandcamp_probe.cpp](tests/integration/bandcamp_probe.cpp). A mismatch can mean
+Bandcamp changed its pages or the model, or source mapping, assembly, or
+post-processing regressed. The probe exits with 1 when any page fails.
 
 ### Internal parser boundary
 
@@ -117,14 +117,13 @@ their order even when malformed or streamless; parent identity/location and
 track-page fallback context remain separate evidence for assembly.
 Identity conversion validates original decimal tokens (including exact integral
 exponents) without floating-point rounding. Supported HTTPS stream strings retain
-their original signed queries verbatim.
+their original signed queries verbatim. Pure admission validates required
+metadata and relationships before the album-first, track-second non-failing
+semantic passes. Whole albums are atomic, while a selected album track retains
+validated parent metadata without requiring every sibling to be valid.
 
 Input limits are explicit in `bandcampparser.h`: 20 MiB response, 64 JSON
 container levels, 16,384 UTF-16 units per source string/key, 100,000 source values
 (including containers), and 10,000 declared rows. Exceeding a limit fails parsing,
 never truncates metadata or returns a successful subset. Source snapshots are
 bounded by response size/depth and only serialized when parser TRACE is enabled.
-
-`bandcamplegacyadapter.*` temporarily projects candidates into the existing
-service/probe models. It is not domain admission: authoritative cross-page
-assembly, atomic validation and processor restructuring belong to Increment 3.

@@ -26,8 +26,8 @@ const QUrl StandaloneTrackUrl{u"https://ravver.bandcamp.com/track/burial-shutta-
 constexpr int DefaultMutationIterations = 10000;
 constexpr std::uint32_t MutationSeed    = 0x5EEDB4C5U;
 
-// Synthetic pages shaped like Bandcamp's data-tralbum model. No real page is stored on disk;
-// live checks against Bandcamp belong to the integration probe.
+// Synthetic pages shaped like Bandcamp's data-tralbum model. No real page is
+// stored on disk; live checks against Bandcamp belong to the integration probe.
 QByteArray sampleAlbumPage()
 {
     return tralbumPage(
@@ -177,7 +177,8 @@ private:
             const auto& release = std::get<ResolutionSuccess<ReleaseCandidate>>(result).value;
             if(const auto* album = std::get_if<AlbumCandidate>(&release)) {
                 for(const auto& track : album->tracks) {
-                    QVERIFY2(!track.durationMs.isUsable() || (track.durationMs.value >= 0 && track.durationMs.value <= MaxDurationMs),
+                    QVERIFY2(!track.durationMs.isUsable()
+                                 || (track.durationMs.value >= 0 && track.durationMs.value <= MaxDurationMs),
                              qPrintable(QStringLiteral("iteration %1").arg(i)));
                 }
             }
@@ -193,7 +194,8 @@ private:
             }
             const auto& release = std::get<ResolutionSuccess<ReleaseCandidate>>(result).value;
             if(const auto* page = std::get_if<TrackPageCandidate>(&release)) {
-                QVERIFY2(!page->track.durationMs.isUsable() || (page->track.durationMs.value >= 0 && page->track.durationMs.value <= MaxDurationMs),
+                QVERIFY2(!page->track.durationMs.isUsable()
+                             || (page->track.durationMs.value >= 0 && page->track.durationMs.value <= MaxDurationMs),
                          qPrintable(QStringLiteral("iteration %1").arg(i)));
             }
         }
@@ -270,6 +272,7 @@ int runContractTests(int argc, char** argv);
 int runDiagnosticsTests(int argc, char** argv);
 // Defined in bandcampclienttests.cpp.
 int runClientTests(int argc, char** argv);
+int runServiceTests(int argc, char** argv);
 int runParserTests(int argc, char** argv);
 
 int main(int argc, char** argv)
@@ -288,6 +291,7 @@ int main(int argc, char** argv)
     status |= runContractTests(argc, argv);
     status |= runDiagnosticsTests(argc, argv);
     status |= runClientTests(argc, argv);
+    status |= runServiceTests(argc, argv);
     return status;
 }
 

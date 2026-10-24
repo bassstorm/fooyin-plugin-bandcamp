@@ -9,11 +9,24 @@
 #include <variant>
 
 namespace Fooyin::Bandcamp {
-// Where a candidate value came from. Explicit values are read from the resource's own data.
-enum class FieldProvenance : quint8 { Explicit, Fallback, Inherited, Derived };
+// Where a candidate value came from. Explicit values are read from the
+// resource's own data.
+enum class FieldProvenance : quint8
+{
+    Explicit,
+    Fallback,
+    Inherited,
+    Derived
+};
 
-// Invalid is kept apart from Missing so a rejected source value is not mistaken for an absent one.
-enum class FieldState : quint8 { Missing, Invalid, Usable };
+// Invalid is kept apart from Missing so a rejected source value is not mistaken
+// for an absent one.
+enum class FieldState : quint8
+{
+    Missing,
+    Invalid,
+    Usable
+};
 
 template <typename T>
 struct CandidateField
@@ -23,7 +36,10 @@ struct CandidateField
     FieldProvenance provenance{FieldProvenance::Explicit};
     T value{};
 
-    [[nodiscard]] bool isUsable() const { return state == FieldState::Usable; }
+    [[nodiscard]] bool isUsable() const
+    {
+        return state == FieldState::Usable;
+    }
 
     static CandidateField usable(T value, FieldProvenance provenance)
     {
@@ -41,7 +57,8 @@ struct CandidateField
     }
 };
 
-// Membership is unknown until the parent has been checked. Standalone is an established fact, never a default.
+// Membership is unknown until the parent has been checked. Standalone is an
+// established fact, never a default.
 struct UnknownParent
 { };
 
@@ -83,13 +100,25 @@ struct StandaloneTrackScope
 
 using ResolvedScope = std::variant<WholeAlbumScope, AlbumTrackScope, StandaloneTrackScope>;
 
-// Returns nullopt while a track's membership is still unknown, so no scope can be chosen yet.
+// Returns nullopt while a track's membership is still unknown, so no scope can
+// be chosen yet.
 std::optional<ResolvedScope> resolveScope(const RequestedScope& requested, const ParentState& parent);
 
-enum class ResolutionStage : quint8 { Fetch, Parse, Acquire, Assemble, Admit, Refine, Publish };
+enum class ResolutionStage : quint8
+{
+    Fetch,
+    Parse,
+    Acquire,
+    Assemble,
+    Admit,
+    Refine,
+    Publish
+};
 
-// Codes are stable identifiers. Their text names appear in logs and must not change.
-enum class ResolutionErrorCode : quint8 {
+// Codes are stable identifiers. Their text names appear in logs and must not
+// change.
+enum class ResolutionErrorCode : quint8
+{
     FetchFailed,
     Timeout,
     PageTooLarge,
@@ -100,6 +129,7 @@ enum class ResolutionErrorCode : quint8 {
     RelationshipUnresolved,
     ParentUnavailable,
     NoResolvableTracks,
+    InvalidField,
 };
 
 struct ResolutionError
@@ -122,7 +152,8 @@ QString resolutionStageName(ResolutionStage stage);
 template <typename T>
 struct ResolutionSuccess
 {
-    // Deliberately not default constructible: a default outcome would read as success with placeholder data.
+    // Deliberately not default constructible: a default outcome would read as
+    // success with placeholder data.
     ResolutionSuccess() = delete;
     explicit ResolutionSuccess(T result)
         : value{std::move(result)}

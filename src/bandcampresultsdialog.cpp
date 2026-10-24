@@ -14,13 +14,6 @@ QString formatDuration(qint64 durationMs)
     return QStringLiteral("%1:%2").arg(totalSeconds / 60).arg(totalSeconds % 60, 2, 10, QChar(u'0'));
 }
 
-QString formatWarnings(const QStringList& warnings)
-{
-    if(warnings.isEmpty()) {
-        return {};
-    }
-    return QStringLiteral("  Warnings: %1\n").arg(warnings.join(u"; "_s));
-}
 } // namespace
 
 BandcampResultsDialog::BandcampResultsDialog(const QList<BandcampResolvedPage>& results, QWidget* parent)
@@ -47,36 +40,53 @@ QString BandcampResultsDialog::formatResults(const QList<BandcampResolvedPage>& 
     int failed = 0;
 
     for(const auto& result : results) {
-        if(!result.isValid()) {
+        const auto* success
+            = result.outcome ? std::get_if<ResolutionSuccess<BandcampResolvedData>>(&*result.outcome) : nullptr;
+        if(!success) {
             ++failed;
-            text += tr("Failed: %1\n  Error: %2\n").arg(result.page.url, result.error);
-            text += formatWarnings(result.warnings);
+            text += tr("Failed: %1\n").arg(result.page.url);
+            if(result.outcome) {
+                if(const auto* failure = std::get_if<ResolutionFailure>(&*result.outcome)) {
+                    text += tr("  Error: %1 (%2, %3)\n")
+                                .arg(failure->error.reason, resolutionErrorCodeName(failure->error.code),
+                                     failure->error.field);
+                }
+                else {
+                    text += tr("  Resolution was cancelled.\n");
+                }
+            }
+            else {
+                text += tr("  No resolution outcome was reported.\n");
+            }
             text += u"\n"_s;
             continue;
         }
 
-        if(result.page.kind == BandcampPageKind::Album) {
-            const auto& album = result.album;
-            text += tr("Album: %1\n").arg(album.title);
-            text += tr("  Artist: %1\n").arg(album.artist);
-            text += tr("  Track total: %1, playable: %2\n").arg(album.trackTotal).arg(album.tracks.size());
-            if(album.releaseDate.isValid()) {
-                text += tr("  Released: %1\n").arg(album.releaseDate.toString(u"yyyy-MM-dd"_s));
+        if(const auto* album = std::get_if<BandcampAlbum>(&success->value)) {
+            const auto& metadata = album->metadata;
+            text += tr("Album: %1\n").arg(metadata.title);
+            text += tr("  Artist: %1\n").arg(metadata.artist);
+            text += tr("  Track total: %1, playable: %2\n").arg(metadata.trackTotal).arg(album->tracks.size());
+            if(metadata.releaseDate.isValid()) {
+                text += tr("  Released: %1\n").arg(metadata.releaseDate.toString(u"yyyy-MM-dd"_s));
             }
 
             QStringList firstTracks;
-            for(qsizetype i = 0; i < album.tracks.size() && i < 5; ++i) {
-                firstTracks.append(album.tracks.at(i).title);
+            for(qsizetype i = 0; i < album->tracks.size() && i < 5; ++i) {
+                firstTracks.append(album->tracks.at(i).title);
             }
             if(!firstTracks.isEmpty()) {
                 text += tr("  First tracks: %1\n").arg(firstTracks.join(u", "_s));
             }
         }
         else {
-            const auto& track = result.track;
+            const auto& resolved = std::get<BandcampResolvedTrack>(success->value);
+            const auto& track    = resolved.track;
             text += tr("Track: %1\n").arg(track.title);
             text += tr("  Artist: %1\n").arg(track.artist);
-            text += tr("  Album artist: %1\n").arg(track.albumArtist.isEmpty() ? tr("unknown") : track.albumArtist);
+            text += tr("  Album artist: %1\n")
+                        .arg(resolved.album && !resolved.album->artist.isEmpty() ? resolved.album->artist
+                                                                                 : tr("unknown"));
             if(track.durationMs > 0) {
                 text += tr("  Duration: %1\n").arg(formatDuration(track.durationMs));
             }
@@ -84,11 +94,13 @@ QString BandcampResultsDialog::formatResults(const QList<BandcampResolvedPage>& 
                 text += tr("  Track number: %1\n").arg(track.trackNumber);
             }
             text += tr("  Track total: %1\n")
-                        .arg(track.trackTotal > 0 ? QString::number(track.trackTotal) : tr("unknown"));
+                        .arg(resolved.album ? QString::number(resolved.album->trackTotal) : tr("unknown"));
+            if(resolved.album) {
+                text += tr("  Album: %1\n").arg(resolved.album->title);
+            }
             text += tr("  Source: %1\n").arg(track.sourceUrl);
         }
 
-        text += formatWarnings(result.warnings);
         text += u"\n"_s;
     }
 
