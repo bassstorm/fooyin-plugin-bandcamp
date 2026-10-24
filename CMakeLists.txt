@@ -58,6 +58,39 @@ elseif(UNIX)
     set_property(TARGET bandcamp PROPERTY INSTALL_RPATH "$ORIGIN/..")
 endif()
 
+# Fooyin's Install... dialog reads a zip (.zip or .fyplugin) with the module under
+# a platform directory such as linux-x64/. The module is the same Release binary.
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _bandcamp_arch)
+if(_bandcamp_arch MATCHES "^(x86_64|amd64)$")
+    set(_bandcamp_arch x64)
+elseif(_bandcamp_arch MATCHES "^(aarch64|arm64)$")
+    set(_bandcamp_arch arm64)
+endif()
+if(WIN32)
+    set(_bandcamp_os windows)
+elseif(APPLE)
+    set(_bandcamp_os macos)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(_bandcamp_os freebsd)
+else()
+    set(_bandcamp_os linux)
+endif()
+set(_bandcamp_platform "${_bandcamp_os}-${_bandcamp_arch}")
+set(_bandcamp_stage "${CMAKE_CURRENT_BINARY_DIR}/bundle")
+set(_bandcamp_bundle "${CMAKE_CURRENT_BINARY_DIR}/fooyin-bandcamp-${PROJECT_VERSION}-${_bandcamp_platform}.fyplugin")
+
+add_custom_target(
+    bandcamp_bundle
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${_bandcamp_stage}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_bandcamp_stage}/${_bandcamp_platform}"
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:bandcamp> "${_bandcamp_stage}/${_bandcamp_platform}/"
+    COMMAND ${CMAKE_COMMAND} -E chdir "${_bandcamp_stage}"
+            ${CMAKE_COMMAND} -E tar cf "${_bandcamp_bundle}" --format=zip "${_bandcamp_platform}"
+    DEPENDS bandcamp
+    VERBATIM
+    COMMENT "Creating Fooyin plugin bundle ${_bandcamp_bundle}"
+)
+
 if(BANDCAMP_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests/unit)

@@ -1,0 +1,81 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Development build",
+      "binaryDir": "${sourceDir}/build"
+    },
+    {
+      "name": "tests",
+      "displayName": "Unit tests",
+      "binaryDir": "${sourceDir}/build-tests",
+      "cacheVariables": {
+        "BANDCAMP_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "tests-sanitize",
+      "displayName": "Unit tests with AddressSanitizer and UndefinedBehaviorSanitizer",
+      "binaryDir": "${sourceDir}/build-sanitize",
+      "cacheVariables": {
+        "BANDCAMP_SANITIZE": "ON"
+      },
+      "inherits": [ "tests" ]
+    },
+    {
+      "name": "release",
+      "displayName": "Release build",
+      "binaryDir": "${sourceDir}/build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "tests",
+      "configurePreset": "tests",
+      "targets": [ "bandcamp_unit_tests" ]
+    },
+    {
+      "name": "tests-sanitize",
+      "configurePreset": "tests-sanitize",
+      "targets": [ "bandcamp_unit_tests" ]
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "bundle",
+      "configurePreset": "release",
+      "targets": [ "bandcamp_bundle" ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "tests",
+      "configurePreset": "tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tests-sanitize",
+      "configurePreset": "tests-sanitize",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
