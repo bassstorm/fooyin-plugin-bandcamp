@@ -127,3 +127,21 @@ container levels, 16,384 UTF-16 units per source string/key, 100,000 source valu
 (including containers), and 10,000 declared rows. Exceeding a limit fails parsing,
 never truncates metadata or returns a successful subset. Source snapshots are
 bounded by response size/depth and only serialized when parser TRACE is enabled.
+
+The orchestrator deduplicates identical page scopes while preserving each input
+occurrence and restores the original order as keyed resolver outcomes arrive.
+The resolver accepts the complete request list; pending entries are lightweight
+values, while active per-release workflows are bounded by configured
+parallelism. A required album parent is fetched and processed within the
+selected track's workflow. The operation-local cache contains only successful,
+admitted, post-processed domain entities; source responses, parser candidates,
+and failures are not cached or shared across calls.
+
+Physical workflow slots are shared across operations and allow up to the
+configured maximum parallelism of eight. Each item deadline starts when its
+workflow begins, not while it waits in the pending list. Cancellation and
+timeout report promptly but retain physical capacity until an HTTP reply or
+worker actually settles. A page fetch produces one outcome; the resolver does
+not retry failed requests.
+The results dialog and probe cap rendered diagnostics at 1 MiB and show at most
+five playable track rows per album; full operation counts and outcomes continue.

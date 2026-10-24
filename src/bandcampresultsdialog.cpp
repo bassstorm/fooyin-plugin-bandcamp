@@ -8,23 +8,24 @@ using namespace Qt::StringLiterals;
 
 namespace Fooyin::Bandcamp {
 namespace {
+constexpr qsizetype MaxDisplayChars   = 1024 * 1024;
+constexpr int MaxDisplayCharsPerScope = 8192;
+
 QString formatDuration(qint64 durationMs)
 {
     const qint64 totalSeconds = durationMs / 1000;
     return QStringLiteral("%1:%2").arg(totalSeconds / 60).arg(totalSeconds % 60, 2, 10, QChar(u'0'));
 }
-
 } // namespace
 
-BandcampResultsDialog::BandcampResultsDialog(const QList<BandcampResolvedPage>& results, QWidget* parent)
-    : QDialog(parent)
+BandcampResultsDialog::BandcampResultsDialog(QWidget* parent)
+    : QDialog{parent}
     , m_text{new QPlainTextEdit(this)}
 {
     setWindowTitle(tr("Bandcamp Results"));
     resize(560, 420);
 
     m_text->setReadOnly(true);
-    m_text->setPlainText(formatResults(results));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
     QObject::connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -34,78 +35,96 @@ BandcampResultsDialog::BandcampResultsDialog(const QList<BandcampResolvedPage>& 
     layout->addWidget(buttons);
 }
 
-QString BandcampResultsDialog::formatResults(const QList<BandcampResolvedPage>& results) const
+void BandcampResultsDialog::appendResult(const BandcampScopeResult& result)
 {
-    QString text;
-    int failed = 0;
+    appendBounded(formatResult(result));
+}
 
-    for(const auto& result : results) {
-        const auto* success
-            = result.outcome ? std::get_if<ResolutionSuccess<BandcampResolvedData>>(&*result.outcome) : nullptr;
-        if(!success) {
-            ++failed;
-            text += tr("Failed: %1\n").arg(result.page.url);
-            if(result.outcome) {
-                if(const auto* failure = std::get_if<ResolutionFailure>(&*result.outcome)) {
-                    text += tr("  Error: %1 (%2, %3)\n")
-                                .arg(failure->error.reason, resolutionErrorCodeName(failure->error.code),
-                                     failure->error.field);
-                }
-                else {
-                    text += tr("  Resolution was cancelled.\n");
-                }
-            }
-            else {
-                text += tr("  No resolution outcome was reported.\n");
-            }
-            text += u"\n"_s;
-            continue;
+void BandcampResultsDialog::updateProgress(const BandcampOperationProgress& progress)
+{
+    setWindowTitle(tr("Bandcamp Results — %1 of %2").arg(progress.delivered).arg(progress.requested));
+}
+
+void BandcampResultsDialog::finish(const BandcampOperationSummary& summary)
+{
+    appendBounded(tr("Finished: %1 succeeded, %2 failed, %3 cancelled.\n")
+                      .arg(summary.succeeded)
+                      .arg(summary.failed)
+                      .arg(summary.cancelled));
+}
+
+void BandcampResultsDialog::showRejection(const ResolutionError& error)
+{
+    appendBounded(tr("Submission rejected: %1 (%2)\n").arg(error.reason, resolutionErrorCodeName(error.code)));
+}
+
+void BandcampResultsDialog::appendBounded(QString text)
+{
+    if(m_displayTruncated) {
+        return;
+    }
+    if(text.size() > MaxDisplayCharsPerScope) {
+        text.truncate(MaxDisplayCharsPerScope - 32);
+        text += tr("\n  [scope display truncated]\n");
+    }
+    if(m_displayedChars + text.size() > MaxDisplayChars) {
+        const qsizetype available = MaxDisplayChars - m_displayedChars;
+        if(available > 0) {
+            QString notice
+                = tr("[Further diagnostic display omitted at the 1 MiB UI limit; service outcomes continue.]")
+                      .left(available);
+            m_text->appendPlainText(notice);
+            m_displayedChars += notice.size();
         }
+        m_displayTruncated = true;
+        return;
+    }
+    m_displayedChars += text.size();
+    m_text->appendPlainText(text);
+}
 
-        if(const auto* album = std::get_if<BandcampAlbum>(&success->value)) {
-            const auto& metadata = album->metadata;
-            text += tr("Album: %1\n").arg(metadata.title);
-            text += tr("  Artist: %1\n").arg(metadata.artist);
-            text += tr("  Track total: %1, playable: %2\n").arg(metadata.trackTotal).arg(album->tracks.size());
-            if(metadata.releaseDate.isValid()) {
-                text += tr("  Released: %1\n").arg(metadata.releaseDate.toString(u"yyyy-MM-dd"_s));
-            }
-
-            QStringList firstTracks;
-            for(qsizetype i = 0; i < album->tracks.size() && i < 5; ++i) {
-                firstTracks.append(album->tracks.at(i).title);
-            }
-            if(!firstTracks.isEmpty()) {
-                text += tr("  First tracks: %1\n").arg(firstTracks.join(u", "_s));
-            }
-        }
-        else {
-            const auto& resolved = std::get<BandcampResolvedTrack>(success->value);
-            const auto& track    = resolved.track;
-            text += tr("Track: %1\n").arg(track.title);
-            text += tr("  Artist: %1\n").arg(track.artist);
-            text += tr("  Album artist: %1\n")
-                        .arg(resolved.album && !resolved.album->artist.isEmpty() ? resolved.album->artist
-                                                                                 : tr("unknown"));
-            if(track.durationMs > 0) {
-                text += tr("  Duration: %1\n").arg(formatDuration(track.durationMs));
-            }
-            if(track.trackNumber > 0) {
-                text += tr("  Track number: %1\n").arg(track.trackNumber);
-            }
-            text += tr("  Track total: %1\n")
-                        .arg(resolved.album ? QString::number(resolved.album->trackTotal) : tr("unknown"));
-            if(resolved.album) {
-                text += tr("  Album: %1\n").arg(resolved.album->title);
-            }
-            text += tr("  Source: %1\n").arg(track.sourceUrl);
-        }
-
-        text += u"\n"_s;
+QString BandcampResultsDialog::formatResult(const BandcampScopeResult& result) const
+{
+    QString text = tr("[%1] %2\n").arg(result.ordinal + 1).arg(result.page.url);
+    if(const auto* failure = std::get_if<ResolutionFailure>(&result.outcome)) {
+        text += tr("  Failed: %1 (%2, %3)\n\n")
+                    .arg(failure->error.reason, resolutionErrorCodeName(failure->error.code), failure->error.field);
+        return text;
+    }
+    if(std::holds_alternative<ResolutionCancelled>(result.outcome)) {
+        text += tr("  Cancelled.\n\n");
+        return text;
     }
 
-    text.prepend(
-        tr("Resolved %1 of %2 URL(s), %3 failed.\n\n").arg(results.size() - failed).arg(results.size()).arg(failed));
+    const auto& data = std::get<ResolutionSuccess<BandcampResolvedData>>(result.outcome).value;
+    if(const auto* album = std::get_if<BandcampAlbum>(&data)) {
+        text += tr("  Album: %1\n  Artist: %2\n  Track total: %3, playable: %4\n")
+                    .arg(album->metadata.title, album->metadata.artist)
+                    .arg(album->metadata.trackTotal)
+                    .arg(album->tracks.size());
+        if(album->tracks.size() > 5) {
+            text += tr("  Showing the first five playable tracks in diagnostics.\n");
+        }
+        if(album->metadata.releaseDate.isValid()) {
+            text += tr("  Released: %1\n").arg(album->metadata.releaseDate.toString(u"yyyy-MM-dd"_s));
+        }
+        for(qsizetype i = 0; i < album->tracks.size() && i < 5; ++i) {
+            text += tr("  Track %1: %2\n").arg(i + 1).arg(album->tracks.at(i).title);
+        }
+    }
+    else {
+        const auto& resolved = std::get<BandcampResolvedTrack>(data);
+        const auto& track    = resolved.track;
+        text += tr("  Track: %1\n  Artist: %2\n").arg(track.title, track.artist);
+        if(track.durationMs > 0) {
+            text += tr("  Duration: %1\n").arg(formatDuration(track.durationMs));
+        }
+        if(track.trackNumber > 0) {
+            text += tr("  Track number: %1\n").arg(track.trackNumber);
+        }
+        text += tr("  Album: %1\n\n").arg(resolved.album ? resolved.album->title : tr("unknown"));
+    }
+    text += u"\n"_s;
     return text;
 }
 } // namespace Fooyin::Bandcamp

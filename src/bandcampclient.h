@@ -4,8 +4,10 @@
 #include "bandcampresolution.h"
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QObject>
+#include <QPointer>
 #include <QUrl>
 
 #include <functional>
@@ -14,15 +16,22 @@ class QNetworkAccessManager;
 class QNetworkReply;
 
 namespace Fooyin::Bandcamp {
+constexpr qsizetype MaxClientReadChunkBytes = 64 * 1024;
+
 struct BandcampFetchResponse
 {
     QUrl url;
-    // 0 when no HTTP response was received.
     int status{0};
     QByteArray body;
 };
 
-using BandcampFetchOutcome = ResolutionOutcome<BandcampFetchResponse>;
+struct BandcampFetchFailure
+{
+    ResolutionError error;
+};
+
+using BandcampFetchOutcome
+    = std::variant<ResolutionSuccess<BandcampFetchResponse>, BandcampFetchFailure, ResolutionCancelled>;
 
 class BandcampClient : public QObject
 {
@@ -35,26 +44,36 @@ public:
     explicit BandcampClient(QNetworkAccessManager* network, QObject* parent = nullptr);
     ~BandcampClient() override;
 
-    // Returns 0 when the request is refused. The callback runs on the thread that
-    // owns this object, exactly once, unless the request is cancelled or this
-    // object is destroyed first. The context's request ID is replaced with the ID
-    // assigned to this request.
+    // Completion is always queued and delivered exactly once after the request settles or fails to start.
+    // Cancellation marks the result cancelled but retains the physical record until settlement.
     RequestId fetch(const QUrl& url, Callback callback, CorrelationContext context = {});
-
-    // Aborts a pending request. Its callback is not called.
     void cancel(RequestId id);
 
 private:
     struct PendingRequest
     {
-        QNetworkReply* reply{nullptr};
+        QPointer<QNetworkReply> reply;
+        QUrl initialUrl;
+        QUrl currentUrl;
         CorrelationContext context;
+        Callback callback;
+        QByteArray body;
+        quint64 replyGeneration{0};
+        int redirects{0};
+        bool cancelled{false};
+        bool tooLarge{false};
+        QElapsedTimer timer;
     };
 
-    QNetworkAccessManager* m_network{nullptr};
-    // A request is pending until its reply finishes or is cancelled. Whoever
-    // removes it owns the callback.
+    void startHop(RequestId id, const QUrl& url);
+    void drainReply(RequestId id, quint64 generation);
+    void onFinished(RequestId id, quint64 generation);
+    void onReplyDestroyed(RequestId id, quint64 generation);
+    void settle(RequestId id, BandcampFetchOutcome outcome);
+
+    QPointer<QNetworkAccessManager> m_network;
     QHash<RequestId, PendingRequest> m_pending;
     RequestId m_nextRequestId{1};
+    bool m_destroying{false};
 };
 } // namespace Fooyin::Bandcamp

@@ -38,7 +38,9 @@ void BandcampPlugin::initialise(const CorePluginContext& context)
 {
     m_network = context.networkAccess;
     m_service = new BandcampService(m_network.get(), this);
-    QObject::connect(m_service, &BandcampService::batchResolved, this, &BandcampPlugin::showResults);
+    QObject::connect(m_service, &BandcampService::scopeResolved, this, &BandcampPlugin::onScopeResolved);
+    QObject::connect(m_service, &BandcampService::progressChanged, this, &BandcampPlugin::onOperationProgress);
+    QObject::connect(m_service, &BandcampService::operationFinished, this, &BandcampPlugin::onOperationFinished);
 }
 
 std::unique_ptr<PluginSettingsProvider> BandcampPlugin::settingsProvider() const
@@ -78,15 +80,53 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls)
     qCInfo(BANDCAMP_SETTINGS) << "parallelism" << settings.parallelism << "item timeout"
                               << settings.itemTimeoutMs / 1000.0 << "s";
 
-    m_service->setMaxItemsInProgress(settings.parallelism);
-    m_service->setItemTimeoutMs(settings.itemTimeoutMs);
-    m_service->resolve(urls);
+    const auto submission = m_service->submit(urls, OperationOptions{settings.parallelism, settings.itemTimeoutMs});
+    if(const auto* rejected = std::get_if<BandcampSubmissionRejected>(&submission)) {
+        qCWarning(BANDCAMP_UI).noquote() << "Bandcamp request was rejected:" << rejected->error.reason;
+        auto* dialog = new BandcampResultsDialog(Utils::getMainWindow());
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->showRejection(rejected->error);
+        dialog->open();
+        return;
+    }
+
+    const BandcampOperationId id = std::get<BandcampOperationAccepted>(submission).id;
+    auto* dialog                 = new BandcampResultsDialog(Utils::getMainWindow());
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    m_resultDialogs.insert(id, dialog);
+    QObject::connect(dialog, &QDialog::finished, this, [this, id]() {
+        if(m_service) {
+            m_service->cancel(id);
+        }
+    });
+    QObject::connect(dialog, &QObject::destroyed, this, [this, id]() { m_resultDialogs.remove(id); });
+    dialog->open();
 }
 
-void BandcampPlugin::showResults(const QList<BandcampResolvedPage>& results)
+void BandcampPlugin::onScopeResolved(const BandcampScopeResult& result)
 {
-    auto* dialog = new BandcampResultsDialog(results, Utils::getMainWindow());
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->open();
+    const auto it = m_resultDialogs.constFind(result.operationId);
+    if(it != m_resultDialogs.cend() && *it) {
+        (*it)->appendResult(result);
+    }
+}
+
+void BandcampPlugin::onOperationProgress(const BandcampOperationProgress& progress)
+{
+    const auto it = m_resultDialogs.constFind(progress.operationId);
+    if(it != m_resultDialogs.cend() && *it) {
+        (*it)->updateProgress(progress);
+    }
+}
+
+void BandcampPlugin::onOperationFinished(const BandcampOperationSummary& summary)
+{
+    const auto it = m_resultDialogs.find(summary.operationId);
+    if(it != m_resultDialogs.end()) {
+        if(it.value()) {
+            it.value()->finish(summary);
+        }
+        m_resultDialogs.erase(it);
+    }
 }
 } // namespace Fooyin::Bandcamp

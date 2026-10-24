@@ -273,11 +273,24 @@ int runDiagnosticsTests(int argc, char** argv);
 // Defined in bandcampclienttests.cpp.
 int runClientTests(int argc, char** argv);
 int runServiceTests(int argc, char** argv);
+int runOrchestratorTests(int argc, char** argv);
 int runParserTests(int argc, char** argv);
 
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+
+    if(argc >= 2) {
+        if(qstrcmp(argv[1], "--client-tests") == 0) {
+            return runClientTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--orchestrator-tests") == 0) {
+            return runOrchestratorTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--service-tests") == 0) {
+            return runServiceTests(argc - 1, argv + 1);
+        }
+    }
 
     int status = 0;
     UrlTests url;
@@ -291,6 +304,7 @@ int main(int argc, char** argv)
     status |= runContractTests(argc, argv);
     status |= runDiagnosticsTests(argc, argv);
     status |= runClientTests(argc, argv);
+    status |= runOrchestratorTests(argc, argv);
     status |= runServiceTests(argc, argv);
     return status;
 }

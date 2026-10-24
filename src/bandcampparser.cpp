@@ -2,10 +2,10 @@
 
 #include "bandcamplogging.h"
 
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QDateTime>
 #include <QLocale>
 #include <QRegularExpression>
 #include <QStringDecoder>
@@ -15,7 +15,11 @@
 
 namespace Fooyin::Bandcamp {
 namespace {
-enum class SourceKind : quint8 { Album, Track };
+enum class SourceKind : quint8
+{
+    Album,
+    Track
+};
 
 QString cleanText(QString text)
 {
@@ -31,15 +35,20 @@ bool decodeEntity(QStringView name, QString& out)
 {
     if(name == u"amp") {
         out = QStringLiteral("&");
-    } else if(name == u"quot") {
+    }
+    else if(name == u"quot") {
         out = QStringLiteral("\"");
-    } else if(name == u"apos") {
+    }
+    else if(name == u"apos") {
         out = QStringLiteral("'");
-    } else if(name == u"lt") {
+    }
+    else if(name == u"lt") {
         out = QStringLiteral("<");
-    } else if(name == u"gt") {
+    }
+    else if(name == u"gt") {
         out = QStringLiteral(">");
-    } else {
+    }
+    else {
         if(name.isEmpty() || name.at(0) != u'#') {
             return false;
         }
@@ -60,11 +69,19 @@ bool decodeEntity(QStringView name, QString& out)
 }
 
 // Single-pass, bounded look-ahead: an escaped entity is never decoded twice.
-QString decodeHtmlEntities(const QString& text)
+bool stopRequested(const std::atomic_bool* stop)
+{
+    return stop && stop->load(std::memory_order_relaxed);
+}
+
+QString decodeHtmlEntities(const QString& text, const std::atomic_bool* stop)
 {
     QString out;
     out.reserve(text.size());
     for(qsizetype i = 0; i < text.size();) {
+        if((i & 0x3ff) == 0 && stopRequested(stop)) {
+            return {};
+        }
         if(text.at(i) == u'&') {
             const qsizetype end = qMin(text.size(), i + 12);
             qsizetype semi      = i + 1;
@@ -89,27 +106,36 @@ ResolutionFailure failure(ResolutionErrorCode code, const QUrl& url, const QStri
 }
 
 // Check before Qt allocates a decoded tree. Brackets inside strings do not count.
-bool withinDepth(const QString& json)
+bool withinDepth(const QString& json, const std::atomic_bool* stop)
 {
     int depth    = 0;
     bool quoted  = false;
     bool escaped = false;
-    for(QChar ch : json) {
+    for(qsizetype i = 0; i < json.size(); ++i) {
+        if((i & 0x3ff) == 0 && stopRequested(stop)) {
+            return false;
+        }
+        const QChar ch = json.at(i);
         if(quoted) {
             if(escaped) {
                 escaped = false;
-            } else if(ch == u'\\') {
+            }
+            else if(ch == u'\\') {
                 escaped = true;
-            } else if(ch == u'"') {
+            }
+            else if(ch == u'"') {
                 quoted = false;
             }
-        } else if(ch == u'"') {
+        }
+        else if(ch == u'"') {
             quoted = true;
-        } else if(ch == u'{' || ch == u'[') {
+        }
+        else if(ch == u'{' || ch == u'[') {
             if(++depth > MaxJsonDepth) {
                 return false;
             }
-        } else if(ch == u'}' || ch == u']') {
+        }
+        else if(ch == u'}' || ch == u']') {
             --depth;
         }
     }
@@ -124,8 +150,11 @@ struct DecodedSource
 
 using Decoded = std::variant<DecodedSource, ResolutionFailure>;
 
-Decoded extractTralbum(const QByteArray& body, const QUrl& url)
+Decoded extractTralbum(const QByteArray& body, const QUrl& url, const std::atomic_bool* stop)
 {
+    if(stopRequested(stop)) {
+        return failure(ResolutionErrorCode::Timeout, url, QStringLiteral("parser"), QStringLiteral("parse cancelled"));
+    }
     if(body.size() > MaxPageBytes) {
         return failure(ResolutionErrorCode::PageTooLarge, url, {}, QStringLiteral("response byte limit exceeded"));
     }
@@ -142,17 +171,30 @@ Decoded extractTralbum(const QByteArray& body, const QUrl& url)
     }
     QStringDecoder decoder(QStringDecoder::Utf8);
     const QString escaped = decoder(body.mid(quotePos + 1, end - quotePos - 1));
+    if(stopRequested(stop)) {
+        return failure(ResolutionErrorCode::Timeout, url, QStringLiteral("parser"), QStringLiteral("parse cancelled"));
+    }
     if(decoder.hasError()) {
         return failure(ResolutionErrorCode::MalformedPage, url, {}, QStringLiteral("invalid release UTF-8"));
     }
-    const QString json = decodeHtmlEntities(escaped);
-    if(!withinDepth(json)) {
+    const QString json = decodeHtmlEntities(escaped, stop);
+    if(stopRequested(stop)) {
+        return failure(ResolutionErrorCode::Timeout, url, QStringLiteral("parser"), QStringLiteral("parse cancelled"));
+    }
+    if(!withinDepth(json, stop)) {
+        if(stopRequested(stop)) {
+            return failure(ResolutionErrorCode::Timeout, url, QStringLiteral("parser"),
+                           QStringLiteral("parse cancelled"));
+        }
         return failure(ResolutionErrorCode::ResourceLimitExceeded, url, {},
                        QStringLiteral("JSON depth limit exceeded"));
     }
     QJsonParseError error;
     // A wrapper permits snapshots of valid scalar JSON too, before rejecting its release shape.
     const auto doc = QJsonDocument::fromJson('[' + json.toUtf8() + ']', &error);
+    if(stopRequested(stop)) {
+        return failure(ResolutionErrorCode::Timeout, url, QStringLiteral("parser"), QStringLiteral("parse cancelled"));
+    }
     if(error.error != QJsonParseError::NoError || doc.array().size() != 1) {
         return failure(ResolutionErrorCode::MalformedPage, url, {}, QStringLiteral("invalid release JSON"));
     }
@@ -162,21 +204,28 @@ Decoded extractTralbum(const QByteArray& body, const QUrl& url)
 // Qt preserves integer tokens, but can round a fractional token to an integer.
 // The private companion retains lexical number tokens and stays inside the parser.
 // It lets integral fields validate the original decimal without passing through double.
-QJsonDocument numericLexemes(const QString& json)
+QJsonDocument numericLexemes(const QString& json, const std::atomic_bool* stop)
 {
     QString encoded;
     encoded.reserve(json.size());
     bool quoted  = false;
     bool escaped = false;
     for(qsizetype i = 0; i < json.size(); ++i) {
+        if((i & 0x3ff) == 0 && stopRequested(stop)) {
+            return {};
+        }
         const QChar ch = json.at(i);
         if(!quoted && (ch == u'-' || (ch >= u'0' && ch <= u'9'))) {
             encoded += '"';
             do {
+                if((i & 0x3ff) == 0 && stopRequested(stop)) {
+                    return {};
+                }
                 encoded += json.at(i);
                 ++i;
-            } while(i < json.size() && (json.at(i).isDigit() || json.at(i) == u'.' || json.at(i) == u'e' ||
-                                        json.at(i) == u'E' || json.at(i) == u'-' || json.at(i) == u'+'));
+            } while(i < json.size()
+                    && (json.at(i).isDigit() || json.at(i) == u'.' || json.at(i) == u'e' || json.at(i) == u'E'
+                        || json.at(i) == u'-' || json.at(i) == u'+'));
             encoded += '"';
             --i;
             continue;
@@ -185,12 +234,15 @@ QJsonDocument numericLexemes(const QString& json)
         if(quoted) {
             if(escaped) {
                 escaped = false;
-            } else if(ch == u'\\') {
+            }
+            else if(ch == u'\\') {
                 escaped = true;
-            } else if(ch == u'"') {
+            }
+            else if(ch == u'"') {
                 quoted = false;
             }
-        } else if(ch == u'"') {
+        }
+        else if(ch == u'"') {
             quoted = true;
         }
     }
@@ -239,7 +291,8 @@ bool exactPositiveInteger(QString token, qint64& out)
             }
         }
         token.chop(-scale);
-    } else {
+    }
+    else {
         if(token.size() + scale > 19) {
             return false;
         }
@@ -334,24 +387,34 @@ QString safeText(QString text)
     return text;
 }
 
-QJsonValue redactedSnapshot(const QJsonValue& value, bool sensitive = false, bool locators = false)
+QJsonValue redactedSnapshot(const QJsonValue& value, const std::atomic_bool* stop, bool sensitive = false,
+                            bool locators = false)
 {
+    if(stopRequested(stop)) {
+        return {};
+    }
     if(value.isObject()) {
         const auto object = value.toObject();
         QJsonObject redacted;
         for(auto it = object.begin(); it != object.end(); ++it) {
+            if(stopRequested(stop)) {
+                return {};
+            }
             const QString key = it.key().toLower();
-            const bool secret = sensitive || key.contains(u"signature") || key.contains(u"token") ||
-                                key.contains(u"password") || key.contains(u"authorization");
+            const bool secret = sensitive || key.contains(u"signature") || key.contains(u"token")
+                             || key.contains(u"password") || key.contains(u"authorization");
             const bool url = locators || key == u"file" || key == u"url" || key.endsWith(u"_url");
-            redacted.insert(safeText(it.key()), redactedSnapshot(it.value(), secret, url));
+            redacted.insert(safeText(it.key()), redactedSnapshot(it.value(), stop, secret, url));
         }
         return redacted;
     }
     if(value.isArray()) {
         QJsonArray array;
         for(const auto& child : value.toArray()) {
-            array.append(redactedSnapshot(child, sensitive, locators));
+            if(stopRequested(stop)) {
+                return {};
+            }
+            array.append(redactedSnapshot(child, stop, sensitive, locators));
         }
         return array;
     }
@@ -364,22 +427,30 @@ QJsonValue redactedSnapshot(const QJsonValue& value, bool sensitive = false, boo
     return value;
 }
 
-void logSnapshot(const QJsonValue& root, const CorrelationContext& context)
+void logSnapshot(const QJsonValue& root, const CorrelationContext& context, const std::atomic_bool* stop)
 {
-    if(!BANDCAMP_TRACE_PARSER().isDebugEnabled()) {
+    if(!BANDCAMP_TRACE_PARSER().isDebugEnabled() || stopRequested(stop)) {
         return;
     }
-    const auto redacted      = redactedSnapshot(root);
+    const auto redacted = redactedSnapshot(root, stop);
+    if(stopRequested(stop)) {
+        return;
+    }
     const QByteArray encoded = QJsonDocument(QJsonArray{redacted}).toJson(QJsonDocument::Compact);
     QString snapshot         = QString::fromUtf8(encoded.mid(1, encoded.size() - 2));
     QString escaped;
     escaped.reserve(snapshot.size());
-    for(QChar ch : snapshot) {
+    for(qsizetype i = 0; i < snapshot.size(); ++i) {
+        if((i & 0x3ff) == 0 && stopRequested(stop)) {
+            return;
+        }
+        const QChar ch      = snapshot.at(i);
         const auto category = ch.category();
-        if(category == QChar::Other_Control || category == QChar::Separator_Line ||
-           category == QChar::Separator_Paragraph) {
+        if(category == QChar::Other_Control || category == QChar::Separator_Line
+           || category == QChar::Separator_Paragraph) {
             escaped += QStringLiteral("\\u%1").arg(static_cast<uint>(ch.unicode()), 4, 16, QLatin1Char('0'));
-        } else {
+        }
+        else {
             escaped += ch;
         }
     }
@@ -388,8 +459,11 @@ void logSnapshot(const QJsonValue& root, const CorrelationContext& context)
         << formatTraceEvent(context, QStringLiteral("source_snapshot"), {}) + QStringLiteral(" json=") + escaped;
 }
 
-bool withinFields(const QJsonValue& value, qsizetype& records)
+bool withinFields(const QJsonValue& value, qsizetype& records, const std::atomic_bool* stop)
 {
+    if(stopRequested(stop)) {
+        return false;
+    }
     if(++records > MaxSourceRecords) {
         return false;
     }
@@ -398,7 +472,7 @@ bool withinFields(const QJsonValue& value, qsizetype& records)
     }
     if(value.isArray()) {
         for(const auto& child : value.toArray()) {
-            if(!withinFields(child, records)) {
+            if(!withinFields(child, records, stop)) {
                 return false;
             }
         }
@@ -406,7 +480,8 @@ bool withinFields(const QJsonValue& value, qsizetype& records)
     if(value.isObject()) {
         const auto object = value.toObject();
         for(auto it = object.begin(); it != object.end(); ++it) {
-            if(it.key().size() > MaxSourceFieldChars || !withinFields(it.value(), records)) {
+            if(stopRequested(stop) || it.key().size() > MaxSourceFieldChars
+               || !withinFields(it.value(), records, stop)) {
                 return false;
             }
         }
@@ -414,7 +489,8 @@ bool withinFields(const QJsonValue& value, qsizetype& records)
     return true;
 }
 
-template <typename T, typename Reader> CandidateField<T> read(const QJsonValue& value, Reader reader)
+template <typename T, typename Reader>
+CandidateField<T> read(const QJsonValue& value, Reader reader)
 {
     if(value.isUndefined()) {
         return CandidateField<T>::missing();
@@ -474,7 +550,7 @@ bool durationSeconds(const QString& text, double& seconds)
                 }
             }
         }
-        bool ok = false;
+        bool ok            = false;
         const double value = QLocale::c().toDouble(part, &ok);
         if(!ok || !std::isfinite(value) || value < 0 || (i > 0 && value >= 60)) {
             return false;
@@ -490,11 +566,13 @@ CandidateField<qint64> duration(const QJsonValue& value)
         double seconds = 0;
         if(v.isDouble()) {
             seconds = v.toDouble();
-        } else if(v.isString()) {
+        }
+        else if(v.isString()) {
             if(!durationSeconds(v.toString(), seconds)) {
                 return false;
             }
-        } else {
+        }
+        else {
             return false;
         }
         if(!std::isfinite(seconds) || seconds < 0 || seconds > static_cast<double>(MaxDurationMs) / 1000) {
@@ -513,8 +591,8 @@ CandidateField<QUrl> location(const QJsonValue& value, const QUrl& base)
         }
         const QUrl supplied(v.toString(), QUrl::StrictMode);
         out = base.resolved(supplied);
-        return out.isValid() && !out.host().isEmpty() && out.userInfo().isEmpty() &&
-               (out.scheme() == u"https" || out.scheme() == u"http");
+        return out.isValid() && !out.host().isEmpty() && out.userInfo().isEmpty()
+            && (out.scheme() == u"https" || out.scheme() == u"http");
     });
 }
 
@@ -526,8 +604,8 @@ CandidateField<QString> streamLocator(const QJsonValue& value)
         }
         out = input.toString();
         const QUrl url(out, QUrl::StrictMode);
-        return url.isValid() && url.scheme() == u"https" && !url.host().isEmpty() && url.userInfo().isEmpty() &&
-               !url.hasFragment();
+        return url.isValid() && url.scheme() == u"https" && !url.host().isEmpty() && url.userInfo().isEmpty()
+            && !url.hasFragment();
     });
 }
 
@@ -539,9 +617,11 @@ CandidateField<SourceKind> kind(const QJsonValue& value)
         }
         if(v.toString() == u"album" || v.toString() == u"a") {
             out = SourceKind::Album;
-        } else if(v.toString() == u"track" || v.toString() == u"t") {
+        }
+        else if(v.toString() == u"track" || v.toString() == u"t") {
             out = SourceKind::Track;
-        } else {
+        }
+        else {
             return false;
         }
         return true;
@@ -569,7 +649,8 @@ QString describe(SourceKind value)
     return value == SourceKind::Album ? QStringLiteral("album") : QStringLiteral("track");
 }
 
-template <typename T> QString describe(const CandidateField<T>& value)
+template <typename T>
+QString describe(const CandidateField<T>& value)
 {
     if(value.isUsable()) {
         return describe(value.value);
@@ -580,7 +661,9 @@ template <typename T> QString describe(const CandidateField<T>& value)
 class Mapper
 {
 public:
-    explicit Mapper(CorrelationContext context) : m_context{std::move(context)} {}
+    explicit Mapper(CorrelationContext context)
+        : m_context{std::move(context)}
+    { }
 
     void trackContext(qint64 id)
     {
@@ -610,7 +693,8 @@ public:
         QString path = primaryPath;
         if(conflict && identityAliases) {
             chosen = CandidateField<T>::invalid();
-        } else if(!chosen.isUsable() && fallback.isUsable()) {
+        }
+        else if(!chosen.isUsable() && fallback.isUsable()) {
             chosen            = fallback;
             chosen.provenance = fallbackProvenance;
             path              = fallbackPath;
@@ -625,7 +709,8 @@ public:
                                                                     {QStringLiteral("primary"), describe(primary)},
                                                                     {QStringLiteral("alternate_path"), fallbackPath},
                                                                     {QStringLiteral("alternate"), describe(fallback)}});
-        } else {
+        }
+        else {
             qCDebug(BANDCAMP_TRACE_PARSER).noquote() << formatTraceEvent(
                 m_context, QStringLiteral("source_mapping"),
                 {{QStringLiteral("field"), field},
@@ -638,7 +723,8 @@ public:
         return chosen;
     }
 
-    template <typename T> CandidateField<T> owned(const QString& field, CandidateField<T> value, const QString& path)
+    template <typename T>
+    CandidateField<T> owned(const QString& field, CandidateField<T> value, const QString& path)
     {
         return select(field, std::move(value), path);
     }
@@ -665,13 +751,13 @@ public:
         if(track.id.isUsable()) {
             scoped.trackContext(track.id.value);
         }
-        track.title =
-            scoped.owned(QStringLiteral("track.title"), text(object.value(u"title")), path + QStringLiteral(".title"));
+        track.title  = scoped.owned(QStringLiteral("track.title"), text(object.value(u"title")),
+                                    path + QStringLiteral(".title"));
         track.artist = scoped.owned(QStringLiteral("track.artist"), text(object.value(u"artist")),
                                     path + QStringLiteral(".artist"));
-        track.trackNumber =
-            scoped.owned(QStringLiteral("track.trackNumber"), object.integer(u"track_num", MaxTrackNumber),
-                         path + QStringLiteral(".track_num"));
+        track.trackNumber
+            = scoped.owned(QStringLiteral("track.trackNumber"), object.integer(u"track_num", MaxTrackNumber),
+                           path + QStringLiteral(".track_num"));
         track.durationMs = scoped.owned(QStringLiteral("track.durationMs"), duration(object.value(u"duration")),
                                         path + QStringLiteral(".duration"));
         const auto file  = object.value(u"file");
@@ -679,8 +765,8 @@ public:
         if(file.isObject()) {
             stream = streamLocator(file.toObject().value(u"mp3-128"));
         }
-        track.streamUrl =
-            scoped.owned(QStringLiteral("track.streamUrl"), stream, path + QStringLiteral(".file['mp3-128']"));
+        track.streamUrl
+            = scoped.owned(QStringLiteral("track.streamUrl"), stream, path + QStringLiteral(".file['mp3-128']"));
         return track;
     }
 
@@ -688,33 +774,51 @@ private:
     CorrelationContext m_context;
 };
 
-template <typename T> bool conflicts(const CandidateField<T>& a, const CandidateField<T>& b)
+template <typename T>
+bool conflicts(const CandidateField<T>& a, const CandidateField<T>& b)
 {
     return a.isUsable() && b.isUsable() && a.value != b.value;
 }
 } // namespace
 
-ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl, CorrelationContext context)
+ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl, CorrelationContext context,
+                                     const std::atomic_bool* stop)
 {
+    if(stopRequested(stop)) {
+        return ResolutionCancelled{};
+    }
     context.resourceUrl = pageUrl;
-    const auto decoded  = extractTralbum(body, pageUrl);
+    const auto decoded  = extractTralbum(body, pageUrl, stop);
+    if(stopRequested(stop)) {
+        return ResolutionCancelled{};
+    }
     if(const auto* error = std::get_if<ResolutionFailure>(&decoded)) {
         return *error;
     }
     const auto& source       = std::get<DecodedSource>(decoded);
     const auto& decodedValue = source.value;
-    logSnapshot(decodedValue, context);
+    logSnapshot(decodedValue, context, stop);
+    if(stopRequested(stop)) {
+        return ResolutionCancelled{};
+    }
     if(!decodedValue.isObject()) {
         return failure(ResolutionErrorCode::MalformedPage, pageUrl, {},
                        QStringLiteral("release JSON must be an object"));
     }
     const auto rootObject = decodedValue.toObject();
     qsizetype records     = 0;
-    if(!withinFields(rootObject, records)) {
+    if(!withinFields(rootObject, records, stop)) {
+        if(stopRequested(stop)) {
+            return ResolutionCancelled{};
+        }
         return failure(ResolutionErrorCode::ResourceLimitExceeded, pageUrl, {},
                        QStringLiteral("source field or record limit exceeded"));
     }
-    const SourceObject root{rootObject, numericLexemes(source.json).object()};
+    const auto numbers = numericLexemes(source.json, stop);
+    if(stopRequested(stop)) {
+        return ResolutionCancelled{};
+    }
+    const SourceObject root{rootObject, numbers.object()};
     const auto currentValue = root.value(u"current");
     if(!currentValue.isUndefined() && !currentValue.isObject()) {
         return failure(ResolutionErrorCode::MalformedPage, pageUrl, QStringLiteral("identity"),
@@ -755,18 +859,21 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
         album.sourceUrl = sourceUrl;
         album.title     = mapper.owned(QStringLiteral("album.title"), text(current.value(u"title")),
                                        QStringLiteral("$.current.title"));
-        album.artist =
-            mapper.select(QStringLiteral("album.artist"), text(current.value(u"artist")),
-                          QStringLiteral("$.current.artist"), text(root.value(u"artist")), QStringLiteral("$.artist"));
-        album.releaseDate =
-            mapper.select(QStringLiteral("album.releaseDate"), date(current.value(u"release_date")),
-                          QStringLiteral("$.current.release_date"), date(root.value(u"album_release_date")),
-                          QStringLiteral("$.album_release_date"));
-        album.artId =
-            mapper.select(QStringLiteral("album.artId"), current.integer(u"art_id"), QStringLiteral("$.current.art_id"),
-                          root.integer(u"art_id"), QStringLiteral("$.art_id"));
+        album.artist    = mapper.select(QStringLiteral("album.artist"), text(current.value(u"artist")),
+                                        QStringLiteral("$.current.artist"), text(root.value(u"artist")),
+                                        QStringLiteral("$.artist"));
+        album.releaseDate
+            = mapper.select(QStringLiteral("album.releaseDate"), date(current.value(u"release_date")),
+                            QStringLiteral("$.current.release_date"), date(root.value(u"album_release_date")),
+                            QStringLiteral("$.album_release_date"));
+        album.artId
+            = mapper.select(QStringLiteral("album.artId"), current.integer(u"art_id"),
+                            QStringLiteral("$.current.art_id"), root.integer(u"art_id"), QStringLiteral("$.art_id"));
         album.tracks.reserve(info.size());
         for(qsizetype i = 0; i < info.size(); ++i) {
+            if(stopRequested(stop)) {
+                return ResolutionCancelled{};
+            }
             album.tracks.append(mapper.row(info.at(i), infoNumbers.at(i), i));
         }
         qCInfo(BANDCAMP_PARSER).noquote()
@@ -783,12 +890,16 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
     }
     TrackCandidate matched;
     for(qsizetype i = 0; i < info.size(); ++i) {
+        if(stopRequested(stop)) {
+            return ResolutionCancelled{};
+        }
         auto row = mapper.row(info.at(i), infoNumbers.at(i), i);
         if(id.isUsable() && row.id.isUsable() && row.id.value == id.value) {
             if(page.matchingRecord.state != FieldState::Missing) {
                 page.matchingRecord = CandidateField<qsizetype>::invalid();
                 matched             = {};
-            } else {
+            }
+            else {
                 page.matchingRecord = CandidateField<qsizetype>::usable(i, FieldProvenance::Explicit);
                 matched             = std::move(row);
             }
@@ -798,27 +909,27 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
     page.track            = std::move(matched);
     page.track.id         = id;
     const QString rowPath = page.matchingRecord.isUsable()
-                                ? QStringLiteral("$.trackinfo[%1]").arg(page.matchingRecord.value)
-                                : QStringLiteral("$.trackinfo[unmatched]");
-    page.track.title =
-        mapper.select(QStringLiteral("track.title"), text(current.value(u"title")), QStringLiteral("$.current.title"),
-                      page.track.title, rowPath + QStringLiteral(".title"), FieldProvenance::Explicit);
+                              ? QStringLiteral("$.trackinfo[%1]").arg(page.matchingRecord.value)
+                              : QStringLiteral("$.trackinfo[unmatched]");
+    page.track.title
+        = mapper.select(QStringLiteral("track.title"), text(current.value(u"title")), QStringLiteral("$.current.title"),
+                        page.track.title, rowPath + QStringLiteral(".title"), FieldProvenance::Explicit);
     page.track.artist = mapper.select(QStringLiteral("track.artist"), text(current.value(u"artist")),
                                       QStringLiteral("$.current.artist"), page.track.artist,
                                       rowPath + QStringLiteral(".artist"), FieldProvenance::Explicit);
-    page.track.trackNumber =
-        mapper.select(QStringLiteral("track.trackNumber"), current.integer(u"track_number", MaxTrackNumber),
-                      QStringLiteral("$.current.track_number"), page.track.trackNumber,
-                      rowPath + QStringLiteral(".track_num"), FieldProvenance::Explicit);
+    page.track.trackNumber
+        = mapper.select(QStringLiteral("track.trackNumber"), current.integer(u"track_number", MaxTrackNumber),
+                        QStringLiteral("$.current.track_number"), page.track.trackNumber,
+                        rowPath + QStringLiteral(".track_num"), FieldProvenance::Explicit);
     page.track.releaseDate = mapper.owned(QStringLiteral("track.releaseDate"), date(current.value(u"release_date")),
                                           QStringLiteral("$.current.release_date"));
-    page.track.artId =
-        mapper.owned(QStringLiteral("track.artId"), current.integer(u"art_id"), QStringLiteral("$.current.art_id"));
-    page.fallbackArtist =
-        mapper.owned(QStringLiteral("fallbackArtist"), text(root.value(u"artist")), QStringLiteral("$.artist"));
+    page.track.artId
+        = mapper.owned(QStringLiteral("track.artId"), current.integer(u"art_id"), QStringLiteral("$.current.art_id"));
+    page.fallbackArtist
+        = mapper.owned(QStringLiteral("fallbackArtist"), text(root.value(u"artist")), QStringLiteral("$.artist"));
     page.fallbackArtist.provenance = FieldProvenance::Fallback;
-    page.fallbackArtId =
-        mapper.owned(QStringLiteral("fallbackArtId"), root.integer(u"art_id"), QStringLiteral("$.art_id"));
+    page.fallbackArtId
+        = mapper.owned(QStringLiteral("fallbackArtId"), root.integer(u"art_id"), QStringLiteral("$.art_id"));
     page.fallbackArtId.provenance = FieldProvenance::Fallback;
 
     const auto parentId  = current.value(u"album_id");
@@ -826,12 +937,14 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
                                         QStringLiteral("$.album_url"));
     if(current.explicitNoParent(u"album_id")) {
         page.parent.declaration = ParentDeclaration::NoParent;
-    } else {
+    }
+    else {
         page.parent.albumId = mapper.owned(QStringLiteral("parent.albumId"), current.integer(u"album_id"),
                                            QStringLiteral("$.current.album_id"));
         if(page.parent.albumId.isUsable()) {
             page.parent.declaration = ParentDeclaration::AlbumBacked;
-        } else if(!parentId.isUndefined()) {
+        }
+        else if(!parentId.isUndefined()) {
             page.parent.declaration = ParentDeclaration::Invalid;
         }
     }

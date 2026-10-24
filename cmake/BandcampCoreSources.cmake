@@ -10,6 +10,10 @@ set(BANDCAMP_CORE_SOURCES
     ${BANDCAMP_SRC_DIR}/bandcamplogging.cpp
     ${BANDCAMP_SRC_DIR}/bandcamplogging.h
     ${BANDCAMP_SRC_DIR}/bandcampmodel.h
+    ${BANDCAMP_SRC_DIR}/bandcamporchestrator.cpp
+    ${BANDCAMP_SRC_DIR}/bandcamporchestrator.h
+    ${BANDCAMP_SRC_DIR}/bandcampresolver.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampresolver.h
     ${BANDCAMP_SRC_DIR}/bandcampassembly.cpp
     ${BANDCAMP_SRC_DIR}/bandcampassembly.h
     ${BANDCAMP_SRC_DIR}/bandcampparser.cpp

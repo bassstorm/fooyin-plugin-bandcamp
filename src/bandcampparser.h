@@ -7,6 +7,8 @@
 #include <QDate>
 #include <QList>
 
+#include <atomic>
+
 namespace Fooyin::Bandcamp {
 constexpr qsizetype MaxPageBytes        = 20 * 1024 * 1024;
 constexpr int MaxJsonDepth              = 64;
@@ -43,7 +45,13 @@ struct AlbumCandidate
     QList<TrackCandidate> tracks;
 };
 
-enum class ParentDeclaration : quint8 { Unknown, Invalid, NoParent, AlbumBacked };
+enum class ParentDeclaration : quint8
+{
+    Unknown,
+    Invalid,
+    NoParent,
+    AlbumBacked
+};
 
 struct ParentEvidence
 {
@@ -70,5 +78,6 @@ using ReleaseParseOutcome = ResolutionOutcome<ReleaseCandidate>;
 // Kind is determined by decoded source identity, never by a URL or the caller's
 // selection. Raw JSON, concrete source paths and diagnostic history stay inside
 // the parser.
-ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl, CorrelationContext context = {});
+ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl, CorrelationContext context = {},
+                                     const std::atomic_bool* stop = nullptr);
 } // namespace Fooyin::Bandcamp

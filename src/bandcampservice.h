@@ -1,32 +1,57 @@
 #pragma once
 
-#include "bandcampassembly.h"
-#include "bandcampclient.h"
-#include "bandcampurl.h"
+#include "bandcamporchestrator.h"
+#include "bandcampresolver.h"
 
-#include <QFuture>
-#include <QHash>
 #include <QList>
 #include <QObject>
 
-#include <optional>
+#include <memory>
+#include <variant>
 
 class QNetworkAccessManager;
-class QTimer;
 
 namespace Fooyin::Bandcamp {
-using BandcampResolutionOutcome = ResolutionOutcome<BandcampResolvedData>;
-
-struct BandcampResolvedPage
+struct BandcampOperationAccepted
 {
-    BandcampPageUrl page;
-    // Empty only for service-internal, not-yet-completed batch slots.
-    std::optional<BandcampResolutionOutcome> outcome;
+    BandcampOperationId id{0};
+};
 
-    [[nodiscard]] bool isValid() const
-    {
-        return outcome && std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(*outcome);
-    }
+struct BandcampSubmissionRejected
+{
+    ResolutionError error;
+};
+
+using BandcampSubmission = std::variant<BandcampOperationAccepted, BandcampSubmissionRejected>;
+
+struct BandcampScopeResult
+{
+    BandcampOperationId operationId{0};
+    qsizetype ordinal{0};
+    BandcampPageUrl page;
+    BandcampResolutionOutcome outcome;
+};
+
+struct BandcampOperationProgress
+{
+    BandcampOperationId operationId{0};
+    qsizetype requested{0};
+    qsizetype delivered{0};
+    qsizetype active{0};
+};
+
+struct BandcampOperationSummary
+{
+    BandcampOperationId operationId{0};
+    qsizetype requested{0};
+    qsizetype succeeded{0};
+    qsizetype failed{0};
+    qsizetype cancelled{0};
+};
+
+struct BandcampServiceDependencies
+{
+    BandcampPageParser parseReleasePage;
 };
 
 class BandcampService : public QObject
@@ -34,61 +59,20 @@ class BandcampService : public QObject
     Q_OBJECT
 
 public:
-    explicit BandcampService(QNetworkAccessManager* network, QObject* parent = nullptr);
+    explicit BandcampService(QNetworkAccessManager* network, QObject* parent = nullptr,
+                             BandcampServiceDependencies dependencies = {});
     ~BandcampService() override;
 
-    void setMaxItemsInProgress(int count);
-    void setItemTimeoutMs(int timeoutMs);
-    void resolve(const QList<BandcampPageUrl>& urls);
+    BandcampSubmission submit(const QList<BandcampPageUrl>& pages, OperationOptions options = {});
+    void cancel(BandcampOperationId id);
 
 signals:
-    void batchResolved(const QList<Fooyin::Bandcamp::BandcampResolvedPage>& results);
+    void scopeResolved(const Fooyin::Bandcamp::BandcampScopeResult& result);
+    void progressChanged(const Fooyin::Bandcamp::BandcampOperationProgress& progress);
+    void operationFinished(const Fooyin::Bandcamp::BandcampOperationSummary& summary);
 
 private:
-    struct Job
-    {
-        quint64 jobId{0};
-        quint64 batchId{0};
-        int index{0};
-        BandcampPageUrl page;
-    };
-
-    struct ActiveJob
-    {
-        Job job;
-        QTimer* timeout{nullptr};
-        BandcampClient::RequestId request{0};
-        bool awaitingAlbum{false};
-        BandcampPageUrl albumPage;
-        std::optional<TrackPageCandidate> trackCandidate;
-        CorrelationContext correlation;
-    };
-
-    struct Batch
-    {
-        int remaining{0};
-        QList<BandcampResolvedPage> results;
-    };
-
-    void startNextJobs();
-    void startJob(const Job& job);
-    void startFetch(quint64 jobId, const QString& url);
-    void onFetched(quint64 jobId, BandcampFetchOutcome response);
-    void startParse(quint64 jobId, const BandcampPageUrl& page, QByteArray body, CorrelationContext context);
-    void onParsed(quint64 jobId, ReleaseParseOutcome result);
-    void onTimedOut(quint64 jobId);
-    void finishJob(quint64 jobId, BandcampResolutionOutcome result);
-    void finishFailure(quint64 jobId, ResolutionError error);
-    void recordResult(const Job& job, BandcampResolutionOutcome result);
-
-    BandcampClient* m_client{nullptr};
-    int m_maxItemsInProgress{0};
-    int m_itemTimeoutMs{0};
-    QList<Job> m_queued;
-    QHash<quint64, ActiveJob> m_active;
-    QHash<quint64, QFuture<ReleaseParseOutcome>> m_parses;
-    quint64 m_nextJobId{1};
-    quint64 m_nextBatchId{1};
-    QHash<quint64, Batch> m_batches;
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
 };
 } // namespace Fooyin::Bandcamp

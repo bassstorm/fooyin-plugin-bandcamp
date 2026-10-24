@@ -3,6 +3,8 @@
 #include "bandcampmodel.h"
 #include "bandcampparser.h"
 
+#include <atomic>
+
 namespace Fooyin::Bandcamp {
 struct AlbumMetadataProvenance
 {
@@ -57,9 +59,12 @@ using ParentRequirement = std::variant<StandaloneParentEvidence, RequiredAlbumPa
 
 ParentRequirement classifyParentEvidence(const TrackPageCandidate& candidate, CorrelationContext context = {});
 
-ResolutionOutcome<AlbumAdmission> admitAlbum(const AlbumCandidate& candidate, CorrelationContext context = {});
+ResolutionOutcome<AlbumAdmission> admitAlbum(const AlbumCandidate& candidate, CorrelationContext context = {},
+                                             const std::atomic_bool* stop = nullptr);
 ResolutionOutcome<TrackAdmission> admitStandaloneTrack(const TrackPageCandidate& candidate,
-                                                       CorrelationContext context = {});
+                                                       CorrelationContext context   = {},
+                                                       const std::atomic_bool* stop = nullptr);
 ResolutionOutcome<TrackAdmission> admitAlbumTrack(const TrackPageCandidate& trackPage, const AlbumCandidate& album,
-                                                  CorrelationContext context = {});
+                                                  CorrelationContext context   = {},
+                                                  const std::atomic_bool* stop = nullptr);
 } // namespace Fooyin::Bandcamp

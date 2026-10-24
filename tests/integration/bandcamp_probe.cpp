@@ -18,6 +18,9 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
+#include <utility>
+
 using namespace Qt::StringLiterals;
 using namespace Fooyin::Bandcamp;
 
@@ -25,8 +28,11 @@ namespace {
 constexpr int DefaultTimeoutMs = 10000;
 // Covers the whole run, including a batch of slow items. A hang ends the probe
 // instead of blocking it.
-constexpr int WatchdogMs    = 600000;
-constexpr qint64 MaxTrackMs = 604800000;
+constexpr int WatchdogMs                = 600000;
+constexpr qint64 MaxTrackMs             = 604800000;
+constexpr qsizetype MaxProbeOutputChars = 1024 * 1024;
+constexpr qsizetype MaxProbeFieldChars  = 512;
+constexpr qsizetype MaxProbeTracks      = 5;
 
 // The agreed probe set: artist and label discographies, an album, a track with
 // album, and a standalone track.
@@ -175,30 +181,25 @@ void checkTrack(Report& report, const BandcampResolvedTrack& resolved, const Sna
           snapshot->hasAlbum ? u"album source URL missing"_s : u"unexpected album source URL"_s);
 }
 
-Report evaluate(const BandcampResolvedPage& result)
+Report evaluate(const BandcampScopeResult& result)
 {
     Report report;
 
-    if(result.page.kind == BandcampPageKind::Discography) {
+    if(result.page.kind == BandcampPageKind::Discography && std::holds_alternative<ResolutionFailure>(result.outcome)
+       && std::get<ResolutionFailure>(result.outcome).error.code == ResolutionErrorCode::UnsupportedRequest) {
         report.outcome = Outcome::Skip;
         report.lines << u"    skip  discography expansion is not implemented yet"_s;
         return report;
     }
-    const auto* success
-        = result.outcome ? std::get_if<ResolutionSuccess<BandcampResolvedData>>(&*result.outcome) : nullptr;
+    const auto* success = std::get_if<ResolutionSuccess<BandcampResolvedData>>(&result.outcome);
     if(!success) {
         report.outcome = Outcome::Fail;
-        if(result.outcome) {
-            if(const auto* failure = std::get_if<ResolutionFailure>(&*result.outcome)) {
-                report.lines << u"    FAIL  %1 (%2, %3)"_s.arg(
-                    failure->error.reason, resolutionErrorCodeName(failure->error.code), failure->error.field);
-            }
-            else {
-                report.lines << u"    FAIL  resolution cancelled"_s;
-            }
+        if(const auto* failure = std::get_if<ResolutionFailure>(&result.outcome)) {
+            report.lines << u"    FAIL  %1 (%2, %3)"_s.arg(
+                failure->error.reason, resolutionErrorCodeName(failure->error.code), failure->error.field);
         }
         else {
-            report.lines << u"    FAIL  no resolution outcome"_s;
+            report.lines << u"    FAIL  resolution cancelled"_s;
         }
         return report;
     }
@@ -236,7 +237,12 @@ QString dateText(QDate date)
 // visible.
 QString field(const QString& indent, const QString& name, const QString& value)
 {
-    return u"%1%2%3"_s.arg(indent, (name + u":"_s).leftJustified(20), value);
+    QString shown = value;
+    if(shown.size() > MaxProbeFieldChars) {
+        shown.truncate(MaxProbeFieldChars - 16);
+        shown += u"… [truncated]"_s;
+    }
+    return u"%1%2%3"_s.arg(indent, (name + u":"_s).leftJustified(20), shown);
 }
 
 QStringList trackFields(const BandcampTrack& track, const BandcampAlbumMetadata* album, const QString& indent)
@@ -271,64 +277,71 @@ QStringList albumFields(const BandcampAlbum& album, const QString& indent)
     };
 }
 
-int printReport(const QList<BandcampResolvedPage>& results, int parallelism, qint64 elapsedMs)
+void printResult(const BandcampScopeResult& result, int& passed, int& failed, int& skipped, qsizetype& diagnosticChars,
+                 bool& diagnosticsOmitted)
 {
-    QTextStream out(stdout);
-    int passed  = 0;
-    int failed  = 0;
-    int skipped = 0;
+    const Report report = evaluate(result);
+    QString status;
+    switch(report.outcome) {
+        case Outcome::Pass:
+            ++passed;
+            status = u"PASS"_s;
+            break;
+        case Outcome::Fail:
+            ++failed;
+            status = u"FAIL"_s;
+            break;
+        case Outcome::Skip:
+            ++skipped;
+            status = u"SKIP"_s;
+            break;
+    }
 
-    for(const BandcampResolvedPage& result : results) {
-        const Report report = evaluate(result);
-        QString status;
-        switch(report.outcome) {
-            case Outcome::Pass:
-                ++passed;
-                status = u"PASS"_s;
-                break;
-            case Outcome::Fail:
-                ++failed;
-                status = u"FAIL"_s;
-                break;
-            case Outcome::Skip:
-                ++skipped;
-                status = u"SKIP"_s;
-                break;
+    if(diagnosticsOmitted) {
+        return;
+    }
+    QString diagnostics;
+    QTextStream out(&diagnostics);
+    out << status << u"  "_s << pageKindName(result.page.kind) << u"  "_s << result.page.url << u"\n"_s;
+    const auto* success = std::get_if<ResolutionSuccess<BandcampResolvedData>>(&result.outcome);
+    if(success && std::holds_alternative<BandcampAlbum>(success->value)) {
+        const auto& album = std::get<BandcampAlbum>(success->value);
+        out << u"  album:\n"_s;
+        for(const QString& line : albumFields(album, u"      "_s)) {
+            out << line << u"\n"_s;
         }
-
-        out << status << u"  "_s << pageKindName(result.page.kind) << u"  "_s << result.page.url << u"\n"_s;
-        const auto* success
-            = result.outcome ? std::get_if<ResolutionSuccess<BandcampResolvedData>>(&*result.outcome) : nullptr;
-        if(success && std::holds_alternative<BandcampAlbum>(success->value)) {
-            const auto& album = std::get<BandcampAlbum>(success->value);
-            out << u"  album:\n"_s;
-            for(const QString& line : albumFields(album, u"      "_s)) {
-                out << line << u"\n"_s;
-            }
-            out << u"  tracks:\n"_s;
-            for(qsizetype i = 0; i < album.tracks.size(); ++i) {
-                out << u"    [%1]\n"_s.arg(i + 1);
-                for(const QString& line : trackFields(album.tracks.at(i), &album.metadata, u"      "_s)) {
-                    out << line << u"\n"_s;
-                }
-            }
-        }
-        else if(success && std::holds_alternative<BandcampResolvedTrack>(success->value)) {
-            const auto& track = std::get<BandcampResolvedTrack>(success->value);
-            out << u"  track:\n"_s;
-            for(const QString& line : trackFields(track.track, track.album ? &*track.album : nullptr, u"      "_s)) {
+        out << u"  tracks:\n"_s;
+        const qsizetype shownTracks = std::min(album.tracks.size(), MaxProbeTracks);
+        for(qsizetype i = 0; i < shownTracks; ++i) {
+            out << u"    [%1]\n"_s.arg(i + 1);
+            for(const QString& line : trackFields(album.tracks.at(i), &album.metadata, u"      "_s)) {
                 out << line << u"\n"_s;
             }
         }
-        for(const QString& line : report.lines) {
+        if(album.tracks.size() > shownTracks) {
+            out << u"    … %1 playable track(s) omitted by the probe display limit\n"_s.arg(album.tracks.size()
+                                                                                            - shownTracks);
+        }
+    }
+    else if(success && std::holds_alternative<BandcampResolvedTrack>(success->value)) {
+        const auto& track = std::get<BandcampResolvedTrack>(success->value);
+        out << u"  track:\n"_s;
+        for(const QString& line : trackFields(track.track, track.album ? &*track.album : nullptr, u"      "_s)) {
             out << line << u"\n"_s;
         }
     }
-
-    out << u"\n"_s << results.size() << u" page(s) in "_s << elapsedMs << u" ms, parallelism "_s << parallelism
-        << u": "_s << passed << u" passed, "_s << failed << u" failed, "_s << skipped << u" skipped\n"_s;
+    for(const QString& line : report.lines) {
+        out << line << u"\n"_s;
+    }
     out.flush();
-    return failed > 0 ? 1 : 0;
+    if(diagnosticChars + diagnostics.size() > MaxProbeOutputChars) {
+        QTextStream(stdout)
+            << u"[Further probe diagnostics omitted at the 1 MiB display limit; outcome counts continue.]\n"_s;
+        diagnosticsOmitted = true;
+        return;
+    }
+    QTextStream(stdout) << diagnostics;
+    diagnosticChars += diagnostics.size();
 }
 } // namespace
 
@@ -386,21 +399,38 @@ int main(int argc, char** argv)
 
     QNetworkAccessManager network;
     BandcampService service(&network);
-    service.setMaxItemsInProgress(parallelism);
-    service.setItemTimeoutMs(timeoutMs);
 
     QElapsedTimer clock;
     clock.start();
 
-    QObject::connect(&service, &BandcampService::batchResolved, &app,
-                     [&app, &clock, parallelism](const QList<BandcampResolvedPage>& results) {
-                         app.exit(printReport(results, parallelism, clock.elapsed()));
+    int passed                = 0;
+    int failed                = 0;
+    int skipped               = 0;
+    qsizetype diagnosticChars = 0;
+    bool diagnosticsOmitted   = false;
+    QObject::connect(
+        &service, &BandcampService::scopeResolved, &app,
+        [&passed, &failed, &skipped, &diagnosticChars, &diagnosticsOmitted](const BandcampScopeResult& result) {
+            printResult(result, passed, failed, skipped, diagnosticChars, diagnosticsOmitted);
+        });
+    QObject::connect(&service, &BandcampService::operationFinished, &app,
+                     [&app, &clock, parallelism, &passed, &failed, &skipped](const BandcampOperationSummary& summary) {
+                         QTextStream(stdout)
+                             << u"\n"_s << summary.requested << u" page(s) in "_s << clock.elapsed()
+                             << u" ms, parallelism "_s << parallelism << u": "_s << passed << u" passed, "_s << failed
+                             << u" failed, "_s << skipped << u" skipped\n"_s;
+                         QTextStream(stdout).flush();
+                         app.exit(failed > 0 ? 1 : 0);
                      });
     QTimer::singleShot(WatchdogMs, &app, [] {
         QTextStream(stderr) << u"Watchdog expired before the batch finished\n"_s;
         QCoreApplication::exit(1);
     });
 
-    service.resolve(pages);
+    const auto submission = service.submit(pages, OperationOptions{parallelism, timeoutMs});
+    if(const auto* rejected = std::get_if<BandcampSubmissionRejected>(&submission)) {
+        QTextStream(stderr) << u"Submission rejected: "_s << rejected->error.reason << u"\n"_s;
+        return 2;
+    }
     return app.exec();
 }

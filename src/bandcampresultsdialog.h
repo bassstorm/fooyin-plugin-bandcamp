@@ -12,11 +12,19 @@ class BandcampResultsDialog : public QDialog
     Q_OBJECT
 
 public:
-    BandcampResultsDialog(const QList<BandcampResolvedPage>& results, QWidget* parent = nullptr);
+    explicit BandcampResultsDialog(QWidget* parent = nullptr);
+
+    void appendResult(const BandcampScopeResult& result);
+    void updateProgress(const BandcampOperationProgress& progress);
+    void finish(const BandcampOperationSummary& summary);
+    void showRejection(const ResolutionError& error);
 
 private:
-    [[nodiscard]] QString formatResults(const QList<BandcampResolvedPage>& results) const;
+    void appendBounded(QString text);
+    [[nodiscard]] QString formatResult(const BandcampScopeResult& result) const;
 
     QPlainTextEdit* m_text{nullptr};
+    qsizetype m_displayedChars{0};
+    bool m_displayTruncated{false};
 };
 } // namespace Fooyin::Bandcamp

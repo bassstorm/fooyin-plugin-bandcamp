@@ -2,6 +2,7 @@
 
 #include "bandcampassembly.h"
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -12,6 +13,7 @@ struct AlbumProcessorContext
     bool completeSiblingSet{false};
     CorrelationContext correlation;
     AlbumMetadataProvenance& provenance;
+    const std::atomic_bool* stop{nullptr};
 };
 
 struct TrackProcessorFacts
@@ -31,6 +33,7 @@ struct TrackProcessorContext
     CorrelationContext correlation;
     TrackMetadataProvenance& provenance;
     TrackProcessorFacts facts;
+    const std::atomic_bool* stop{nullptr};
 };
 
 class AlbumPostProcessor
@@ -72,6 +75,6 @@ private:
 const BandcampAlbumProcessorPipeline& standardAlbumProcessors();
 const BandcampTrackProcessorPipeline& standardTrackProcessors();
 
-void postProcessAlbum(AlbumAdmission& admission);
-void postProcessTrack(TrackAdmission& admission);
+void postProcessAlbum(AlbumAdmission& admission, const std::atomic_bool* stop = nullptr);
+void postProcessTrack(TrackAdmission& admission, const std::atomic_bool* stop = nullptr);
 } // namespace Fooyin::Bandcamp

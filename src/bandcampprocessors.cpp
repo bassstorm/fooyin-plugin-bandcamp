@@ -52,13 +52,17 @@ void logTrackChange(const QString& processor, const QString& field, const QStrin
          DiagnosticField::text(QStringLiteral("reason"), reason)});
 }
 
-std::optional<QString> sharedTrackArtist(const QList<BandcampTrack>& siblings, bool complete)
+std::optional<QString> sharedTrackArtist(const QList<BandcampTrack>& siblings, bool complete,
+                                         const std::atomic_bool* stop)
 {
     if(!complete || siblings.isEmpty() || siblings.first().artist.isEmpty()) {
         return std::nullopt;
     }
     const QString candidate = siblings.first().artist;
     for(const BandcampTrack& sibling : siblings) {
+        if(stop && stop->load(std::memory_order_relaxed)) {
+            return std::nullopt;
+        }
         if(sibling.artist.isEmpty() || !sameArtist(sibling.artist, candidate)) {
             return std::nullopt;
         }
@@ -78,7 +82,7 @@ int AlbumArtistInferenceProcessor::process(BandcampAlbumMetadata& album, AlbumPr
     if(!album.artist.isEmpty()) {
         return 0;
     }
-    const auto inferred = sharedTrackArtist(context.siblings, context.completeSiblingSet);
+    const auto inferred = sharedTrackArtist(context.siblings, context.completeSiblingSet, context.stop);
     if(!inferred) {
         return 0;
     }

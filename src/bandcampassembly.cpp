@@ -8,6 +8,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <atomic>
 
 namespace Fooyin::Bandcamp {
 namespace {
@@ -60,7 +61,7 @@ void normalizeTrackOptionals(TrackCandidate& track)
     }
 }
 
-void normalizeAlbumOptionals(AlbumCandidate& album)
+bool normalizeAlbumOptionals(AlbumCandidate& album, const std::atomic_bool* stop)
 {
     if(album.artist.isUsable() && album.artist.value.trimmed().isEmpty()) {
         markInvalid(album.artist);
@@ -72,8 +73,12 @@ void normalizeAlbumOptionals(AlbumCandidate& album)
         markInvalid(album.artId);
     }
     for(TrackCandidate& track : album.tracks) {
+        if(stop && stop->load(std::memory_order_relaxed)) {
+            return false;
+        }
         normalizeTrackOptionals(track);
     }
+    return !stop || !stop->load(std::memory_order_relaxed);
 }
 
 void normalizeTrackPageOptionals(TrackPageCandidate& page)
@@ -529,10 +534,16 @@ ParentRequirement classifyParentEvidence(const TrackPageCandidate& candidate, Co
                    QStringLiteral("parent"), QStringLiteral("unrecognized parent evidence"));
 }
 
-ResolutionOutcome<AlbumAdmission> admitAlbum(const AlbumCandidate& candidate, CorrelationContext context)
+ResolutionOutcome<AlbumAdmission> admitAlbum(const AlbumCandidate& candidate, CorrelationContext context,
+                                             const std::atomic_bool* stop)
 {
+    if(stop && stop->load(std::memory_order_relaxed)) {
+        return ResolutionCancelled{};
+    }
     AlbumCandidate normalized = candidate;
-    normalizeAlbumOptionals(normalized);
+    if(!normalizeAlbumOptionals(normalized, stop)) {
+        return ResolutionCancelled{};
+    }
     context.resourceUrl = context.resourceUrl.isValid() ? context.resourceUrl : normalized.sourceUrl.value;
     std::optional<ResolutionFailure> urlError;
     const auto sourceUrl = canonicalUrl(normalized.sourceUrl, BandcampPageKind::Album,
@@ -572,6 +583,9 @@ ResolutionOutcome<AlbumAdmission> admitAlbum(const AlbumCandidate& candidate, Co
 
     QSet<qint64> trackIds;
     for(const TrackCandidate& child : normalized.tracks) {
+        if(stop && stop->load(std::memory_order_relaxed)) {
+            return ResolutionCancelled{};
+        }
         const qint64 id = child.id.isUsable() ? child.id.value : 0;
         if(auto error = validateTrackCandidate(child, *sourceUrl, id)) {
             return *error;
@@ -592,8 +606,12 @@ ResolutionOutcome<AlbumAdmission> admitAlbum(const AlbumCandidate& candidate, Co
     return ResolutionSuccess<AlbumAdmission>{std::move(admission)};
 }
 
-ResolutionOutcome<TrackAdmission> admitStandaloneTrack(const TrackPageCandidate& candidate, CorrelationContext context)
+ResolutionOutcome<TrackAdmission> admitStandaloneTrack(const TrackPageCandidate& candidate, CorrelationContext context,
+                                                       const std::atomic_bool* stop)
 {
+    if(stop && stop->load(std::memory_order_relaxed)) {
+        return ResolutionCancelled{};
+    }
     context.resourceUrl    = context.resourceUrl.isValid() ? context.resourceUrl : candidate.sourceUrl.value;
     const auto requirement = classifyParentEvidence(candidate, context);
     if(std::holds_alternative<ResolutionFailure>(requirement)) {
@@ -634,8 +652,11 @@ ResolutionOutcome<TrackAdmission> admitStandaloneTrack(const TrackPageCandidate&
 }
 
 ResolutionOutcome<TrackAdmission> admitAlbumTrack(const TrackPageCandidate& trackPage, const AlbumCandidate& album,
-                                                  CorrelationContext context)
+                                                  CorrelationContext context, const std::atomic_bool* stop)
 {
+    if(stop && stop->load(std::memory_order_relaxed)) {
+        return ResolutionCancelled{};
+    }
     context.resourceUrl    = context.resourceUrl.isValid() ? context.resourceUrl : trackPage.sourceUrl.value;
     const auto requirement = classifyParentEvidence(trackPage, context);
     if(std::holds_alternative<ResolutionFailure>(requirement)) {
@@ -650,7 +671,9 @@ ResolutionOutcome<TrackAdmission> admitAlbumTrack(const TrackPageCandidate& trac
     TrackPageCandidate normalizedPage = trackPage;
     normalizeTrackPageOptionals(normalizedPage);
     AlbumCandidate normalizedAlbum = album;
-    normalizeAlbumOptionals(normalizedAlbum);
+    if(!normalizeAlbumOptionals(normalizedAlbum, stop)) {
+        return ResolutionCancelled{};
+    }
     const CorrelationContext trackContext
         = context.withTrack(normalizedPage.track.id.isUsable() ? normalizedPage.track.id.value : 0);
     if(auto error = validateTrackPage(normalizedPage, context)) {
@@ -668,6 +691,9 @@ ResolutionOutcome<TrackAdmission> admitAlbumTrack(const TrackPageCandidate& trac
     qsizetype matchingIndex = -1;
     int matchingCount       = 0;
     for(qsizetype i = 0; i < normalizedAlbum.tracks.size(); ++i) {
+        if(stop && stop->load(std::memory_order_relaxed)) {
+            return ResolutionCancelled{};
+        }
         const auto& child = normalizedAlbum.tracks.at(i);
         if(child.id.isUsable() && child.id.value == normalizedPage.track.id.value) {
             matchingIndex = i;
@@ -728,6 +754,9 @@ ResolutionOutcome<TrackAdmission> admitAlbumTrack(const TrackPageCandidate& trac
     bool complete = true;
     QSet<qint64> siblingIds;
     for(qsizetype i = 0; i < normalizedAlbum.tracks.size(); ++i) {
+        if(stop && stop->load(std::memory_order_relaxed)) {
+            return ResolutionCancelled{};
+        }
         const TrackCandidate& member = normalizedAlbum.tracks.at(i);
         TrackCandidate resolved      = i == matchingIndex ? selected : member;
         const qint64 siblingId       = resolved.id.isUsable() ? resolved.id.value : 0;

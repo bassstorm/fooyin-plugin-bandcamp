@@ -8,8 +8,10 @@
 #include <gui/plugins/guiplugin.h>
 #include <gui/plugins/pluginconfigguiplugin.h>
 
+#include <QHash>
 #include <QList>
 #include <QObject>
+#include <QPointer>
 
 #include <memory>
 
@@ -18,6 +20,7 @@ class NetworkAccessManager;
 } // namespace Fooyin
 
 namespace Fooyin::Bandcamp {
+class BandcampResultsDialog;
 class BandcampPlugin : public QObject,
                        public Plugin,
                        public CorePlugin,
@@ -36,11 +39,14 @@ public:
 private:
     void showAddUrlDialog();
     void onUrlsSubmitted(const QList<BandcampPageUrl>& urls);
-    void showResults(const QList<BandcampResolvedPage>& results);
+    void onScopeResolved(const BandcampScopeResult& result);
+    void onOperationProgress(const BandcampOperationProgress& progress);
+    void onOperationFinished(const BandcampOperationSummary& summary);
 
     // Kept alive for as long as the service that uses it.
     std::shared_ptr<NetworkAccessManager> m_network;
     // Owned by this plugin through the QObject parent tree.
     BandcampService* m_service{nullptr};
+    QHash<BandcampOperationId, QPointer<BandcampResultsDialog>> m_resultDialogs;
 };
 } // namespace Fooyin::Bandcamp

@@ -27,7 +27,7 @@ than being deferred to a final hardening step.
   date used for collection ordering; standalone releases use their own date.
 - Reuse the same persisted track identity and preserve user edits on re-add.
   Repeated playlist entries are allowed, including overlapping submissions;
-  network request sharing must not erase requested playlist occurrences.
+  work deduplication must not erase requested playlist occurrences.
 - Append to the playlist selected in the UI, not the currently playing
   playlist. Capture its ID at submission. A "Create as new playlist" option
   overrides this; missing, temporary, locked, or automatic targets require a
@@ -36,9 +36,9 @@ than being deferred to a final hardening step.
   One album or album-member track uses the album title; one standalone track
   uses its title; a discography or mixed submission uses "Bandcamp".
   There is no manual naming field.
-- Retain progress, per-input failure reporting, user cancellation, and bounded
-  retry/backoff for transient page-request failures. Already committed results
-  remain when a run is cancelled or its target becomes unavailable.
+- Retain progress, per-input failure reporting, and user cancellation.
+  Page fetches are not automatically retried. Already committed results remain
+  when a run is cancelled or its target becomes unavailable.
 - Support manual expired-only and forced stream refresh for selected Bandcamp
   tracks, or the UI-selected playlist when no tracks are selected.
 - Before playback, refresh an expired stream or one whose remaining lifetime
@@ -62,8 +62,8 @@ not proof of contract compliance: some tests assert superseded behaviour.
 | Source mapping | [bandcampparser.cpp](src/bandcampparser.cpp) selects the first track row, ignores several identity aliases and declared parent identity, treats page artist/artwork as resolved track context, truncates oversized fields, and skips malformed album rows. Implement the exact mapping/ownership rules, retain declared membership, and preserve unresolved evidence. |
 | Assembly and admission | [bandcampservice.cpp](src/bandcampservice.cpp) post-processes each page before fetching the parent. Parent fetch, parse, and timeout failures return partial track success; parent children are not matched by ID. Introduce authoritative assembly and scope validation before processors. |
 | Processors | [bandcamppostprocessor.cpp](src/bandcamppostprocessor.cpp) interleaves album and track steps. [bandcampprocessors.cpp](src/bandcampprocessors.cpp) lets album processors mutate children, removes streamless tracks, and reports missing titles through warnings. Reclassify rules, enforce album-first/track-second passes, and move rejection to admission. |
-| Scheduling and lifecycle | [bandcampservice.cpp](src/bandcampservice.cpp) queues all inputs and retains all results until a batch ends. Timed-out parse futures can outlive active slots; destruction waits for them. Replace this with bounded operation state, separate physical-work accounting, incremental ordered delivery, and cooperative shutdown. There is no public operation cancellation or shared-request broker. |
-| Fetching | [bandcampclient.cpp](src/bandcampclient.cpp) has useful byte/redirect controls, but appends reads before checking limits, lacks a final-read size check, and returns the requested rather than effective response URL. It has no retry/backoff or shared-consumer handling. Keep the transport wrapper and correct these boundaries. |
+| Scheduling and lifecycle | [bandcampservice.cpp](src/bandcampservice.cpp) queues all inputs and retains all results until a batch ends. Timed-out parse futures can outlive active slots; destruction waits for them. Separate input association/ordering from bounded release execution and use cooperative, nonblocking shutdown. Add operation cancellation and a simple operation-local domain cache, not a shared-request broker. |
+| Fetching | [bandcampclient.cpp](src/bandcampclient.cpp) has useful byte/redirect controls, but appends reads before checking limits, lacks a final-read size check, and returns the requested rather than effective response URL. Keep the transport wrapper and correct these boundaries without adding retries or cross-call sharing. |
 | Settings and UI | [bandcampsettings.cpp](src/bandcampsettings.cpp) already validates persisted timeout/parallelism. [bandcampplugin.cpp](src/bandcampplugin.cpp) mutates shared service settings and only opens [bandcampresultsdialog.cpp](src/bandcampresultsdialog.cpp). Snapshot per-operation options, add order/freshness settings, and introduce a separate import controller. |
 | Diagnostics | [bandcamplogging.cpp](src/bandcamplogging.cpp) has the standard categories, but no native TRACE categories, source snapshots, or propagated correlation. Current logs and warning bags do not implement the agreed transition contract. |
 | Tests and build | [tests/unit/CMakeLists.txt](tests/unit/CMakeLists.txt) duplicates production source lists and does not register CTest tests. It does not exercise the network client/service. [tests/integration/CMakeLists.txt](tests/integration/CMakeLists.txt) builds a standalone probe with independent source extraction and live metadata snapshots. Consolidate shared code and add deterministic orchestration tests plus default live CTest coverage. |
@@ -102,48 +102,105 @@ input devices. Implementation must target these actual interfaces:
 
 ## 3. Target design
 
-### Components and ownership
+### High-level flow
 
-Keep value transformations independent of Fooyin. Use QObject classes only for
-asynchronous ownership or host/UI interaction. Proposed helper names describe
-responsibilities, not a requirement to create a file or class for every row.
+Use two operational roles: an **orchestrator** organizes a caller's work;
+a **resolver** turns a list of release requests into plugin domain entities.
+These are responsibility boundaries, not a requirement for a class or file
+for every role or helper. Keep value transformations independent of Fooyin.
 
-| Component | Responsibility and boundary |
+```text
+URLs or Fooyin tracks
+    |
+    v
+Orchestrator: unfold discographies, build requests, deduplicate work
+    |                         |
+    |                         +--> original occurrences, selections, order
+    v
+Unique release requests
+    |
+    v
+Resolver: HTTP -> parser -> assembly/admission -> post-processors
+    |
+    v
+Keyed per-request outcomes
+    |
+    v
+Orchestrator: associate results, restore occurrences, apply ordering
+    |
+    v
+Caller: playlist insertion or stream-property updates
+```
+
+### Ownership
+
+| Owner | Responsibility and boundary |
 | --- | --- |
-| Parser | Interpret one bounded source response into typed album/track candidates or an ordered discovery batch. Own raw HTML/JSON, page-kind detection, local mappings, source diagnostics, and opaque continuation interpretation. Never fetch or iterate a whole discography. |
-| Assembly/admission functions | Reconcile typed candidates by stable identity and provenance; validate parent relationships and requested scope; construct valid metadata. Pure functions, without network, UI, or source-tree access. |
-| Post-processing pipelines | Separate album and track passes on admitted objects, with stable read-only parent/sibling context and semantic provenance. Each rule mutates only its own permitted entity. |
-| Network client and request broker | Client owns bounded HTTP exchange and effective response information. Broker owns in-flight sharing, request lifecycle, and consumer subscriptions. Neither decides metadata authority or playlist selection. |
-| Resolution operation and scheduler | One operation owns its input scopes, options, deadlines, cancellation, and outcomes. The service schedules discovery, parent acquisition, worker tasks, and bounded ordered delivery across operations. Share requests without conflating consumers' scopes or deadlines. |
-| Collection ordering buffer | Preserve listing ordinals and stage chronological results using bounded temporary storage. Own ordering/backpressure, not source parsing or metadata reconciliation. |
-| Fooyin track factory and library gateway | Serialize identity, project admitted metadata/artwork, reuse resident identities, and persist transport-only changes while preserving current user edits. Isolate host APIs from the resolution core. |
-| Import controller | Own one UI import's target playlist, progress, cancellation, and ordered commits. The plugin class remains the composition/action-registration root; widgets collect input and display outcomes. |
-| Stream resolver and decoder | Reuse release acquisition and stable-ID matching for transport refresh. Decoder prepares a sufficiently fresh stream, owns remote input/inner decoder, and performs bounded same-URL reopen recovery. Neither rewrites descriptive metadata. |
+| Orchestrator (working name) | Unfold discographies into release lists through resolver discovery calls, construct requests from URLs or stored Fooyin release URLs/track IDs, deduplicate work, retain original selections/occurrences, and associate and order outcomes. Does not fetch or interpret source data, reconcile metadata, or manage workers. |
+| Resolver | Accept a complete release-request list and process it through its internal pipeline with configured parallelism. Own per-item progression, immutable options, processing deadlines, cancellation, and an operation-local domain cache. Return keyed outcomes, not caller-specific ordering or playlist changes. |
+| Pipeline helpers | Encapsulate HTTP exchange, source parsing, authoritative assembly/admission, and semantic refinement separately. Each owns its mechanics and exposes typed values/outcomes; no helper reaches into another helper's mutable state. |
+| Caller and host integration | Capture UI intent and destination, consume the orchestrated model, and apply playlist or transport changes through the track factory/library gateway. Preserve resident identities and edits. Widgets and playback code do not duplicate resolution logic. |
 
-### Data and lifecycle rules
+The HTTP client returns bounded response data and effective response information.
+Only the parser interprets raw HTML/JSON and returns typed candidates.
+Assembly/admission combines candidates and validates the requested scope before
+post-processing. Processors run album-first, then track-by-track, without
+rejecting resources or changing transport identity.
 
-- Use tagged parse and resolution results so success/failure/cancellation
-  cannot coexist ambiguously. Structured errors carry the contract's stable
-  code, stage, resource, identity, field/relationship, and safe reason.
-- Candidate fields preserve missing/invalid/usable state and semantic
-  provenance outside the final domain model. JSONPaths remain parser-owned
-  diagnostics; downstream code consumes typed facts, not raw source objects.
-- Represent reusable album metadata independently of whole-album success.
-  A selected-track result retains its parent once without requiring every
-  sibling to resolve or duplicating album-title/identity concepts.
-- Snapshot options at submission. Changing settings cannot alter an existing
-  operation's budget, order, or freshness policy.
-- Bound submitted work, pending discoveries, live HTTP requests, physical
-  parse tasks, retained bytes, reorder buffers, temporary storage, and logging.
-  A logical timeout does not free a physical worker slot until work exits.
-- Use a bounded admission/reorder window: a slow early item must not allow
-  unlimited completed results to accumulate behind it.
-- Workers own their inputs and do not depend on service lifetime. Cancel
-  cooperatively and guard callbacks; do not block the GUI thread waiting for
-  futures during destruction or force-terminate worker threads.
-- Discovery duplicates representing the same listing entry may be reconciled
-  within that collection. Explicitly repeated inputs and playlist occurrences
-  remain separate consumers even when their network work is shared.
+Discography unfolding asks the resolution layer for one bounded discovery
+batch at a time: typed release references plus continuation information, not a
+discography domain entity. The orchestrator follows continuations to construct
+the complete release list, then submits deduplicated requests to the resolver.
+Discovery acquisition and source interpretation use the same HTTP/parser
+infrastructure, not a second implementation. No additional input
+"normalization" stage is implied.
+
+### State and data boundaries
+
+- Keep the occurrence/order map separate from the unique work queue.
+  Deduplicating work must not remove requested playlist occurrences.
+- A release request contains its URL and the minimum selection information
+  needed to distinguish a whole release from selected track IDs. Original UI
+  inputs and final ordering stay outside the resolver.
+- The resolver acquires any required parent as part of the same item workflow,
+  then assembles, admits, and refines the result. Parent acquisition is not a
+  new top-level item requiring another item-admission slot.
+- Cache successful, admitted and post-processed domain entities above the full
+  pipeline, for this submitted list only. Do not cache pages, JSON, parser
+  candidates, or failures. Reuse must preserve source authority and selection
+  scope; selected-track validity does not imply whole-album validity.
+- Playlist import and stream refresh consume the same plugin model. Refresh
+  selects the required tracks and updates transport fields only; it does not
+  introduce a parallel parser, model-building pipeline, or warning mechanism.
+- Snapshot options and preserve an outcome for every accepted request.
+  Expected failures are typed values; cancellation is distinct. A failed item
+  does not stop unrelated work or block final ordering.
+- Pending requests, associations, cached domain entities, and ordered results
+  are ordinary lightweight operation-owned collections. Bound active heavy work,
+  not the submitted list: dispose of response bodies after parsing and candidates
+  after assembly. The orchestrator owns associations/order; the resolver owns
+  execution capacity and releases its cache when the list finishes.
+- Start an item's processing deadline when its workflow starts, including any
+  required parent acquisition. A long pending list must not cause untouched
+  items to expire; any caller-wide deadline is a separate policy.
+- Keep physical HTTP/worker capacity until actual completion, even after
+  logical cancellation. Workers own their inputs; callbacks are guarded and
+  teardown never waits on the GUI thread.
+- One HTTP fetch produces one outcome: no automatic retry, backoff, retry
+  configuration, or cross-call coalescing. The already-defined same-URL playback
+  reopen is a separate behavior, not a page-fetch retry.
+- Keep execution in the resolver and physical reply/worker lifetimes with their
+  owners. Do not introduce a generic stage scheduler, shared-acquisition broker,
+  or per-entity memory reservation framework.
+
+### Test boundaries
+
+Test request construction/deduplication, association, and ordering as value transformations.
+Test parser, assembly/admission, and processor semantics independently. Cover
+HTTP, cache scope, deadline, cancellation, and lifetime robustness at the component
+that owns each behavior, using narrow dependencies where necessary. A small
+number of happy-path integration tests exercise the composed flows; they are
+not a sophisticated simulator for every combination of internal states.
 
 ## 4. Delivery sequence
 
@@ -152,7 +209,7 @@ responsibilities, not a requirement to create a file or class for every row.
 | 1 | None | Shared build/test seams, typed boundaries, diagnostic infrastructure. |
 | 2 | 1 | Contract-compliant source candidates and bounded extraction. |
 | 3 | 2 | Authoritative assembly, admission, and non-failing processors. |
-| 4 | 3 | Bounded operation scheduler, shared acquisition, cancellation, and retries. |
+| 4 | 3 | List-processing release resolver, orchestration boundary, domain cache, and cancellation. |
 | 5 | 4 | Complete discovery, chronological ordering, and settings. |
 | 6 | 5 | Production-chain live tests and probe retirement. |
 | 7 | 3 | Fooyin identity, track construction, and persistence gateway. |
@@ -231,53 +288,57 @@ refinement; isolated rules and composed passes are deterministic and preserve
 invariants. Tests expecting partial-parent success, discarded children, or
 successful missing required titles have been replaced, not merely disabled.
 
-### Increment 4 - Operations, shared acquisition, and host safety
+### Increment 4 - Resolver pipeline, orchestration boundary, and host safety
 
-- Replace mutable global batch settings/results with identified operations,
-  immutable options, per-scope outcomes, progress, cancellation, and incremental
-  ordered delivery. Preserve an outcome for every accepted requested scope.
+- Implement the ownership boundary in section 3. Keep caller input organization
+  and final association/order in the orchestrator; the resolver accepts complete
+  release lists and returns keyed per-scope outcomes from its internal
+  pipeline. Replace mutable global settings/results with immutable options,
+  progress, cancellation, and an outcome for every accepted requested scope.
 - Retain the network client but enforce response limits during every read,
   including completion, without first allocating an unbounded read. Validate
   redirect targets and use the effective response URL as the parsing base.
-- Implement request sharing for release/parent acquisition, including concurrent
-  operations. Keep parsed source facts immutable and scope-independent: a
-  whole-album failure must not poison a valid selected-track consumer.
-- Account separately for network slots, worker slots, queued work, retained
-  bytes, and ordered results. Apply backpressure before scheduling more work.
-  Give every consumer a finite budget, including queue wait and required
-  parent acquisition; an entire discography is not one page-sized item timeout.
-- Implement bounded backoff for transient network failures, HTTP 429, and 5xx,
-  respecting usable `Retry-After` information and remaining deadlines. Shared
-  requests share retries; cancellation/deadlines never create retry loops.
-- Make consumer withdrawal independent of other subscribers. Abort physical
-  requests only when unused, discard late results, and complete each operation
-  once. Contain worker/dependency exceptions at explicit boundaries.
+- Implement a simple operation-local cache of successful, fully processed
+  domain entities. Cache lookup precedes the full pipeline; compatible success
+  populates it. Do not retain raw responses/parser candidates, cache failures,
+  share across calls, or confuse whole-album and selected-track validity.
+- Bound active release workflows and physical HTTP/worker capacity using the
+  existing source limits and configured parallelism. Pending requests remain an
+  ordinary list; do not add admission windows or reservation ledgers.
+  Each active item has a finite processing budget including required parent
+  acquisition, starting when its workflow begins rather than at list submission.
+- Return failed fetches directly, including transient transport failures, 429,
+  and 5xx. Do not add automatic retries, backoff, or retry configuration.
+- Cancel unfinished work within its owning operation, discard late results,
+  and complete each operation once. Keep physical capacity occupied until work
+  actually exits. Contain worker/dependency exceptions at explicit boundaries.
 
-**Complete when:** fake-network/time tests demonstrate ordered bounded delivery,
-parent sharing, independent scopes/deadlines, retry exhaustion, cancellation,
-late-result handling, and teardown without blocking or stale host access.
+**Complete when:** the resolver pipeline and orchestration boundary have focused
+component tests for their own semantics and robustness, including operation-local
+domain reuse, independent scopes/deadlines, bounded active work, long input lists,
+one-outcome fetches, cancellation, late completion, and safe teardown. Association/ordering tests do not require
+HTTP or worker simulation; happy-path composition uses the production pipeline.
 
 ### Increment 5 - Discography discovery, ordering, and settings
 
 - Parser listing support returns one bounded ordered batch of typed album/track
   references plus opaque continuation information. Interpret structured listing
   identifiers/links only, including artist and label variants.
-- Resolver submits these references to ordinary release resolution and requests
-  continuation batches only when capacity permits. Detect repeated continuations
-  and incomplete discovery explicitly; never silently stop at the first page,
-  skip malformed entries, or impose a hidden successful item cap.
+- The orchestrator unfolds these discovery batches through resolver calls and
+  submits the complete deduplicated release list to resolution. Detect
+  repeated continuations and incomplete discovery explicitly; never silently
+  stop at the first page, skip malformed entries, or impose a hidden successful
+  item cap.
 - Preserve listing ordinals across pages. Unsorted mode releases complete scopes
   incrementally in that order; completion timing cannot reorder them.
 - Chronological modes must discover and resolve the full collection before its
-  ordered publication. Use a bounded disk-backed staging/order buffer, such as
-  a temporary SQLite store using existing Qt SQL support, not an in-memory list
-  of every resolved release. Store typed results/keys, not raw HTML/JSON.
+  ordered publication. Retain domain results and ordering keys in the
+  orchestrator, not raw HTML/JSON; do not add a disk-backed staging subsystem.
 - Apply date direction only to known dates; unknown dates always sort last,
   with listing ordinal as the stable tie-breaker. Successful releases can still
-  publish when unrelated release resolutions fail. Discovery or staging failure
+  publish when unrelated release resolutions fail. Discovery failure
   is explicit and cannot claim complete ordered collection success.
-- Bound disk usage and database/cache memory, handle storage errors, and clean
-  temporary state on success, failure, cancellation, and shutdown. Waiting for
+- Release operation-owned collections on completion/cancellation. Waiting for
   complete chronological order is intentional, not stalled progress.
 - Add persisted **Default / Unsorted / Ascending / Descending** options to the
   settings dialog, preserving Default as a setting distinct from its current
@@ -286,8 +347,8 @@ late-result handling, and teardown without blocking or stale host access.
   Zero means expired-only refresh. Preserve timeout/parallelism settings.
 
 **Complete when:** paginated synthetic listings resolve without missing entries
-or order instability; both date directions, unknowns, ties, backpressure, and
-temporary-storage failures are tested. Settings survive restart and affect only
+or order instability; both date directions, unknowns, ties, discovery failures,
+and operation cleanup are tested. Settings survive restart and affect only
 new operations. Both artist and label discovery work through the production path.
 
 ### Increment 6 - Live integration tests and probe retirement
@@ -363,7 +424,7 @@ tests and focused Fooyin smoke checks.
 
 ### Increment 9 - Shared stream refresh and manual actions
 
-- Build the stream resolver on the existing broker/parser and stable-ID
+- Build the stream resolver on the existing release pipeline and stable-ID
   selection logic. Refresh canonical album sources for members and track sources
   for standalone tracks; do not add a second raw parser or per-member fetch path.
 - One album request distributes available refreshed transport state by track ID
@@ -378,8 +439,9 @@ tests and focused Fooyin smoke checks.
 - Persist only provider/source/stream/expiry transport properties on the latest
   resident identities. Report refresh and write outcomes separately; never
   overwrite user tags, artwork edits, statistics, or filepath.
-- Share concurrent refresh requests and retain only bounded freshness state;
-  any cached state must be associated with its validated release and track IDs.
+- Group same-release tracks within one refresh submission and associate cached
+  domain entities with validated release/track identities and selection scope.
+  Separate submissions have independent acquisition, caches, and cancellation.
 
 **Complete when:** one album acquisition refreshes several selected members,
 standalone refresh works, malformed or mismatched state fails explicitly, and
@@ -420,10 +482,10 @@ track to completion, including after restart with an expired stored stream.
   Verify user-edited metadata survives each path.
 - Run deterministic semantic/robustness suites, default live CTest coverage,
   and targeted ASan/UBSan runs, including increased seeded mutation iterations.
-  Verify bounded memory, queues, reorder windows, and disk staging on a large
-  synthetic collection rather than relying only on a small live discography.
+  Verify bounded heavy working data and full processing of a large lightweight
+  input list rather than relying only on a small live discography.
 - Verify diagnostic correlation across source snapshots, reconciliation,
-  processor transitions, shared requests, and failures, including redaction.
+  processor transitions, domain-cache reuse, and failures, including redaction.
 - Update [README.md](README.md) with actual features, all settings, playlist
   rules, conditional refresh/reopen behaviour, playback/seek limitations, native
   TRACE capture, and build/test/offline/sanitizer commands. Remove temporary

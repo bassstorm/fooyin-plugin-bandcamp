@@ -275,9 +275,10 @@ even when some candidates cannot become valid domain tracks.
   remaining-lifetime threshold, not a periodic refresh interval.
 - Refresh by `sourceUrl`: one album fetch supplies refreshed streams for its
   member tracks; one standalone-track fetch supplies its own stream.
-- Coalesce work for tracks sharing a release, including concurrent requests;
-  distribute refreshed streams by stable track ID, not filtered list position.
-  An album-linked track does not require another track-page fetch on refresh.
+- Group tracks sharing a release within one refresh submission; distribute
+  refreshed streams by stable track ID, not filtered list position.
+  Separate submissions are independent. An album-linked track does not require
+  another track-page fetch on refresh.
 - Keep signed stream locators separate from canonical release identity. Never
   derive metadata or membership from them, and never strip their required query
   parameters when using them for playback.
@@ -355,7 +356,9 @@ titles, credits, and legitimate differences between album and track metadata.
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | Parser | Source extraction/validation, page-local candidate mapping, source diagnostic events, and typed relationship/provenance output. | Network requests, final scope validity, or domain inference. |
-| Resolution service | Scheduling, collection expansion, parent acquisition, authoritative assembly, scope validation, outcomes, canonical release selection, and shared refresh work. | Interpretation of Bandcamp JSON or discography layout. |
+| Orchestration | Discography unfolding into release references, request construction/deduplication, original-input associations, and final result ordering. | Source interpretation, metadata reconciliation, or worker scheduling. |
+| Release resolver | Complete release-list processing, execution parallelism, parent acquisition, authoritative assembly, scope validation, post-processing, outcomes, and operation-local domain caching. | Original-input/playlist ordering or interpretation of Bandcamp JSON or discography layout. |
+| HTTP client | One bounded HTTP fetch, redirects, effective response location, and physical reply lifetime. | Automatic retries, metadata interpretation, or domain caching. |
 | Album processors | Semantic refinement of admitted album-owned metadata. | Track mutation, resource rejection, raw source access, or network requests. |
 | Track processors | Semantic refinement of one admitted track with validated parent context when present. | Album mutation, resource rejection, raw source access, or network requests. |
 | Fooyin track construction | Serialization of domain identity into the virtual URI and projection of resolved metadata/locators into Fooyin tracks. | Inventing identity, source interpretation, or network resolution. |
@@ -384,9 +387,16 @@ See [bandcampparser.cpp](src/bandcampparser.cpp) and
 
 See [bandcampservice.cpp](src/bandcampservice.cpp).
 
-- The resolver schedules extracted candidates and continuation requests without
-  understanding their source listing. The first parsed batch is not assumed
-  to be the complete collection when a continuation is supplied.
+- The orchestrator unfolds discographies through discovery calls to the
+  resolution layer without understanding the source listing. Continuations
+  are exhausted before treating a collection's release list as complete.
+- The resolver accepts a complete list of release requests and processes it
+  with bounded internal parallelism. Callers do not manage admission batches.
+  Each request includes the selection context needed for its validity scope;
+  original occurrences and final ordering remain with the orchestrator.
+- HTTP acquisition, parsing, assembly/admission, and post-processing have
+  encapsulated responsibilities. No central controller manipulates helpers'
+  internal request maps, worker state, or resource counters.
 - Assembly works on typed candidates and semantic provenance; it never reads
   source JSON. It selects authoritative fields and validates the requested
   scope before constructing admitted domain objects.
@@ -395,6 +405,18 @@ See [bandcampservice.cpp](src/bandcampservice.cpp).
   remain outside the domain track set.
 - Timeout and error handling preserve the required-parent failure policy and
   distinguish failure from successful resolution.
+
+### Resolution cache
+
+- Cache only successfully admitted and post-processed plugin domain entities,
+  above the complete resolution pipeline. Do not cache HTML, JSON, parser
+  candidates, or failed outcomes.
+- The cache belongs to one submitted release list and is released when that
+  operation ends. There is no cross-call cache or cross-call coalescing.
+- Reuse requires compatible resource identity, source authority, and requested
+  scope. A selected-track result does not establish whole-album validity, and
+  cached album-derived metadata must not erase explicit track-page metadata.
+- Cache state remains operational context, never part of a domain entity.
 
 ### Processor contracts and order
 
@@ -444,27 +466,33 @@ undefined behavior, or an unresponsive host.
   as untrusted. Validate types, array bounds, identity, URL components, and
   numeric conversions before use; reject non-finite and out-of-range numbers.
 - Bound response bytes while reading, parser input/depth, field lengths,
-  in-flight requests, queued work, retries, redirects, and diagnostic work.
+  in-flight requests, active CPU work, redirects, and diagnostic work.
   Limits are explicit constants/settings with tests at their boundaries.
 - Resource-limit violations are structured failures, not silent truncation,
   hidden item caps, skipped children, or success-shaped defaults.
-- Process collections incrementally with bounded queues and backpressure.
-  Retain only the working set needed for validation and atomic publication;
-  release raw bodies and candidate state when their consumers finish.
+- Pending release references, associations, cached domain entities, and final
+  domain results are ordinary operation-owned collections, not a reason to
+  impose hidden item caps or a caller-managed batching protocol.
+- Bound the heavy active working set through execution parallelism and source
+  limits. Release raw bodies after parsing and candidates after assembly;
+  retain only the context needed to finish active work.
 
 ### Operation lifecycle
 
 - Cancellation is a caller or owner withdrawing unfinished work, including
   owner teardown or host shutdown. It is an operational control signal, not a
   metadata defect.
-- Deadline expiry and HTTP failures, including rate limiting, are request
-  failure/retry conditions, not cancellation. Any recovery remains within
-  the configured retry and deadline bounds.
-- Requests and jobs have finite deadlines. Each operation reaches one terminal
-  state, including failure and cancellation paths; late results cannot
-  complete it again.
+- Deadline expiry and HTTP failures, including rate limiting, are failures,
+  not cancellation. Page fetches are not automatically retried: one call
+  produces one outcome, without retry settings or backoff.
+- Each active release workflow has a finite processing deadline, including
+  required parent acquisition. Waiting in the submitted list does not consume
+  that processing budget. Any caller-wide deadline is a separate policy.
+  Each operation reaches one terminal state, including failure and cancellation
+  paths; late results cannot complete it again.
 - Withdrawal stops further scheduling and releases work/resources no longer
-  needed by that operation. Shared requests retain their other live consumers.
+  needed by that operation. Independent submissions do not share cancellation
+  or physical request ownership.
   CPU work checks cancellation where applicable; workers are never forcibly
   terminated. No blocking network wait runs on the UI thread.
 

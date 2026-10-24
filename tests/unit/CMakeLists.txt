@@ -7,6 +7,7 @@ add_executable(bandcamp_unit_tests
     bandcampcontracttests.cpp
     bandcampdiagnosticstests.cpp
     bandcampclienttests.cpp
+    bandcamporchestratortests.cpp
     bandcampservicetests.cpp
 )
 
