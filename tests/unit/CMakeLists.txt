@@ -2,6 +2,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Test)
 
 add_executable(bandcamp_unit_tests
     bandcamptests.cpp
+    bandcampparsertests.cpp
     bandcamppostprocessortests.cpp
     bandcampcontracttests.cpp
     bandcampdiagnosticstests.cpp

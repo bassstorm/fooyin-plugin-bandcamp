@@ -91,9 +91,10 @@ build/probe/bandcamp-probe -p 4 -t 3000 <url> <url>
 
 For each album and track page, the output shows:
 
-- `raw tralbum:`: the prettified `data-tralbum` JSON from the page. This is the
-  only input the parser reads. Signed stream URLs are shown as host and path
-  only, with `?<signed-query-redacted>` in place of the query string.
+- `fy.trace.bandcamp.parser` records on stderr: production parser source
+  snapshots (compact, full decoded `data-tralbum` JSON) and field mappings.
+  URL queries, fragments and credentials are redacted. The probe enables this
+  category; it no longer extracts raw JSON or fetches pages twice.
 - `album:` and `tracks:`, or `track:`: every resolved field, including empty
   ones shown as `""`. Durations are in milliseconds. Each value's source is logged
   by the post-processors as `fy.bandcamp.tracks` debug lines on stderr, for
@@ -106,3 +107,24 @@ Expected values for the agreed set are in the `Snapshots` table in
 [bandcamp_probe.cpp](tests/integration/bandcamp_probe.cpp). A mismatch means
 Bandcamp changed its pages or the model, or the parser regressed. The probe
 exits with 1 when any page fails.
+
+### Internal parser boundary
+
+`parseReleasePage` returns a tagged `ReleaseParseOutcome` containing typed album
+or track-page candidates, or a structured parse error. Optional values retain
+missing/invalid/usable state and semantic provenance. Declared children retain
+their order even when malformed or streamless; parent identity/location and
+track-page fallback context remain separate evidence for assembly.
+Identity conversion validates original decimal tokens (including exact integral
+exponents) without floating-point rounding. Supported HTTPS stream strings retain
+their original signed queries verbatim.
+
+Input limits are explicit in `bandcampparser.h`: 20 MiB response, 64 JSON
+container levels, 16,384 UTF-16 units per source string/key, 100,000 source values
+(including containers), and 10,000 declared rows. Exceeding a limit fails parsing,
+never truncates metadata or returns a successful subset. Source snapshots are
+bounded by response size/depth and only serialized when parser TRACE is enabled.
+
+`bandcamplegacyadapter.*` temporarily projects candidates into the existing
+service/probe models. It is not domain admission: authoritative cross-page
+assembly, atomic validation and processor restructuring belong to Increment 3.

@@ -1,7 +1,7 @@
 #include "bandcampservice.h"
 
 #include "bandcamplogging.h"
-#include "bandcampparser.h"
+#include "bandcamplegacyadapter.h"
 #include "bandcamppostprocessor.h"
 
 #include <QFutureWatcher>
@@ -23,14 +23,14 @@ constexpr int DefaultItemTimeoutMs = 10000;
 constexpr int MinItemTimeoutMs = 1;
 constexpr int MaxItemTimeoutMs = 120000;
 
-BandcampResolvedPage parsePage(const BandcampPageUrl& page, const QByteArray& body)
+BandcampResolvedPage parsePage(const BandcampPageUrl& page, const QByteArray& body, CorrelationContext context)
 {
     BandcampResolvedPage result;
     result.page = page;
-    const QUrl pageUrl(page.url);
+    const QUrl pageUrl = context.resourceUrl.isValid() ? context.resourceUrl : QUrl(page.url);
 
     if(page.kind == BandcampPageKind::Album) {
-        auto parsed     = parseAlbumPage(body, pageUrl);
+        auto parsed     = parseLegacyAlbumPage(body, pageUrl, context);
         result.error    = parsed.error;
         result.warnings = parsed.warnings;
         result.album    = std::move(parsed.value);
@@ -39,7 +39,7 @@ BandcampResolvedPage parsePage(const BandcampPageUrl& page, const QByteArray& bo
         }
     }
     else {
-        auto parsed     = parseTrackPage(body, pageUrl);
+        auto parsed     = parseLegacyTrackPage(body, pageUrl, context);
         result.error    = parsed.error;
         result.warnings = parsed.warnings;
         result.track    = std::move(parsed.value);
@@ -155,6 +155,7 @@ void BandcampService::onFetched(quint64 jobId, BandcampFetchResponse response)
         return;
     }
 
+    const auto requestId = it->request;
     it->request = 0;
 
     if(!response.isValid()) {
@@ -175,14 +176,16 @@ void BandcampService::onFetched(quint64 jobId, BandcampFetchResponse response)
     }
 
     const BandcampPageUrl page = it->awaitingAlbum ? it->albumPage : it->job.page;
-    startParse(jobId, page, std::move(response.body));
+    startParse(jobId, page, std::move(response.body),
+               CorrelationContext{.jobId = static_cast<qint64>(jobId),
+                                  .requestId = static_cast<qint64>(requestId), .resourceUrl = response.url});
 }
 
-void BandcampService::startParse(quint64 jobId, const BandcampPageUrl& page, QByteArray body)
+void BandcampService::startParse(quint64 jobId, const BandcampPageUrl& page, QByteArray body, CorrelationContext context)
 {
     // Parsing runs on the thread pool, so the UI thread never waits on it.
     QFuture<BandcampResolvedPage> future
-        = QtConcurrent::run([page, body = std::move(body)]() { return parsePage(page, body); });
+        = QtConcurrent::run([page, body = std::move(body), context]() { return parsePage(page, body, context); });
     m_parses.insert(jobId, future);
 
     auto* watcher = new QFutureWatcher<BandcampResolvedPage>(this);

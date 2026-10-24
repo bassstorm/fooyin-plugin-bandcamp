@@ -29,6 +29,8 @@ QString resolutionErrorCodeName(ResolutionErrorCode code)
         return QStringLiteral("timeout");
     case ResolutionErrorCode::PageTooLarge:
         return QStringLiteral("page_too_large");
+    case ResolutionErrorCode::ResourceLimitExceeded:
+        return QStringLiteral("resource_limit_exceeded");
     case ResolutionErrorCode::UnsupportedRequest:
         return QStringLiteral("unsupported_request");
     case ResolutionErrorCode::MalformedPage:

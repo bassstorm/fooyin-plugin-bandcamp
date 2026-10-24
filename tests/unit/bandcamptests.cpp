@@ -4,6 +4,7 @@
 #include "bandcampurl.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QLoggingCategory>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -24,7 +25,6 @@ const QUrl StandaloneTrackUrl{u"https://ravver.bandcamp.com/track/burial-shutta-
 
 constexpr int DefaultMutationIterations = 10000;
 constexpr std::uint32_t MutationSeed    = 0x5EEDB4C5U;
-constexpr qint64 MaxTrackDurationMs     = 604800000;
 
 // Synthetic pages shaped like Bandcamp's data-tralbum model. No real page is stored on disk;
 // live checks against Bandcamp belong to the integration probe.
@@ -108,35 +108,14 @@ private slots:
         // Cut inside the data-tralbum attribute so the JSON is incomplete.
         const qsizetype attr = body.indexOf("data-tralbum=");
         QVERIFY(attr > 0);
-        QVERIFY(!parseAlbumPage(body.left(attr + 200), AlbumUrl).isValid());
-        QVERIFY(!parseAlbumPage(body.left(attr + 13), AlbumUrl).isValid());
+        QVERIFY(!isSuccess(parseReleasePage(body.left(attr + 200), AlbumUrl)));
+        QVERIFY(!isSuccess(parseReleasePage(body.left(attr + 13), AlbumUrl)));
     }
 
     void invalidJson()
     {
-        QVERIFY(!parseAlbumPage(tralbumPage(R"({"current":{"type":"album",)"), AlbumUrl).isValid());
-        QVERIFY(!parseAlbumPage(tralbumPage(R"([1,2,3])"), AlbumUrl).isValid());
-    }
-
-    void differingRootIsWarnedAndCurrentKept()
-    {
-        const QByteArray body = tralbumPage(
-            R"({"current":{"type":"album","title":"T","artist":"Current Artist"},"artist":"Root Artist","trackinfo":[]})");
-        const auto result = parseAlbumPage(body, AlbumUrl);
-        QVERIFY2(result.isValid(), qPrintable(result.error));
-        QCOMPARE(result.value.artist, u"Current Artist"_s);
-        QVERIFY(result.warnings.contains(
-            u"current/artist (Current Artist) differs from root/artist (Root Artist), keeping current"_s));
-    }
-
-    void emptyCurrentFallsBackToRootWithoutWarning()
-    {
-        const QByteArray body
-            = tralbumPage(R"({"current":{"type":"album","title":"T"},"artist":"Root Artist","trackinfo":[]})");
-        const auto result = parseAlbumPage(body, AlbumUrl);
-        QVERIFY2(result.isValid(), qPrintable(result.error));
-        QCOMPARE(result.value.artist, u"Root Artist"_s);
-        QVERIFY(result.warnings.filter(u"differs"_s).isEmpty());
+        QVERIFY(!isSuccess(parseReleasePage(tralbumPage(R"({"current":{"type":"album",)"), AlbumUrl)));
+        QVERIFY(!isSuccess(parseReleasePage(tralbumPage(R"([1,2,3])"), AlbumUrl)));
     }
 
     void mutatedPagesNeverCrash()
@@ -147,8 +126,7 @@ private slots:
             iterations = DefaultMutationIterations;
         }
 
-        // Parser warnings would flood the output across this many iterations.
-        QLoggingCategory::setFilterRules(u"fy.bandcamp.*=false"_s);
+        QLoggingCategory::setFilterRules(u"fy.bandcamp.*=false\nfy.trace.bandcamp.*=false"_s);
 
         std::mt19937 rng(MutationSeed);
         runAlbumMutations(sampleAlbumPage(), iterations, rng);
@@ -192,14 +170,16 @@ private:
     static void runAlbumMutations(const QByteArray& fixture, int iterations, std::mt19937& rng)
     {
         for(int i = 0; i < iterations; ++i) {
-            const auto result = parseAlbumPage(mutate(fixture, rng), AlbumUrl);
-            if(!result.isValid()) {
+            const auto result = parseReleasePage(mutate(fixture, rng), AlbumUrl);
+            if(!isSuccess(result)) {
                 continue;
             }
-            QVERIFY2(result.value.title.size() <= 1024, qPrintable(QStringLiteral("iteration %1").arg(i)));
-            for(const auto& track : result.value.tracks) {
-                QVERIFY2(track.durationMs >= 0 && track.durationMs <= MaxTrackDurationMs,
-                         qPrintable(QStringLiteral("iteration %1").arg(i)));
+            const auto& release = std::get<ResolutionSuccess<ReleaseCandidate>>(result).value;
+            if(const auto* album = std::get_if<AlbumCandidate>(&release)) {
+                for(const auto& track : album->tracks) {
+                    QVERIFY2(!track.durationMs.isUsable() || (track.durationMs.value >= 0 && track.durationMs.value <= MaxDurationMs),
+                             qPrintable(QStringLiteral("iteration %1").arg(i)));
+                }
             }
         }
     }
@@ -207,12 +187,15 @@ private:
     static void runTrackMutations(const QByteArray& fixture, const QUrl& url, int iterations, std::mt19937& rng)
     {
         for(int i = 0; i < iterations; ++i) {
-            const auto result = parseTrackPage(mutate(fixture, rng), url);
-            if(!result.isValid()) {
+            const auto result = parseReleasePage(mutate(fixture, rng), url);
+            if(!isSuccess(result)) {
                 continue;
             }
-            QVERIFY2(result.value.durationMs >= 0 && result.value.durationMs <= MaxTrackDurationMs,
-                     qPrintable(QStringLiteral("iteration %1").arg(i)));
+            const auto& release = std::get<ResolutionSuccess<ReleaseCandidate>>(result).value;
+            if(const auto* page = std::get_if<TrackPageCandidate>(&release)) {
+                QVERIFY2(!page->track.durationMs.isUsable() || (page->track.durationMs.value >= 0 && page->track.durationMs.value <= MaxDurationMs),
+                         qPrintable(QStringLiteral("iteration %1").arg(i)));
+            }
         }
     }
 };
@@ -275,7 +258,7 @@ private slots:
     }
 
 private:
-    QTemporaryDir m_dir;
+    QTemporaryDir m_dir{QDir::currentPath() + u"/bandcamp-settings-XXXXXX"_s};
 };
 } // namespace
 
@@ -287,6 +270,7 @@ int runContractTests(int argc, char** argv);
 int runDiagnosticsTests(int argc, char** argv);
 // Defined in bandcampclienttests.cpp.
 int runClientTests(int argc, char** argv);
+int runParserTests(int argc, char** argv);
 
 int main(int argc, char** argv)
 {
@@ -296,6 +280,7 @@ int main(int argc, char** argv)
     UrlTests url;
     status |= QTest::qExec(&url, argc, argv);
     status |= runPostProcessorTests(argc, argv);
+    status |= runParserTests(argc, argv);
     MutationTests mutation;
     status |= QTest::qExec(&mutation, argc, argv);
     SettingsTests settings;

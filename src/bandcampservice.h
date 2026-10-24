@@ -80,7 +80,7 @@ private:
     void startJob(const Job& job);
     void startFetch(quint64 jobId, const QString& url);
     void onFetched(quint64 jobId, BandcampFetchResponse response);
-    void startParse(quint64 jobId, const BandcampPageUrl& page, QByteArray body);
+    void startParse(quint64 jobId, const BandcampPageUrl& page, QByteArray body, CorrelationContext context);
     void onParsed(quint64 jobId, BandcampResolvedPage result);
     void onTimedOut(quint64 jobId);
     void finishJob(quint64 jobId, BandcampResolvedPage result);

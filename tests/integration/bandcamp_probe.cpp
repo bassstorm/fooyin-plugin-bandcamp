@@ -1,9 +1,8 @@
 // Live Bandcamp probe. Fetches real pages, runs them through the same service the plugin uses,
 // and reports what it found. Run it on demand after Bandcamp changes its pages. It is not a unit test.
 
-#include "bandcampclient.h"
+#include "bandcampdiagnostics.h"
 #include "bandcampmodel.h"
-#include "bandcampparser.h"
 #include "bandcampservice.h"
 #include "bandcampurl.h"
 
@@ -11,11 +10,6 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QElapsedTimer>
-#include <QEventLoop>
-#include <QHash>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QLoggingCategory>
 #include <QNetworkAccessManager>
 #include <QSet>
@@ -31,7 +25,6 @@ constexpr int DefaultParallelism = 2;
 constexpr int DefaultTimeoutMs   = 10000;
 // Covers the whole run, including a batch of slow items. A hang ends the probe instead of blocking it.
 constexpr int WatchdogMs    = 600000;
-constexpr int RawFetchMs    = 30000;
 constexpr qint64 MaxTrackMs = 604800000;
 
 // The agreed probe set: artist and label discographies, an album, a track with album, and a standalone track.
@@ -214,35 +207,7 @@ QString quoted(const QString& value)
 // Stream URLs carry a signed query string; keep host and path only.
 QString redactSignedUrl(const QString& url)
 {
-    QUrl parsed(url);
-    if(!parsed.hasQuery()) {
-        return url;
-    }
-    parsed.setQuery(QString());
-    return parsed.toString() + u"?<signed-query-redacted>"_s;
-}
-
-QJsonValue redactSignedUrls(const QJsonValue& value)
-{
-    if(value.isObject()) {
-        QJsonObject redacted;
-        const QJsonObject object = value.toObject();
-        for(auto it = object.begin(); it != object.end(); ++it) {
-            redacted.insert(it.key(), redactSignedUrls(it.value()));
-        }
-        return redacted;
-    }
-    if(value.isArray()) {
-        QJsonArray redacted;
-        for(const QJsonValue& item : value.toArray()) {
-            redacted.append(redactSignedUrls(item));
-        }
-        return redacted;
-    }
-    if(value.isString() && value.toString().contains(u"token="_s)) {
-        return redactSignedUrl(value.toString());
-    }
-    return value;
+    return redactUrlForLog(QUrl(url));
 }
 
 QString dateText(QDate date)
@@ -287,59 +252,7 @@ QStringList albumFields(const BandcampAlbum& album, const QString& indent)
     };
 }
 
-// Fetches one page for the raw JSON dump. Pages are fetched one at a time, before the batch runs.
-QByteArray fetchRaw(BandcampClient& client, const QUrl& url, QString& error)
-{
-    BandcampFetchResponse response;
-    bool answered = false;
-    QEventLoop loop;
-    QTimer timer;
-    timer.setSingleShot(true);
-    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
-
-    const BandcampClient::RequestId id = client.fetch(url, [&](BandcampFetchResponse result) {
-        response = std::move(result);
-        answered = true;
-        loop.quit();
-    });
-    if(id == 0) {
-        error = u"request refused"_s;
-        return {};
-    }
-
-    timer.start(RawFetchMs);
-    loop.exec();
-    if(!answered) {
-        client.cancel(id);
-        error = u"timed out"_s;
-        return {};
-    }
-    if(!response.error.isEmpty()) {
-        error = response.error;
-        return {};
-    }
-    return response.body;
-}
-
-// Prettified tralbum JSON for an album or track page, or the reason it could not be read.
-QString rawTralbumText(BandcampClient& client, const QUrl& url)
-{
-    QString error;
-    const QByteArray body = fetchRaw(client, url, error);
-    if(!error.isEmpty()) {
-        return u"raw tralbum unavailable: %1"_s.arg(error);
-    }
-
-    const QJsonObject tralbum = extractTralbum(body, error);
-    if(!error.isEmpty()) {
-        return u"raw tralbum unavailable: %1"_s.arg(error);
-    }
-    const QJsonObject redacted = redactSignedUrls(tralbum).toObject();
-    return QString::fromUtf8(QJsonDocument(redacted).toJson(QJsonDocument::Indented));
-}
-
-int printReport(const QList<BandcampResolvedPage>& results, const QHash<QString, QString>& rawTralbums, int parallelism,
-                qint64 elapsedMs)
+int printReport(const QList<BandcampResolvedPage>& results, int parallelism, qint64 elapsedMs)
 {
     QTextStream out(stdout);
     int passed  = 0;
@@ -365,12 +278,6 @@ int printReport(const QList<BandcampResolvedPage>& results, const QHash<QString,
         }
 
         out << status << u"  "_s << pageKindName(result.page.kind) << u"  "_s << result.page.url << u"\n"_s;
-        if(result.isValid() && result.page.kind != BandcampPageKind::Discography) {
-            out << u"  raw tralbum:\n"_s;
-            for(const QString& line : rawTralbums.value(result.page.url).split(u'\n')) {
-                out << u"      "_s << line << u"\n"_s;
-            }
-        }
         if(result.isValid() && result.page.kind == BandcampPageKind::Album) {
             out << u"  album:\n"_s;
             for(const QString& line : albumFields(result.album, u"      "_s)) {
@@ -410,10 +317,9 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(u"bandcamp-probe"_s);
 
-    // Post-processor provenance (fy.bandcamp.tracks) is always on for a probe run. Any QT_LOGGING_RULES
-    // from the environment still apply, because setFilterRules would otherwise replace them.
+    // Production parser TRACE provides the source snapshot without a second extraction or fetch.
     const QString envRules = qEnvironmentVariable("QT_LOGGING_RULES").replace(u';', u'\n');
-    QLoggingCategory::setFilterRules(envRules + u"\nfy.bandcamp.tracks.debug=true"_s);
+    QLoggingCategory::setFilterRules(envRules + u"\nfy.bandcamp.tracks.debug=true\nfy.trace.bandcamp.parser.debug=true"_s);
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -455,15 +361,6 @@ int main(int argc, char** argv)
     }
 
     QNetworkAccessManager network;
-    BandcampClient client(&network);
-    QHash<QString, QString> rawTralbums;
-    for(const BandcampPageUrl& page : std::as_const(pages)) {
-        if(page.kind == BandcampPageKind::Discography) {
-            continue;
-        }
-        rawTralbums.insert(page.url, rawTralbumText(client, QUrl(page.url)));
-    }
-
     BandcampService service(&network);
     service.setMaxItemsInProgress(parallelism);
     service.setItemTimeoutMs(timeoutMs);
@@ -472,8 +369,8 @@ int main(int argc, char** argv)
     clock.start();
 
     QObject::connect(&service, &BandcampService::batchResolved, &app,
-                     [&app, &clock, &rawTralbums, parallelism](const QList<BandcampResolvedPage>& results) {
-                         app.exit(printReport(results, rawTralbums, parallelism, clock.elapsed()));
+                     [&app, &clock, parallelism](const QList<BandcampResolvedPage>& results) {
+                         app.exit(printReport(results, parallelism, clock.elapsed()));
                      });
     QTimer::singleShot(WatchdogMs, &app, [] {
         QTextStream(stderr) << u"Watchdog expired before the batch finished\n"_s;

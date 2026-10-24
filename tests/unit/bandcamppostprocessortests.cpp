@@ -1,7 +1,7 @@
 #include "bandcamppostprocessor.h"
 
 #include "bandcampdirtytitle.h"
-#include "bandcampparser.h"
+#include "bandcamplegacyadapter.h"
 #include "bandcampprocessors.h"
 #include "bandcamptestpages.h"
 
@@ -46,9 +46,9 @@ int runOnTracks(const Processor& processor, BandcampAlbum& album, QStringList& w
 }
 
 // Parses an album page and post-processes it, the same way the service does.
-BandcampAlbumResult processedAlbum(const QByteArray& body)
+LegacyAlbumResult processedAlbum(const QByteArray& body)
 {
-    auto result = parseAlbumPage(body, AlbumUrl);
+    auto result = parseLegacyAlbumPage(body, AlbumUrl);
     if(result.isValid()) {
         postProcessAlbum(result.value, result.warnings);
     }
@@ -56,9 +56,9 @@ BandcampAlbumResult processedAlbum(const QByteArray& body)
 }
 
 // Parses a track page and post-processes it, the same way the service does.
-BandcampTrackResult processedTrack(const QByteArray& body, const QUrl& url)
+LegacyTrackResult processedTrack(const QByteArray& body, const QUrl& url)
 {
-    auto result = parseTrackPage(body, url);
+    auto result = parseLegacyTrackPage(body, url);
     if(result.isValid()) {
         postProcessTrack(result.value, result.warnings);
     }
@@ -362,7 +362,7 @@ private slots:
             QCOMPARE(result.value.tracks.at(i).trackNumber, static_cast<int>(i + 1));
         }
         QCOMPARE(result.warnings.filter(u"number"_s).size(), 1);
-        QVERIFY(result.warnings.contains(u"album release date is missing"_s));
+        QVERIFY(!result.value.releaseDate.isValid());
     }
 
     void missingNumbersCountFromOneFromParsedPage()
@@ -378,7 +378,7 @@ private slots:
     void missingTitleStandaloneTrackFromParsedPage()
     {
         const auto result = processedTrack(
-            tralbumPage(R"({"current":{"type":"track"},"trackinfo":[)" + streamEntry(R"("id":9)") + "]}"),
+            tralbumPage(R"({"current":{"type":"track","id":9},"trackinfo":[)" + streamEntry(R"("id":9)") + "]}"),
             StandaloneTrackUrl);
         QVERIFY2(result.isValid(), qPrintable(result.error));
         QVERIFY(result.value.title.isEmpty());
@@ -390,7 +390,7 @@ private slots:
         // Track pages have no album artist. The root "artist" is the track's own artist, and the
         // fallback has to fill the track from it when trackinfo carries none.
         const auto result = processedTrack(
-            tralbumPage(R"J({"current":{"type":"track","title":"Shutta (Ravver Remix)"},"artist":"Ravver",)J"
+            tralbumPage(R"J({"current":{"type":"track","id":9,"title":"Shutta (Ravver Remix)"},"artist":"Ravver",)J"
                         R"J("trackinfo":[)J"
                         + streamEntry(R"("id":9,"artist":null)") + "]}"),
             StandaloneTrackUrl);
@@ -431,14 +431,14 @@ private slots:
         QVERIFY(result.warnings.isEmpty());
     }
 
-    void albumDateMissingWarns()
+    void albumDateMissingRemainsUnknown()
     {
         const auto result = processedAlbum(
             albumPage(R"({"type":"album","title":"Parallels"})", {streamEntry(R"("id":1,"title":"A","track_num":1)")}));
         QVERIFY2(result.isValid(), qPrintable(result.error));
         QVERIFY(!result.value.releaseDate.isValid());
         QVERIFY(!result.value.tracks.at(0).releaseDate.isValid());
-        QVERIFY(result.warnings.contains(u"album release date is missing"_s));
+        QVERIFY(result.warnings.isEmpty());
     }
 
     void albumArtistInferredFromSharedTrackArtist()
@@ -466,7 +466,7 @@ private slots:
         const QUrl trackUrl{u"https://offland.bandcamp.com/track/caaa-baaa-aaa"_s};
         const auto result = processedTrack(
             tralbumPage(
-                R"J({"current":{"type":"track","title":"Caaa Baaa Aaa","artist":"Off Land",)J"
+                R"J({"current":{"type":"track","id":1,"title":"Caaa Baaa Aaa","artist":"Off Land",)J"
                 R"J("release_date":"15 Jan 2016 00:00:00 GMT"},)J"
                 R"J("album_url":"https://offland.bandcamp.com/album/parallels","artist":"Off Land","trackinfo":[)J"
                 + streamEntry(R"("id":1,"title":"Caaa Baaa Aaa")") + "]}"),
@@ -479,7 +479,7 @@ private slots:
     void standaloneTrackSourcesFromOwnUrl()
     {
         const auto result = processedTrack(
-            tralbumPage(R"J({"current":{"type":"track","title":"Shutta","artist":"Ravver"},"album_url":null,)J"
+            tralbumPage(R"J({"current":{"type":"track","id":9,"title":"Shutta","artist":"Ravver"},"album_url":null,)J"
                         R"J("artist":"Ravver","trackinfo":[)J"
                         + streamEntry(R"("id":9,"title":"Shutta")") + "]}"),
             StandaloneTrackUrl);
@@ -497,7 +497,7 @@ private slots:
 
         const QUrl trackUrl{u"https://offland.bandcamp.com/track/a"_s};
         auto track = processedTrack(
-            tralbumPage(R"J({"current":{"type":"track","title":"A","artist":"Off Land"},)J"
+            tralbumPage(R"J({"current":{"type":"track","id":1,"title":"A","artist":"Off Land"},)J"
                         R"J("album_url":"https://offland.bandcamp.com/album/parallels","artist":"Off Land",)J"
                         R"J("trackinfo":[)J"
                         + streamEntry(R"("id":1,"title":"A")") + "]}"),

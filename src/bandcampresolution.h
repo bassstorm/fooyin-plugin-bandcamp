@@ -93,6 +93,7 @@ enum class ResolutionErrorCode : quint8 {
     FetchFailed,
     Timeout,
     PageTooLarge,
+    ResourceLimitExceeded,
     UnsupportedRequest,
     MalformedPage,
     RequiredFieldMissing,
