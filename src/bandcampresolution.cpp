@@ -1,5 +1,7 @@
 #include "bandcampresolution.h"
 
+#include "bandcamplogging.h"
+
 #include <algorithm>
 
 namespace Fooyin::Bandcamp {
@@ -74,6 +76,20 @@ OperationOptions clampOperationOptions(OperationOptions options)
 {
     options.parallelism   = std::clamp(options.parallelism, MinParallelism, MaxParallelism);
     options.itemTimeoutMs = std::clamp(options.itemTimeoutMs, MinItemTimeoutMs, MaxItemTimeoutMs);
+    const int order       = static_cast<int>(options.discographyOrder);
+    if(order < static_cast<int>(BandcampDiscographyOrder::Default)
+       || order > static_cast<int>(BandcampDiscographyOrder::Descending)) {
+        qCWarning(BANDCAMP_SETTINGS) << "discography order" << order << "is invalid, using Default";
+        options.discographyOrder = BandcampDiscographyOrder::Default;
+    }
+    const qint64 minimumWindowMs = MinRefreshWindowMinutes * RefreshWindowMsPerMinute;
+    const qint64 maximumWindowMs = MaxRefreshWindowMinutes * RefreshWindowMsPerMinute;
+    const qint64 clampedWindowMs = std::clamp(options.prePlaybackRefreshWindowMs, minimumWindowMs, maximumWindowMs);
+    if(clampedWindowMs != options.prePlaybackRefreshWindowMs) {
+        qCWarning(BANDCAMP_SETTINGS) << "pre-playback refresh window milliseconds" << options.prePlaybackRefreshWindowMs
+                                     << "out of range, clamped to" << clampedWindowMs;
+    }
+    options.prePlaybackRefreshWindowMs = clampedWindowMs;
     return options;
 }
 } // namespace Fooyin::Bandcamp

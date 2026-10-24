@@ -78,9 +78,16 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls)
     FySettings fySettings;
     const BandcampSettings settings = loadBandcampSettings(fySettings);
     qCInfo(BANDCAMP_SETTINGS) << "parallelism" << settings.parallelism << "item timeout"
-                              << settings.itemTimeoutMs / 1000.0 << "s";
+                              << settings.itemTimeoutMs / 1000.0 << "s"
+                              << "discography order" << static_cast<int>(settings.discographyOrder)
+                              << "pre-playback refresh window" << settings.prePlaybackRefreshWindowMinutes << "min";
 
-    const auto submission = m_service->submit(urls, OperationOptions{settings.parallelism, settings.itemTimeoutMs});
+    OperationOptions options;
+    options.parallelism                = settings.parallelism;
+    options.itemTimeoutMs              = settings.itemTimeoutMs;
+    options.discographyOrder           = settings.discographyOrder;
+    options.prePlaybackRefreshWindowMs = refreshWindowMilliseconds(settings.prePlaybackRefreshWindowMinutes);
+    const auto submission              = m_service->submit(urls, options);
     if(const auto* rejected = std::get_if<BandcampSubmissionRejected>(&submission)) {
         qCWarning(BANDCAMP_UI).noquote() << "Bandcamp request was rejected:" << rejected->error.reason;
         auto* dialog = new BandcampResultsDialog(Utils::getMainWindow());

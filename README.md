@@ -40,6 +40,8 @@ cmake --install build
 If the Fooyin checkout is elsewhere, replace `../fooyin` with its path. If you
 already have Fooyin's development package installed, omit the local Fooyin
 build/install steps and set `CMAKE_PREFIX_PATH` to that package instead.
+The build also requires libxml2 development headers and libraries (for example,
+`libxml2-dev` on Debian or Ubuntu).
 
 ### Unit tests
 
@@ -69,16 +71,17 @@ production-chain integration tests is covered by
 Until that replacement is available, run it when Bandcamp changes its pages,
 or to check a new URL.
 
-Build it against the Qt 6 install (Core, Network, and Concurrent are required):
+Build it against the Qt 6 install (Core, Network, and Concurrent are required),
+with libxml2 development files available to CMake:
 
 ```sh
 cmake -S tests/integration -B build/probe -DCMAKE_PREFIX_PATH=/usr
 cmake --build build/probe -j4
 ```
 
-Run it with no arguments to check the agreed set: two discographies (reported
-as SKIP until discography expansion exists), an album, a track with an album,
-and a standalone track. Pass URLs to check others:
+Run it with no arguments to check the agreed set: artist and label discographies,
+an album, a track with an album, and a standalone track. Discography results
+follow the listing order by default. Pass URLs to check others:
 
 ```sh
 build/probe/bandcamp-probe
@@ -89,6 +92,14 @@ build/probe/bandcamp-probe -p 4 -t 3000 <url> <url>
 - `-p`, `--parallel n`: pages fetched or parsed at once, a positive integer (default 2; the settings range is 1-8).
 - `-t`, `--timeout ms`: per-item time budget in milliseconds, a positive integer (default 10000; the settings range is 1000-120000).
 - `QT_LOGGING_RULES="fy.bandcamp.*.debug=true"`: adds the plugin's debug logs.
+
+The plugin settings dialog also stores the discography order
+(**Default**, **Unsorted**, **Ascending**, or **Descending**). Default currently
+uses the unsorted listing order. Ascending and descending sort each collection
+independently by release date; unknown dates remain last and listing order breaks
+ties. The pre-playback refresh window defaults to 60 minutes; zero means
+expired-only refresh. This setting is persisted and captured with each
+submission, but playback/stream refresh is not implemented yet.
 
 For each album and track page, the output shows:
 
@@ -111,7 +122,9 @@ post-processing regressed. The probe exits with 1 when any page fails.
 ### Internal parser boundary
 
 `parseReleasePage` returns a tagged `ReleaseParseOutcome` containing typed album
-or track-page candidates, or a structured parse error. Optional values retain
+or track-page candidates, or a structured parse error. Discography HTML is
+parsed with libxml2's HTML recovery parser, with network access disabled and
+source-size, attribute, and record limits enforced during traversal. Optional values retain
 missing/invalid/usable state and semantic provenance. Declared children retain
 their order even when malformed or streamless; parent identity/location and
 track-page fallback context remain separate evidence for assembly.
@@ -123,19 +136,39 @@ semantic passes. Whole albums are atomic, while a selected album track retains
 validated parent metadata without requiring every sibling to be valid.
 
 Input limits are explicit in `bandcampparser.h`: 20 MiB response, 64 JSON
-container levels, 16,384 UTF-16 units per source string/key, 100,000 source values
-(including containers), and 10,000 declared rows. Exceeding a limit fails parsing,
-never truncates metadata or returns a successful subset. Source snapshots are
-bounded by response size/depth and only serialized when parser TRACE is enabled.
+container levels, 256 HTML nesting levels, 16,384 UTF-16 units per source
+string/key, 100,000 source values (including containers), and 10,000 declared
+rows. Exceeding a limit fails parsing, never truncates metadata or returns a
+successful subset. Source snapshots are bounded by response size/depth and only
+serialized when parser TRACE is enabled.
 
-The orchestrator deduplicates identical page scopes while preserving each input
-occurrence and restores the original order as keyed resolver outcomes arrive.
-The resolver accepts the complete request list; pending entries are lightweight
-values, while active per-release workflows are bounded by configured
-parallelism. A required album parent is fetched and processed within the
-selected track's workflow. The operation-local cache contains only successful,
-admitted, post-processed domain entities; source responses, parser candidates,
-and failures are not cached or shared across calls.
+The parser uses fixed libxml2 XPath selectors for the unique `music-grid`,
+its direct rows, their release links, and `rel="next"` continuations. It reads
+structured listing IDs and links, including album and track references, and
+Bandcamp's embedded `data-client-items` entries using only their `type`, `id`,
+and `page_url` fields. Embedded entries follow rendered rows; repeated
+representations of the same kind, stable ID, and canonical page URL are
+reconciled once per listing page. Listing display metadata is never used for
+release metadata. A saved public Cosmicleaf listing parsed as 16 rendered rows
+followed by 1,061 embedded references (1,016 albums and 45 tracks); it had no
+`rel="next"` link. Embedded collection data is bounded by the page limit and
+its validated records by the parser's source limits. The orchestrator follows
+validated parser-supplied continuation links through the resolver's
+HTTP/parser path, then deduplicates release requests while preserving requested
+occurrences and collection order. Ascending or descending mode waits for a
+collection's outcomes before ordering them; failed releases do not suppress
+unrelated results.
+
+The Cosmicleaf source demonstrates embedded-list completeness, not live
+`rel="next"` pagination compatibility. That continuation form is covered by
+deterministic fixtures.
+
+The resolver accepts the complete deduplicated request list; pending entries
+are lightweight values, while active per-release workflows are bounded by
+configured parallelism. A required album parent is fetched and processed
+within the selected track's workflow. The operation-local cache contains only
+successful, admitted, post-processed domain entities; source responses, parser
+candidates, and failures are not cached or shared across calls.
 
 Physical workflow slots are shared across operations and allow up to the
 configured maximum parallelism of eight. Each item deadline starts when its

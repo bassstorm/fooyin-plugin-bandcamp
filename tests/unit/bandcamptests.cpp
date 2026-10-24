@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <random>
 
 using namespace Qt::StringLiterals;
@@ -218,6 +219,8 @@ private slots:
         const auto values = loadBandcampSettings(settings);
         QCOMPARE(values.parallelism, DefaultParallelism);
         QCOMPARE(values.itemTimeoutMs, DefaultItemTimeoutMs);
+        QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Default);
+        QCOMPARE(values.prePlaybackRefreshWindowMinutes, DefaultRefreshWindowMinutes);
     }
 
     void roundTrip()
@@ -225,12 +228,14 @@ private slots:
         const auto path = m_dir.filePath(u"roundtrip.ini"_s);
         {
             QSettings settings(path, QSettings::IniFormat);
-            saveBandcampSettings(settings, {5, 45000});
+            saveBandcampSettings(settings, {5, 45000, BandcampDiscographyOrder::Descending, MinRefreshWindowMinutes});
         }
         QSettings settings(path, QSettings::IniFormat);
         const auto values = loadBandcampSettings(settings);
         QCOMPARE(values.parallelism, 5);
         QCOMPARE(values.itemTimeoutMs, 45000);
+        QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Descending);
+        QCOMPARE(values.prePlaybackRefreshWindowMinutes, MinRefreshWindowMinutes);
     }
 
     void outOfRangeIsClamped()
@@ -238,15 +243,23 @@ private slots:
         QSettings settings(m_dir.filePath(u"clamp.ini"_s), QSettings::IniFormat);
         settings.setValue(ParallelismKey, 0);
         settings.setValue(ItemTimeoutKey, 500);
+        settings.setValue(DiscographyOrderKey, -4);
+        settings.setValue(PrePlaybackRefreshWindowKey, -1);
         auto low = loadBandcampSettings(settings);
         QCOMPARE(low.parallelism, MinParallelism);
         QCOMPARE(low.itemTimeoutMs, MinItemTimeoutMs);
+        QCOMPARE(low.discographyOrder, BandcampDiscographyOrder::Default);
+        QCOMPARE(low.prePlaybackRefreshWindowMinutes, MinRefreshWindowMinutes);
 
         settings.setValue(ParallelismKey, 99);
         settings.setValue(ItemTimeoutKey, 999999999999LL);
+        settings.setValue(DiscographyOrderKey, 99);
+        settings.setValue(PrePlaybackRefreshWindowKey, 999999999999LL);
         auto high = loadBandcampSettings(settings);
         QCOMPARE(high.parallelism, MaxParallelism);
         QCOMPARE(high.itemTimeoutMs, MaxItemTimeoutMs);
+        QCOMPARE(high.discographyOrder, BandcampDiscographyOrder::Descending);
+        QCOMPARE(high.prePlaybackRefreshWindowMinutes, MaxRefreshWindowMinutes);
     }
 
     void nonNumericFallsBackToDefault()
@@ -254,9 +267,40 @@ private slots:
         QSettings settings(m_dir.filePath(u"junk.ini"_s), QSettings::IniFormat);
         settings.setValue(ParallelismKey, u"many"_s);
         settings.setValue(ItemTimeoutKey, u""_s);
+        settings.setValue(DiscographyOrderKey, u"later"_s);
+        settings.setValue(PrePlaybackRefreshWindowKey, u"never"_s);
         const auto values = loadBandcampSettings(settings);
         QCOMPARE(values.parallelism, DefaultParallelism);
         QCOMPARE(values.itemTimeoutMs, DefaultItemTimeoutMs);
+        QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Default);
+        QCOMPARE(values.prePlaybackRefreshWindowMinutes, DefaultRefreshWindowMinutes);
+    }
+
+    void refreshWindowConversionAndOptionSnapshotAreBounded()
+    {
+        QCOMPARE(refreshWindowMilliseconds(0), 0);
+        QCOMPARE(refreshWindowMilliseconds(60), 3'600'000);
+        QCOMPARE(refreshWindowMilliseconds(MaxRefreshWindowMinutes), 86'400'000);
+        QCOMPARE(refreshWindowMilliseconds(-1), MinRefreshWindowMinutes * RefreshWindowMsPerMinute);
+        QCOMPARE(refreshWindowMilliseconds(std::numeric_limits<int>::max()),
+                 MaxRefreshWindowMinutes * RefreshWindowMsPerMinute);
+
+        OperationOptions options;
+        options.parallelism                = 99;
+        options.itemTimeoutMs              = 1;
+        options.discographyOrder           = static_cast<BandcampDiscographyOrder>(99);
+        options.prePlaybackRefreshWindowMs = std::numeric_limits<qint64>::max();
+        const OperationOptions snapshot    = clampOperationOptions(options);
+        QCOMPARE(snapshot.parallelism, MaxParallelism);
+        QCOMPARE(snapshot.itemTimeoutMs, MinItemTimeoutMs);
+        QCOMPARE(snapshot.discographyOrder, BandcampDiscographyOrder::Default);
+        QCOMPARE(snapshot.prePlaybackRefreshWindowMs, MaxRefreshWindowMinutes * RefreshWindowMsPerMinute);
+
+        options.discographyOrder             = static_cast<BandcampDiscographyOrder>(-1);
+        options.prePlaybackRefreshWindowMs   = std::numeric_limits<qint64>::min();
+        const OperationOptions lowerSnapshot = clampOperationOptions(options);
+        QCOMPARE(lowerSnapshot.discographyOrder, BandcampDiscographyOrder::Default);
+        QCOMPARE(lowerSnapshot.prePlaybackRefreshWindowMs, MinRefreshWindowMinutes * RefreshWindowMsPerMinute);
     }
 
 private:
@@ -289,6 +333,13 @@ int main(int argc, char** argv)
         }
         if(qstrcmp(argv[1], "--service-tests") == 0) {
             return runServiceTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--parser-tests") == 0) {
+            return runParserTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--settings-tests") == 0) {
+            SettingsTests tests;
+            return QTest::qExec(&tests, argc - 1, argv + 1);
         }
     }
 

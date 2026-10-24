@@ -324,6 +324,16 @@ HTTP or worker simulation; happy-path composition uses the production pipeline.
 - Parser listing support returns one bounded ordered batch of typed album/track
   references plus opaque continuation information. Interpret structured listing
   identifiers/links only, including artist and label variants.
+- Include structured entries embedded in the listing, such as the music grid's
+  `data-client-items` collection, not just rendered links. Combine rendered and
+  embedded entries in source-defined order and reconcile repeated representations
+  of the same listing entry without losing explicit input occurrences. Read only
+  discovery identity, kind, and location; embedded display metadata is not
+  authoritative release metadata.
+- Treat an encoded listing collection as a source container, not one metadata
+  string subject to a leaf-field length limit. Apply response, JSON depth/record,
+  and individual field limits at their respective boundaries. Per-page source
+  limits do not impose an aggregate release-count cap across the discography.
 - The orchestrator unfolds these discovery batches through resolver calls and
   submits the complete deduplicated release list to resolution. Detect
   repeated continuations and incomplete discovery explicitly; never silently
@@ -350,6 +360,10 @@ HTTP or worker simulation; happy-path composition uses the production pipeline.
 or order instability; both date directions, unknowns, ties, discovery failures,
 and operation cleanup are tested. Settings survive restart and affect only
 new operations. Both artist and label discovery work through the production path.
+Large embedded listings are fully extracted even when the encoded collection
+exceeds an individual field's length limit, and large-list ordering avoids
+repeated full-list scans. Use deterministic catalogues for volume coverage rather
+than issuing hundreds of live release requests during routine validation.
 
 ### Increment 6 - Live integration tests and probe retirement
 

@@ -23,7 +23,8 @@ const ReleaseCandidate* candidate(const ReleaseParseOutcome& result)
     return success ? &success->value : nullptr;
 }
 
-template <typename T> const T* value(const ReleaseParseOutcome& result)
+template <typename T>
+const T* value(const ReleaseParseOutcome& result)
 {
     const auto* release = candidate(result);
     return release ? std::get_if<T>(release) : nullptr;
@@ -42,6 +43,13 @@ bool hasEvent(const QString& category, const QString& event, const QString& deta
         }
     }
     return false;
+}
+
+QByteArray musicListing(const QByteArray& listing)
+{
+    QByteArray body = tralbumPage(R"({"url":"https://artist.bandcamp.com/music"})");
+    body.replace("</html>", listing + "</html>");
+    return body;
 }
 
 class ParserTests : public QObject
@@ -68,6 +76,18 @@ private slots:
     void retainsSupportedDurationAndDateFormats();
     void limitsAreExplicitFailures();
     void diagnosticsAreCorrelatedRedactedAndIndependent();
+    void extractsOrderedStructuredListingReferences();
+    void htmlRecoveryPreservesStructuredSelection();
+    void conflictingHtmlAttributesFailDespiteRecovery();
+    void extractsClientItemsAsOrderedReferences();
+    void ignoresLargeOpaquePageData();
+    void clientItemsHaveIndependentCollectionBounds();
+    void htmlDepthLimitFailsExplicitly();
+    void malformedListingTailFailsClosed();
+    void scriptTextIsNotContinuationMarkup();
+    void extractsOpaqueContinuationLocator();
+    void malformedListingEntriesFailExplicitly_data();
+    void malformedListingEntriesFailExplicitly();
 };
 
 void ParserTests::init()
@@ -194,8 +214,8 @@ void ParserTests::albumOwnershipAndProvenance()
     QCOMPARE(child.releaseDate.state, FieldState::Missing);
     QCOMPARE(child.artId.state, FieldState::Missing);
 
-    const auto fallback =
-        parse(R"({"current":{"type":"album","artist":null},"artist":"Root","title":"Not album title","trackinfo":[]})");
+    const auto fallback = parse(
+        R"({"current":{"type":"album","artist":null},"artist":"Root","title":"Not album title","trackinfo":[]})");
     QVERIFY(value<AlbumCandidate>(fallback));
     QCOMPARE(value<AlbumCandidate>(fallback)->artist.value, u"Root"_s);
     QCOMPARE(value<AlbumCandidate>(fallback)->artist.provenance, FieldProvenance::Fallback);
@@ -251,16 +271,16 @@ void ParserTests::rowFallbackIsExplicitAndRootIsOnlyContext()
 
 void ParserTests::absentOrAmbiguousMatchingRows()
 {
-    const auto missing =
-        parse(R"({"current":{"type":"track","id":3,"title":"Viewed"},"trackinfo":[{"id":4,"title":"Not viewed"}]})");
+    const auto missing
+        = parse(R"({"current":{"type":"track","id":3,"title":"Viewed"},"trackinfo":[{"id":4,"title":"Not viewed"}]})");
     const auto* absent = value<TrackPageCandidate>(missing);
     QVERIFY(absent);
     QCOMPARE(absent->matchingRecord.state, FieldState::Missing);
     QCOMPARE(absent->track.title.value, u"Viewed"_s);
     QCOMPARE(absent->track.streamUrl.state, FieldState::Missing);
 
-    const auto duplicate =
-        parse(R"({"current":{"type":"track","id":3},"trackinfo":[{"id":3},{"track_id":3},{"id":3}]})");
+    const auto duplicate
+        = parse(R"({"current":{"type":"track","id":3},"trackinfo":[{"id":3},{"track_id":3},{"id":3}]})");
     QVERIFY(value<TrackPageCandidate>(duplicate));
     QCOMPARE(value<TrackPageCandidate>(duplicate)->matchingRecord.state, FieldState::Invalid);
     QCOMPARE(value<TrackPageCandidate>(duplicate)->track.recordState, FieldState::Missing);
@@ -317,8 +337,8 @@ void ParserTests::parentEvidence()
 
 void ParserTests::preservesAllDeclaredMembers()
 {
-    const auto result =
-        parse(R"({"current":{"type":"album","id":1},"trackinfo":[null,7,{},{"id":4},{"id":5,"track_id":6}]})");
+    const auto result
+        = parse(R"({"current":{"type":"album","id":1},"trackinfo":[null,7,{},{"id":4},{"id":5,"track_id":6}]})");
     const auto* album = value<AlbumCandidate>(result);
     QVERIFY(album);
     QCOMPARE(album->tracks.size(), qsizetype{5});
@@ -379,8 +399,8 @@ void ParserTests::limitsAreExplicitFailures()
 {
     const auto checkLimit = [](const ReleaseParseOutcome& result) {
         const auto* failed = std::get_if<ResolutionFailure>(&result);
-        return failed && failed->error.code == ResolutionErrorCode::ResourceLimitExceeded &&
-               failed->error.stage == ResolutionStage::Parse;
+        return failed && failed->error.code == ResolutionErrorCode::ResourceLimitExceeded
+            && failed->error.stage == ResolutionStage::Parse;
     };
     QByteArray body = tralbumPage(R"({"current":{"type":"album"},"trackinfo":[]})");
     body.append(QByteArray(MaxPageBytes - body.size(), ' '));
@@ -397,12 +417,12 @@ void ParserTests::limitsAreExplicitFailures()
     QVERIFY(value<AlbumCandidate>(exact));
     QCOMPARE(value<AlbumCandidate>(exact)->title.value.size(), MaxSourceFieldChars);
     QVERIFY(checkLimit(field(MaxSourceFieldChars + 1)));
-    QVERIFY(checkLimit(parse(R"({"current":{"type":"album"},"trackinfo":[],")" +
-                             QByteArray(MaxSourceFieldChars + 1, 'k') + R"(":0})")));
+    QVERIFY(checkLimit(parse(R"({"current":{"type":"album"},"trackinfo":[],")"
+                             + QByteArray(MaxSourceFieldChars + 1, 'k') + R"(":0})")));
 
     const auto depth = [](int count) {
-        return parse(R"({"current":{"type":"album"},"trackinfo":[],"extra":)" + QByteArray(count - 1, '[') + "0" +
-                     QByteArray(count - 1, ']') + "}");
+        return parse(R"({"current":{"type":"album"},"trackinfo":[],"extra":)" + QByteArray(count - 1, '[') + "0"
+                     + QByteArray(count - 1, ']') + "}");
     };
     QVERIFY(isSuccess(depth(MaxJsonDepth)));
     QVERIFY(checkLimit(depth(MaxJsonDepth + 1)));
@@ -431,8 +451,8 @@ void ParserTests::diagnosticsAreCorrelatedRedactedAndIndependent()
 {
     const QByteArray json =
         R"({"current":{"type":"album","id":1,"title":"T","artist":"Own","release_date":false},
-            "artist":"Other","album_release_date":"2024-01-02","extra":{"long":")" +
-        QByteArray(1200, 'x') +
+            "artist":"Other","album_release_date":"2024-01-02","extra":{"long":")"
+        + QByteArray(1200, 'x') +
         R"(","url":"https:\/\/user:password@cdn.example/path?token=secret#fragment",
              "bad_url":"not-a-url?token=secret","authorization":{"headers":["Bearer secret"]},
              "multiline":"one\ninjected\u2028line"},
@@ -488,6 +508,230 @@ void ParserTests::diagnosticsAreCorrelatedRedactedAndIndependent()
     QVERIFY(value<AlbumCandidate>(quiet));
     QCOMPARE(value<AlbumCandidate>(quiet)->artist.value, value<AlbumCandidate>(result)->artist.value);
     QVERIFY(!hasEvent(u"fy.trace.bandcamp.parser"_s, u"source_snapshot"_s));
+}
+
+void ParserTests::extractsOrderedStructuredListingReferences()
+{
+    const QByteArray listing
+        = R"(<ol id="music-grid"><li data-item-id="album-3493169048"><a href="/album/lp8"><p class="title">ignored</p></a></li>)"
+          R"(<li class="music-grid-item" data-item-id="track-3734052618"><a href="/track/ride-with-me">ignored</a></li></ol>)";
+    const QUrl effectiveUrl{u"https://artist.bandcamp.com/music"_s};
+    const auto outcome  = parseDiscographyPage(musicListing(listing), effectiveUrl);
+    const auto* success = std::get_if<ResolutionSuccess<BandcampListingBatch>>(&outcome);
+    QVERIFY(success);
+    QCOMPARE(success->value.effectiveUrl, effectiveUrl);
+    QCOMPARE(success->value.references.size(), 2);
+    QCOMPARE(success->value.references.at(0).ordinal, 0);
+    QCOMPARE(success->value.references.at(0).id, qint64{3493169048});
+    QCOMPARE(success->value.references.at(0).page.kind, BandcampPageKind::Album);
+    QCOMPARE(success->value.references.at(0).page.url, u"https://artist.bandcamp.com/album/lp8"_s);
+    QCOMPARE(success->value.references.at(1).ordinal, 1);
+    QCOMPARE(success->value.references.at(1).id, qint64{3734052618});
+    QCOMPARE(success->value.references.at(1).page.kind, BandcampPageKind::Track);
+    QCOMPARE(success->value.references.at(1).page.url, u"https://artist.bandcamp.com/track/ride-with-me"_s);
+    QVERIFY(!success->value.continuation);
+}
+
+void ParserTests::htmlRecoveryPreservesStructuredSelection()
+{
+    const QByteArray listing
+        = R"(<main><ol id="music-grid"><li data-item-id="album-1"><div><a href="/album/one">One</a></div>)"
+          R"(<li data-item-id="track-2"><a href="/track/two">Two</a></ol></main>)"
+          R"(<link rel="alternate NEXT" href="?page=2">)";
+    const auto outcome  = parseDiscographyPage(musicListing(listing), QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* success = std::get_if<ResolutionSuccess<BandcampListingBatch>>(&outcome);
+    QVERIFY(success);
+    QCOMPARE(success->value.references.size(), 2);
+    QCOMPARE(success->value.references.at(0).id, qint64{1});
+    QCOMPARE(success->value.references.at(1).id, qint64{2});
+    QVERIFY(success->value.continuation);
+    QCOMPARE(success->value.continuation->locator, QUrl(u"https://artist.bandcamp.com/music?page=2"_s));
+}
+
+void ParserTests::conflictingHtmlAttributesFailDespiteRecovery()
+{
+    const QByteArray listing
+        = R"(<ol id="music-grid"><li data-item-id="album-1" data-item-id="album-2"><a href="/album/one"></a></li></ol>)"
+          R"(<main>Unknown HTML5 tags must not hide earlier errors.</main>)";
+    const auto outcome  = parseDiscographyPage(musicListing(listing), QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* failure = std::get_if<ResolutionFailure>(&outcome);
+    QVERIFY(failure);
+    QCOMPARE(failure->error.code, ResolutionErrorCode::MalformedPage);
+}
+
+void ParserTests::extractsClientItemsAsOrderedReferences()
+{
+    const QByteArray listing
+        = R"(<ol id="music-grid" data-client-items='[)"
+          R"({"type":"album","id":41,"page_url":"/album/rendered","title":false,"artist":{"bad":true},"art_id":[]},)"
+          R"({"type":"track","id":42,"page_url":"/track/song","title":17,"artist":false},)"
+          R"({"type":"album","id":43,"page_url":"/album/tail"})"
+          R"(]'><li data-item-id="album-41"><a href="/album/rendered"></a></li></ol>)";
+    const auto outcome  = parseDiscographyPage(musicListing(listing), QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* success = std::get_if<ResolutionSuccess<BandcampListingBatch>>(&outcome);
+    QVERIFY(success);
+    QCOMPARE(success->value.references.size(), 3);
+    QCOMPARE(success->value.references.at(0).ordinal, 0);
+    QCOMPARE(success->value.references.at(0).id, qint64{41});
+    QCOMPARE(success->value.references.at(0).page.url, u"https://artist.bandcamp.com/album/rendered"_s);
+    QCOMPARE(success->value.references.at(1).ordinal, 1);
+    QCOMPARE(success->value.references.at(1).id, qint64{42});
+    QCOMPARE(success->value.references.at(1).page.kind, BandcampPageKind::Track);
+    QCOMPARE(success->value.references.at(1).page.url, u"https://artist.bandcamp.com/track/song"_s);
+    QCOMPARE(success->value.references.at(2).ordinal, 2);
+    QCOMPARE(success->value.references.at(2).id, qint64{43});
+    QCOMPARE(success->value.references.at(2).page.url, u"https://artist.bandcamp.com/album/tail"_s);
+}
+
+void ParserTests::ignoresLargeOpaquePageData()
+{
+    const QByteArray blob = R"({"cfg":")" + QByteArray(MaxSourceFieldChars + 1, 'x') + R"("})";
+    const QByteArray listing
+        = "<div id=\"pagedata\" data-blob='" + blob
+        + "'></div><ol id=\"music-grid\"><li data-item-id=\"album-1\"><a href=\"/album/one\"></a></li></ol>";
+    const auto parsed   = parseDiscographyPage(musicListing(listing), QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* success = std::get_if<ResolutionSuccess<BandcampListingBatch>>(&parsed);
+    QVERIFY(success);
+    QCOMPARE(success->value.references.size(), 1);
+    QCOMPARE(success->value.references.first().page.url, u"https://artist.bandcamp.com/album/one"_s);
+}
+
+void ParserTests::clientItemsHaveIndependentCollectionBounds()
+{
+    const QList<QByteArray> malformedItems{
+        R"([{"type":false,"id":1,"page_url":"/album/one"}])",
+        R"([{"type":"album","id":"1","page_url":"/album/one"}])",
+        R"([{"type":"album","id":1,"page_url":5}])",
+    };
+    for(const QByteArray& invalid : malformedItems) {
+        const auto outcome
+            = parseDiscographyPage(musicListing("<ol id=\"music-grid\" data-client-items='" + invalid + "'></ol>"),
+                                   QUrl(u"https://artist.bandcamp.com/music"_s));
+        QVERIFY(std::holds_alternative<ResolutionFailure>(outcome));
+    }
+
+    QByteArray items{"["};
+    for(int i = 0; i < 400; ++i) {
+        if(i > 0) {
+            items += ',';
+        }
+        items += R"({"type":"album","id":)" + QByteArray::number(i + 1) + R"(,"page_url":"/album/entry-)"
+               + QByteArray::number(i + 1) + R"("})";
+    }
+    items += ']';
+    const QByteArray listing = "<ol id=\"music-grid\" data-client-items='" + items + "'></ol>";
+    const auto parsed   = parseDiscographyPage(musicListing(listing), QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* success = std::get_if<ResolutionSuccess<BandcampListingBatch>>(&parsed);
+    QVERIFY(success);
+    QVERIFY(items.size() > MaxSourceFieldChars);
+    QCOMPARE(success->value.references.size(), 400);
+
+    const QByteArray nested = R"([{"type":"album","id":1,"page_url":"/album/one","extra":)"
+                            + QByteArray(MaxJsonDepth - 1, '[') + "0" + QByteArray(MaxJsonDepth - 1, ']') + "}]";
+    const auto tooDeep
+        = parseDiscographyPage(musicListing("<ol id=\"music-grid\" data-client-items='" + nested + "'></ol>"),
+                               QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* depthFailure = std::get_if<ResolutionFailure>(&tooDeep);
+    QVERIFY(depthFailure);
+    QCOMPARE(depthFailure->error.code, ResolutionErrorCode::ResourceLimitExceeded);
+
+    QByteArray oversized
+        = musicListing(R"(<ol id="music-grid"><li data-item-id="album-1"><a href="/album/one"></a></li></ol>)");
+    oversized.append(QByteArray(MaxPageBytes - oversized.size() + 1, ' '));
+    const auto tooLarge     = parseDiscographyPage(oversized, QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* sizeFailure = std::get_if<ResolutionFailure>(&tooLarge);
+    QVERIFY(sizeFailure);
+    QCOMPARE(sizeFailure->error.code, ResolutionErrorCode::PageTooLarge);
+}
+
+void ParserTests::htmlDepthLimitFailsExplicitly()
+{
+    QByteArray listing;
+    for(qsizetype i = 0; i <= MaxHtmlDepth; ++i) {
+        listing += "<div>";
+    }
+    listing += R"(<ol id="music-grid"><li data-item-id="album-1"><a href="/album/one"></a></li></ol>)";
+    for(qsizetype i = 0; i <= MaxHtmlDepth; ++i) {
+        listing += "</div>";
+    }
+
+    const auto parsed   = parseDiscographyPage(musicListing(listing), QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* failure = std::get_if<ResolutionFailure>(&parsed);
+    QVERIFY(failure);
+    QCOMPARE(failure->error.code, ResolutionErrorCode::ResourceLimitExceeded);
+}
+
+void ParserTests::malformedListingTailFailsClosed()
+{
+    const QByteArray validGrid
+        = R"(<ol id="music-grid"><li data-item-id="album-1"><a href="/album/one"></a></li></ol>)";
+    const QList<QByteArray> malformedTails{
+        "<div data-tail=\"" + QByteArray(MaxSourceFieldChars + 1, 'x') + R"("><a rel="next" href="?page=2"></a></div>)",
+        "<!-- hidden <link rel=\"next\" href=\"?page=2\">",
+        R"(<script type="text/template" id="music-grid-template">)",
+        R"(<div data-client-items="[]"></div>)",
+        R"(<div class="load-more"></div>)",
+    };
+    for(const QByteArray& tail : malformedTails) {
+        const auto outcome
+            = parseDiscographyPage(musicListing(validGrid + tail), QUrl(u"https://artist.bandcamp.com/music"_s));
+        const auto* failure = std::get_if<ResolutionFailure>(&outcome);
+        QVERIFY(failure);
+        QVERIFY(failure->error.code == ResolutionErrorCode::MalformedPage
+                || failure->error.code == ResolutionErrorCode::ResourceLimitExceeded);
+    }
+}
+
+void ParserTests::scriptTextIsNotContinuationMarkup()
+{
+    const QByteArray listing
+        = R"(<ol id="music-grid"><li data-item-id="album-1"><a href="/album/one"></a></li></ol>)"
+          R"(<script>const example = "data-client-items <link rel='next' href='?page=2'>";</script>)"
+          R"(<!-- data-client-items <link rel="next" href="?page=3"> -->)"
+          R"(<bandcamp-widget>ignored</bandcamp-widget>)";
+    const auto parsed   = parseDiscographyPage(musicListing(listing), QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* success = std::get_if<ResolutionSuccess<BandcampListingBatch>>(&parsed);
+    QVERIFY(success);
+    QCOMPARE(success->value.references.size(), 1);
+    QVERIFY(!success->value.continuation);
+}
+
+void ParserTests::extractsOpaqueContinuationLocator()
+{
+    const QByteArray listing
+        = R"(<link rel="next" href="?page=2"><ol id="music-grid"><li data-item-id="album-1"><a href="/album/one"></a></li></ol>)";
+    const QUrl effectiveUrl{u"https://artist.bandcamp.com/music"_s};
+    const auto outcome  = parseDiscographyPage(musicListing(listing), effectiveUrl);
+    const auto* success = std::get_if<ResolutionSuccess<BandcampListingBatch>>(&outcome);
+    QVERIFY(success);
+    QVERIFY(success->value.continuation);
+    QCOMPARE(success->value.continuation->locator, QUrl(u"https://artist.bandcamp.com/music?page=2"_s));
+}
+
+void ParserTests::malformedListingEntriesFailExplicitly_data()
+{
+    QTest::addColumn<QByteArray>("listing");
+    QTest::newRow("missing-identity") << QByteArray(R"(<ol id="music-grid"><li><a href="/album/one"></a></li></ol>)");
+    QTest::newRow("unsupported-identity")
+        << QByteArray(R"(<ol id="music-grid"><li data-item-id="merch-1"><a href="/album/one"></a></li></ol>)");
+    QTest::newRow("zero-identity") << QByteArray(
+        R"(<ol id="music-grid"><li data-item-id="album-0"><a href="/album/zero"></a></li></ol>)");
+    QTest::newRow("kind-disagreement") << QByteArray(
+        R"(<ol id="music-grid"><li data-item-id="track-7"><a href="/album/wrong"></a></li></ol>)");
+    QTest::newRow("missing-link") << QByteArray(R"(<ol id="music-grid"><li data-item-id="album-8"></li></ol>)");
+    QTest::newRow("external-link") << QByteArray(
+        R"(<ol id="music-grid"><li data-item-id="album-9"><a href="https://other.example/album/x"></a></li></ol>)");
+    QTest::newRow("truncated-list") << QByteArray(
+        R"(<ol id="music-grid"><li data-item-id="album-10"><a href="/album/x)");
+}
+
+void ParserTests::malformedListingEntriesFailExplicitly()
+{
+    QFETCH(QByteArray, listing);
+    const auto outcome  = parseDiscographyPage(musicListing(listing), QUrl(u"https://artist.bandcamp.com/music"_s));
+    const auto* failure = std::get_if<ResolutionFailure>(&outcome);
+    QVERIFY(failure);
+    QCOMPARE(failure->error.stage, ResolutionStage::Parse);
 }
 } // namespace
 

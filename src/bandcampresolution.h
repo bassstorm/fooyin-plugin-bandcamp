@@ -184,6 +184,8 @@ struct OperationOptions
 {
     int parallelism{DefaultParallelism};
     int itemTimeoutMs{DefaultItemTimeoutMs};
+    BandcampDiscographyOrder discographyOrder{BandcampDiscographyOrder::Default};
+    qint64 prePlaybackRefreshWindowMs{DefaultRefreshWindowMinutes * RefreshWindowMsPerMinute};
 };
 
 // Clamps each value to the user-facing range in bandcampsettings.h.

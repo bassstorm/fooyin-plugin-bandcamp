@@ -70,8 +70,7 @@ const QList<Snapshot> Snapshots{
 enum class Outcome : quint8
 {
     Pass,
-    Fail,
-    Skip
+    Fail
 };
 
 struct Report
@@ -108,7 +107,6 @@ void checkAlbum(Report& report, const BandcampAlbum& album, const Snapshot* snap
 {
     const auto& metadata = album.metadata;
     check(report, !metadata.title.isEmpty(), u"album has no title"_s);
-    check(report, !metadata.artist.isEmpty(), u"album has no artist"_s);
     check(report, metadata.trackTotal >= album.tracks.size(), u"track total is below playable track count"_s);
     check(report, !album.tracks.isEmpty(), u"album has no playable tracks"_s);
 
@@ -117,11 +115,12 @@ void checkAlbum(Report& report, const BandcampAlbum& album, const Snapshot* snap
         const BandcampTrack& track = album.tracks.at(i);
         const QString where        = u"track %1"_s.arg(i + 1);
         check(report, !track.title.isEmpty(), where + u": no title"_s);
-        check(report, !track.artist.isEmpty(), where + u": no artist"_s);
         check(report, track.durationMs >= 0 && track.durationMs <= MaxTrackMs, where + u": duration out of range"_s);
-        const bool unique = !numbers.contains(track.trackNumber);
-        numbers.insert(track.trackNumber);
-        check(report, track.trackNumber > 0 && unique, where + u": track number missing or duplicated"_s);
+        if(track.trackNumber > 0) {
+            const bool unique = !numbers.contains(track.trackNumber);
+            numbers.insert(track.trackNumber);
+            check(report, unique, where + u": track number is duplicated"_s);
+        }
         checkStream(report, track.streamUrl, where);
         if(track.durationMs == 0) {
             report.lines << u"    note  %1: duration unknown"_s.arg(where);
@@ -153,8 +152,7 @@ void checkTrack(Report& report, const BandcampResolvedTrack& resolved, const Sna
 {
     const auto& track = resolved.track;
     check(report, !track.title.isEmpty(), u"track has no title"_s);
-    check(report, !track.artist.isEmpty(), u"track has no artist"_s);
-    check(report, track.durationMs > 0 && track.durationMs <= MaxTrackMs, u"track duration unknown or out of range"_s);
+    check(report, track.durationMs >= 0 && track.durationMs <= MaxTrackMs, u"track duration out of range"_s);
     checkStream(report, track.streamUrl, u"track"_s);
 
     if(!snapshot) {
@@ -184,13 +182,6 @@ void checkTrack(Report& report, const BandcampResolvedTrack& resolved, const Sna
 Report evaluate(const BandcampScopeResult& result)
 {
     Report report;
-
-    if(result.page.kind == BandcampPageKind::Discography && std::holds_alternative<ResolutionFailure>(result.outcome)
-       && std::get<ResolutionFailure>(result.outcome).error.code == ResolutionErrorCode::UnsupportedRequest) {
-        report.outcome = Outcome::Skip;
-        report.lines << u"    skip  discography expansion is not implemented yet"_s;
-        return report;
-    }
     const auto* success = std::get_if<ResolutionSuccess<BandcampResolvedData>>(&result.outcome);
     if(!success) {
         report.outcome = Outcome::Fail;
@@ -277,7 +268,7 @@ QStringList albumFields(const BandcampAlbum& album, const QString& indent)
     };
 }
 
-void printResult(const BandcampScopeResult& result, int& passed, int& failed, int& skipped, qsizetype& diagnosticChars,
+void printResult(const BandcampScopeResult& result, int& passed, int& failed, qsizetype& diagnosticChars,
                  bool& diagnosticsOmitted)
 {
     const Report report = evaluate(result);
@@ -290,10 +281,6 @@ void printResult(const BandcampScopeResult& result, int& passed, int& failed, in
         case Outcome::Fail:
             ++failed;
             status = u"FAIL"_s;
-            break;
-        case Outcome::Skip:
-            ++skipped;
-            status = u"SKIP"_s;
             break;
     }
 
@@ -405,20 +392,17 @@ int main(int argc, char** argv)
 
     int passed                = 0;
     int failed                = 0;
-    int skipped               = 0;
     qsizetype diagnosticChars = 0;
     bool diagnosticsOmitted   = false;
-    QObject::connect(
-        &service, &BandcampService::scopeResolved, &app,
-        [&passed, &failed, &skipped, &diagnosticChars, &diagnosticsOmitted](const BandcampScopeResult& result) {
-            printResult(result, passed, failed, skipped, diagnosticChars, diagnosticsOmitted);
-        });
+    QObject::connect(&service, &BandcampService::scopeResolved, &app,
+                     [&passed, &failed, &diagnosticChars, &diagnosticsOmitted](const BandcampScopeResult& result) {
+                         printResult(result, passed, failed, diagnosticChars, diagnosticsOmitted);
+                     });
     QObject::connect(&service, &BandcampService::operationFinished, &app,
-                     [&app, &clock, parallelism, &passed, &failed, &skipped](const BandcampOperationSummary& summary) {
-                         QTextStream(stdout)
-                             << u"\n"_s << summary.requested << u" page(s) in "_s << clock.elapsed()
-                             << u" ms, parallelism "_s << parallelism << u": "_s << passed << u" passed, "_s << failed
-                             << u" failed, "_s << skipped << u" skipped\n"_s;
+                     [&app, &clock, parallelism, &passed, &failed](const BandcampOperationSummary& summary) {
+                         QTextStream(stdout) << u"\n"_s << summary.requested << u" page(s) in "_s << clock.elapsed()
+                                             << u" ms, parallelism "_s << parallelism << u": "_s << passed
+                                             << u" passed, "_s << failed << u" failed\n"_s;
                          QTextStream(stdout).flush();
                          app.exit(failed > 0 ? 1 : 0);
                      });

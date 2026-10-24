@@ -2,16 +2,20 @@
 
 #include "bandcampdiagnostics.h"
 #include "bandcampresolution.h"
+#include "bandcampurl.h"
 
 #include <QByteArray>
 #include <QDate>
 #include <QList>
+#include <QUrl>
 
 #include <atomic>
+#include <optional>
 
 namespace Fooyin::Bandcamp {
 constexpr qsizetype MaxPageBytes        = 20 * 1024 * 1024;
 constexpr int MaxJsonDepth              = 64;
+constexpr qsizetype MaxHtmlDepth        = 256;
 constexpr qsizetype MaxSourceFieldChars = 16384;
 constexpr qsizetype MaxSourceRecords    = 100000;
 constexpr qsizetype MaxDeclaredTracks   = 10000;
@@ -75,9 +79,33 @@ struct TrackPageCandidate
 using ReleaseCandidate    = std::variant<AlbumCandidate, TrackPageCandidate>;
 using ReleaseParseOutcome = ResolutionOutcome<ReleaseCandidate>;
 
+struct BandcampListingReference
+{
+    qsizetype ordinal{0};
+    qint64 id{0};
+    BandcampPageUrl page;
+};
+
+struct BandcampListingContinuation
+{
+    QUrl locator;
+};
+
+struct BandcampListingBatch
+{
+    QUrl effectiveUrl;
+    QList<BandcampListingReference> references;
+    std::optional<BandcampListingContinuation> continuation;
+};
+
+using BandcampListingParseOutcome = ResolutionOutcome<BandcampListingBatch>;
+
 // Kind is determined by decoded source identity, never by a URL or the caller's
 // selection. Raw JSON, concrete source paths and diagnostic history stay inside
 // the parser.
 ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl, CorrelationContext context = {},
                                      const std::atomic_bool* stop = nullptr);
+BandcampListingParseOutcome parseDiscographyPage(const QByteArray& body, const QUrl& pageUrl,
+                                                 CorrelationContext context   = {},
+                                                 const std::atomic_bool* stop = nullptr);
 } // namespace Fooyin::Bandcamp

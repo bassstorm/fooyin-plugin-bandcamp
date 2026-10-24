@@ -52,6 +52,7 @@ struct BandcampOperationSummary
 struct BandcampServiceDependencies
 {
     BandcampPageParser parseReleasePage;
+    BandcampListingParser parseDiscographyPage;
 };
 
 class BandcampService : public QObject

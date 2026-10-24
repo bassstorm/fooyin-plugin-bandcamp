@@ -14,6 +14,7 @@ option(BANDCAMP_SANITIZE "Build the unit tests with AddressSanitizer and Undefin
 
 find_package(Fooyin REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Network)
+find_package(LibXml2 REQUIRED)
 
 # Sanitizer flags are an interface target so every consumer of the core
 # library is instrumented and linked against the sanitizer runtime.
@@ -34,7 +35,7 @@ set_target_properties(bandcamp_core PROPERTIES
 )
 target_include_directories(bandcamp_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(bandcamp_core
-    PUBLIC Qt6::Core Qt6::Concurrent Qt6::Network bandcamp_sanitize
+    PUBLIC Qt6::Core Qt6::Concurrent Qt6::Network LibXml2::LibXml2 bandcamp_sanitize
 )
 
 create_fooyin_plugin(

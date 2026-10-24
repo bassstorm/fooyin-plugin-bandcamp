@@ -19,6 +19,8 @@ class QNetworkAccessManager;
 namespace Fooyin::Bandcamp {
 using BandcampPageParser
     = std::function<ReleaseParseOutcome(const QByteArray&, const QUrl&, CorrelationContext, const std::atomic_bool*)>;
+using BandcampListingParser = std::function<BandcampListingParseOutcome(const QByteArray&, const QUrl&,
+                                                                        CorrelationContext, const std::atomic_bool*)>;
 
 class BandcampWorkflowSlots : public QObject
 {
@@ -35,6 +37,30 @@ signals:
 
 private:
     int m_active{0};
+};
+
+class BandcampListingResolver : public QObject
+{
+    Q_OBJECT
+
+public:
+    using OutcomeCallback = std::function<void(BandcampListingParseOutcome)>;
+
+    BandcampListingResolver(QNetworkAccessManager* network, BandcampOperationId operationId, QUrl pageUrl,
+                            int timeoutMs, BandcampListingParser parser,
+                            std::shared_ptr<BandcampWorkflowSlots> workflowSlots, OutcomeCallback callback,
+                            QObject* parent = nullptr);
+    ~BandcampListingResolver() override;
+
+    void start();
+    void cancel();
+
+signals:
+    void physicallyQuiescent();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
 };
 
 class BandcampResolver : public QObject

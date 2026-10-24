@@ -4,6 +4,7 @@
 
 #include <QDialog>
 
+class QComboBox;
 class QSpinBox;
 
 namespace Fooyin::Bandcamp {
@@ -20,5 +21,7 @@ private:
     FySettings m_settings;
     QSpinBox* m_parallelism;
     QSpinBox* m_itemTimeout;
+    QComboBox* m_discographyOrder;
+    QSpinBox* m_refreshWindow;
 };
 } // namespace Fooyin::Bandcamp
