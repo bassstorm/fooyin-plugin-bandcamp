@@ -281,6 +281,12 @@ private:
 
 // Defined in bandcamppostprocessortests.cpp.
 int runPostProcessorTests(int argc, char** argv);
+// Defined in bandcampcontracttests.cpp.
+int runContractTests(int argc, char** argv);
+// Defined in bandcampdiagnosticstests.cpp.
+int runDiagnosticsTests(int argc, char** argv);
+// Defined in bandcampclienttests.cpp.
+int runClientTests(int argc, char** argv);
 
 int main(int argc, char** argv)
 {
@@ -294,6 +300,9 @@ int main(int argc, char** argv)
     status |= QTest::qExec(&mutation, argc, argv);
     SettingsTests settings;
     status |= QTest::qExec(&settings, argc, argv);
+    status |= runContractTests(argc, argv);
+    status |= runDiagnosticsTests(argc, argv);
+    status |= runClientTests(argc, argv);
     return status;
 }
 

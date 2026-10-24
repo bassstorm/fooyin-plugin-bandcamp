@@ -43,18 +43,20 @@ build/install steps and set `CMAKE_PREFIX_PATH` to that package instead.
 
 ### Unit tests
 
-The unit tests cover URL validation, the post-processors, malformed input, and
-settings. They are off by default. To run them:
+The unit tests cover URL validation, the post-processors, malformed input,
+settings, the shared contracts, TRACE diagnostics, and the network client. They
+are off by default. To run them:
 
 ```sh
 cmake -S . -B build-tests -DBANDCAMP_BUILD_TESTS=ON -DCMAKE_PREFIX_PATH="$PWD/build/fooyin-install"
 cmake --build build-tests --target bandcamp_unit_tests
-build-tests/tests/unit/bandcamp_unit_tests
+ctest --test-dir build-tests --output-on-failure
 ```
 
-Add `-DBANDCAMP_SANITIZE=ON` to build the tests with AddressSanitizer and
-UndefinedBehaviorSanitizer. Set `BANDCAMP_MUTATION_ITERATIONS` to change the
-number of mutation iterations (default 10000).
+Add `-DBANDCAMP_SANITIZE=ON` to build with AddressSanitizer and
+UndefinedBehaviorSanitizer. The sanitizer flags apply to the shared core library
+and to the plugin, which links it. Set `BANDCAMP_MUTATION_ITERATIONS` to change
+the number of mutation iterations (default 10000).
 
 ### Live probe
 

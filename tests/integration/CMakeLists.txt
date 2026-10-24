@@ -10,21 +10,13 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Network Concurrent)
 
-set(BANDCAMP_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
+# The probe builds the same core sources as the plugin, so the two cannot drift apart.
+set(BANDCAMP_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/BandcampCoreSources.cmake)
 
-add_executable(bandcamp-probe
-    bandcamp_probe.cpp
-    ${BANDCAMP_SRC}/bandcamplogging.cpp
-    ${BANDCAMP_SRC}/bandcampclient.cpp
-    ${BANDCAMP_SRC}/bandcampdirtytitle.cpp
-    ${BANDCAMP_SRC}/bandcamppostprocessor.cpp
-    ${BANDCAMP_SRC}/bandcampparser.cpp
-    ${BANDCAMP_SRC}/bandcampprocessors.cpp
-    ${BANDCAMP_SRC}/bandcampservice.cpp
-    ${BANDCAMP_SRC}/bandcampurl.cpp
-)
+add_executable(bandcamp-probe bandcamp_probe.cpp ${BANDCAMP_CORE_SOURCES})
 
-target_include_directories(bandcamp-probe PRIVATE ${BANDCAMP_SRC})
+target_include_directories(bandcamp-probe PRIVATE ${BANDCAMP_SRC_DIR})
 target_link_libraries(bandcamp-probe PRIVATE Qt6::Core Qt6::Network Qt6::Concurrent)
 
 if(BANDCAMP_SANITIZE AND NOT MSVC)

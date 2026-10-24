@@ -1,0 +1,29 @@
+# Fooyin-independent sources shared by bandcamp_core and the standalone probe.
+# The including project sets BANDCAMP_SRC_DIR to the plugin's src directory first.
+set(BANDCAMP_CORE_SOURCES
+    ${BANDCAMP_SRC_DIR}/bandcampclient.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampclient.h
+    ${BANDCAMP_SRC_DIR}/bandcampclock.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampclock.h
+    ${BANDCAMP_SRC_DIR}/bandcampdiagnostics.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampdiagnostics.h
+    ${BANDCAMP_SRC_DIR}/bandcamplogging.cpp
+    ${BANDCAMP_SRC_DIR}/bandcamplogging.h
+    ${BANDCAMP_SRC_DIR}/bandcampmodel.h
+    ${BANDCAMP_SRC_DIR}/bandcampparser.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampparser.h
+    ${BANDCAMP_SRC_DIR}/bandcampdirtytitle.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampdirtytitle.h
+    ${BANDCAMP_SRC_DIR}/bandcampresolution.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampresolution.h
+    ${BANDCAMP_SRC_DIR}/bandcamppostprocessor.cpp
+    ${BANDCAMP_SRC_DIR}/bandcamppostprocessor.h
+    ${BANDCAMP_SRC_DIR}/bandcampprocessors.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampprocessors.h
+    ${BANDCAMP_SRC_DIR}/bandcampservice.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampservice.h
+    ${BANDCAMP_SRC_DIR}/bandcampsettings.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampsettings.h
+    ${BANDCAMP_SRC_DIR}/bandcampurl.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampurl.h
+)

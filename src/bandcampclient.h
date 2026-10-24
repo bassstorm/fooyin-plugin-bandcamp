@@ -1,5 +1,7 @@
 #pragma once
 
+#include "bandcampdiagnostics.h"
+
 #include <QByteArray>
 #include <QHash>
 #include <QObject>
@@ -39,15 +41,22 @@ public:
 
     // Returns 0 when the request is refused. The callback runs on the thread that owns this object,
     // exactly once, unless the request is cancelled or this object is destroyed first.
-    RequestId fetch(const QUrl& url, Callback callback);
+    // The context's request ID is replaced with the ID assigned to this request.
+    RequestId fetch(const QUrl& url, Callback callback, CorrelationContext context = {});
 
     // Aborts a pending request. Its callback is not called.
     void cancel(RequestId id);
 
 private:
+    struct PendingRequest
+    {
+        QNetworkReply* reply{nullptr};
+        CorrelationContext context;
+    };
+
     QNetworkAccessManager* m_network{nullptr};
     // A request is pending until its reply finishes or is cancelled. Whoever removes it owns the callback.
-    QHash<RequestId, QNetworkReply*> m_pending;
+    QHash<RequestId, PendingRequest> m_pending;
     RequestId m_nextRequestId{1};
 };
 } // namespace Fooyin::Bandcamp

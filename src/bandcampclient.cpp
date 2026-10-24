@@ -21,12 +21,6 @@ struct FetchState
     bool tooLarge{false};
 };
 
-// Strips the query, which holds signed stream tokens, so logs never contain them.
-QString redactedUrl(const QUrl& url)
-{
-    return url.adjusted(QUrl::RemoveQuery | QUrl::RemoveFragment | QUrl::RemoveUserInfo).toString(QUrl::FullyEncoded);
-}
-
 bool isHttpUrl(const QUrl& url)
 {
     return url.isValid() && (url.scheme() == u"https" || url.scheme() == u"http") && !url.host().isEmpty();
@@ -42,18 +36,18 @@ BandcampClient::~BandcampClient()
 {
     // Taking the map first means the finished handlers find nothing pending and skip their callbacks.
     const auto pending = std::exchange(m_pending, {});
-    for(QNetworkReply* reply : pending) {
-        reply->abort();
+    for(const PendingRequest& request : pending) {
+        request.reply->abort();
     }
 }
 
-BandcampClient::RequestId BandcampClient::fetch(const QUrl& url, Callback callback)
+BandcampClient::RequestId BandcampClient::fetch(const QUrl& url, Callback callback, CorrelationContext context)
 {
     if(!m_network || !isHttpUrl(url)) {
         BandcampFetchResponse response;
         response.url   = url;
         response.error = QStringLiteral("unsupported request");
-        qCWarning(BANDCAMP_FETCH) << "Refusing to fetch" << redactedUrl(url) << response.error;
+        qCWarning(BANDCAMP_FETCH) << "Refusing to fetch" << redactUrlForLog(url) << response.error;
         QMetaObject::invokeMethod(
             this, [callback, response = std::move(response)]() mutable { callback(std::move(response)); },
             Qt::QueuedConnection);
@@ -64,11 +58,16 @@ BandcampClient::RequestId BandcampClient::fetch(const QUrl& url, Callback callba
     request.setMaximumRedirectsAllowed(MaxRedirects);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 
-    qCInfo(BANDCAMP_FETCH) << "GET" << redactedUrl(url);
+    const RequestId id = m_nextRequestId++;
+    context            = context.withRequest(static_cast<qint64>(id));
+
+    qCInfo(BANDCAMP_FETCH) << "GET" << redactUrlForLog(url);
+    qCDebug(BANDCAMP_TRACE_FETCH).noquote()
+        << formatTraceEvent(context, QStringLiteral("request.started"),
+                            {DiagnosticField::url(QStringLiteral("url"), url)});
 
     QNetworkReply* reply = m_network->get(request);
-    const RequestId id   = m_nextRequestId++;
-    m_pending.insert(id, reply);
+    m_pending.insert(id, {reply, context});
     auto state = std::make_shared<FetchState>();
     QElapsedTimer timer;
     timer.start();
@@ -87,7 +86,7 @@ BandcampClient::RequestId BandcampClient::fetch(const QUrl& url, Callback callba
     });
 
     connect(reply, &QNetworkReply::finished, this,
-            [this, id, reply, state, url, callback = std::move(callback), timer]() mutable {
+            [this, id, reply, state, url, context, callback = std::move(callback), timer]() mutable {
                 // Not pending means the request was cancelled or this client is shutting down.
                 if(m_pending.remove(id) == 0) {
                     reply->deleteLater();
@@ -117,12 +116,19 @@ BandcampClient::RequestId BandcampClient::fetch(const QUrl& url, Callback callba
 
                 if(response.isValid()) {
                     qCInfo(BANDCAMP_FETCH) << "HTTP" << response.status << "in" << timer.elapsed() << "ms,"
-                                           << response.body.size() << "bytes from" << redactedUrl(url);
+                                           << response.body.size() << "bytes from" << redactUrlForLog(url);
                 }
                 else {
-                    qCWarning(BANDCAMP_FETCH) << "Fetch of" << redactedUrl(url) << "failed after" << timer.elapsed()
+                    qCWarning(BANDCAMP_FETCH) << "Fetch of" << redactUrlForLog(url) << "failed after" << timer.elapsed()
                                               << "ms:" << response.error;
                 }
+                qCDebug(BANDCAMP_TRACE_FETCH).noquote()
+                    << formatTraceEvent(context, QStringLiteral("request.finished"),
+                                        {DiagnosticField::number(QStringLiteral("status"), response.status),
+                                         DiagnosticField::number(QStringLiteral("bytes"),
+                                                                 static_cast<qint64>(response.body.size())),
+                                         DiagnosticField::number(QStringLiteral("elapsedMs"), timer.elapsed()),
+                                         DiagnosticField::text(QStringLiteral("error"), response.error)});
 
                 reply->deleteLater();
                 callback(std::move(response));
@@ -137,10 +143,12 @@ void BandcampClient::cancel(RequestId id)
         return;
     }
 
-    QNetworkReply* reply = it.value();
+    // Copied before erase, since erasing invalidates the iterator.
+    const PendingRequest request = it.value();
     m_pending.erase(it);
-    qCDebug(BANDCAMP_FETCH) << "Cancelled request" << id;
+    qCDebug(BANDCAMP_TRACE_FETCH).noquote()
+        << formatTraceEvent(request.context, QStringLiteral("request.cancelled"), {});
     // The finished handler sees the request is no longer pending and only cleans up the reply.
-    reply->abort();
+    request.reply->abort();
 }
 } // namespace Fooyin::Bandcamp

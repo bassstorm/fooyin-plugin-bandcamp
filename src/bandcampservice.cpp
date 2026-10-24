@@ -140,7 +140,8 @@ void BandcampService::startFetch(quint64 jobId, const QString& url)
 {
     // The client never calls back synchronously, so the job is still active when its request id is stored.
     const BandcampClient::RequestId request = m_client->fetch(
-        QUrl(url), [this, jobId](BandcampFetchResponse response) { onFetched(jobId, std::move(response)); });
+        QUrl(url), [this, jobId](BandcampFetchResponse response) { onFetched(jobId, std::move(response)); },
+        CorrelationContext{.jobId = static_cast<qint64>(jobId), .resourceUrl = QUrl(url)});
 
     if(auto it = m_active.find(jobId); it != m_active.end()) {
         it->request = request;
