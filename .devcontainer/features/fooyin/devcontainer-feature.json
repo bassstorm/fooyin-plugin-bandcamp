@@ -1,0 +1,14 @@
+{
+    "id": "fooyin",
+    "version": "1.1.0",
+    "name": "Fooyin",
+    "description": "Builds Fooyin from source and installs its headers, libraries, and CMake package system-wide",
+    "documentationURL": "https://github.com/bassstorm/fooyin-plugin-bandcamp/tree/main/.devcontainer",
+    "options": {
+        "version": {
+            "type": "string",
+            "default": "latest",
+            "description": "Fooyin release tag or branch to build (for example v0.14.1). 'latest' resolves to the newest GitHub release."
+        }
+    }
+}

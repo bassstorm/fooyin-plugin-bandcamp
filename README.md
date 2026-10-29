@@ -16,16 +16,16 @@ version. Choose the bundle that matches your system and Fooyin.
 
 ## Requirements
 
-**Runtime:** libxml2.
+### Runtime
 
-**Compile time:**
+- libxml2.
+
+### Compile time
 
 - CMake 3.21 or newer and a C++23 compiler.
 - Qt 6 development files: Core, Concurrent, and Network.
 - libxml2 development files, for example `libxml2-dev`.
 - A Fooyin development install: headers, the CMake package config, and libraries.
-
-## Build
 
 CMake finds Fooyin through `Fooyin_ROOT`, which points to the Fooyin install
 prefix. If Fooyin's development package is installed system-wide, you can skip
@@ -43,7 +43,21 @@ cmake --install ../fooyin/build
 export Fooyin_ROOT="$HOME/.local/fooyin-dev"
 ```
 
-Build and install the plugin:
+### Dev container
+
+The [.devcontainer/](.devcontainer/) config provides the compile-time requirements
+above as a ready-made environment, including Fooyin built from source by the
+`fooyin` feature. Its `version` option selects the release tag (default `latest`).
+
+`SSH_AUTH_SOCK` must be set on the host before the container starts. Its socket is
+bind-mounted to `/ssh-agent`, and `remoteEnv` points `SSH_AUTH_SOCK` at that path.
+The variable therefore applies to terminals and tasks, not to plain `docker exec`
+sessions.
+
+## Build
+
+Build and install the plugin against the Fooyin development install from
+[Compile time](#compile-time):
 
 ```sh
 cmake --preset dev
@@ -52,8 +66,7 @@ cmake --install build
 ```
 
 The module is installed to `lib/fooyin/plugins` under the Fooyin prefix CMake
-found. After changing `Fooyin_ROOT`, delete existing `build*/` directories,
-because CMake caches the old path.
+found.
 
 To build a bundle for sharing:
 

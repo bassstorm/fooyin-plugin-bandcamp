@@ -1,0 +1,23 @@
+{
+    "name": "fooyin-plugin-bandcamp",
+    "image": "mcr.microsoft.com/devcontainers/cpp:2-trixie",
+
+    "remoteUser": "vscode",
+    "updateRemoteUserUID": true,
+
+    "features": {
+        "ghcr.io/devcontainers-extra/features/apt-packages:1": {
+            "packages": "libxml2-dev"
+        },
+        "./features/fooyin": {
+            "version": "latest"
+        }
+    },
+
+    "mounts": [
+        "source=${localEnv:SSH_AUTH_SOCK},target=/ssh-agent,type=bind"
+    ],
+    "remoteEnv": {
+        "SSH_AUTH_SOCK": "/ssh-agent"
+    }
+}
