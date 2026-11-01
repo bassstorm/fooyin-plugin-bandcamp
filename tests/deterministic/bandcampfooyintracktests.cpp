@@ -92,6 +92,8 @@ public:
     LibraryBoundary()
     {
         api.owner = owner.get();
+        api.playlistOwner = owner.get();
+        api.playlistTracks = []() { return Fooyin::TrackList{}; };
         api.tracks = [this]() {
             ++snapshotCalls;
             if(snapshotDelayMs > 0) {
@@ -214,13 +216,28 @@ struct PlaylistBoundary
         return id;
     }
 
+    void supplyResidents(FooyinLibraryApi& libraryApi)
+    {
+        libraryApi.playlistOwner = owner.get();
+        libraryApi.playlistTracks = [this]() {
+            ++snapshotCalls;
+            Fooyin::TrackList snapshot;
+            for(const Fooyin::TrackList& playlist : residents) {
+                snapshot.insert(snapshot.end(), playlist.cbegin(), playlist.cend());
+            }
+            return snapshot;
+        };
+    }
+
     BandcampPlaylistApi api;
     std::unique_ptr<QObject> owner{std::make_unique<QObject>()};
     QHash<QString, BandcampPlaylistAvailability> availability;
     QList<Fooyin::UId> inspected;
     QList<Fooyin::UId> insertedPlaylists;
     QList<Fooyin::TrackList> blocks;
+    QList<Fooyin::TrackList> residents;
     QStringList names;
+    int snapshotCalls{0};
     int createCalls{0};
     bool failCreate{false};
     bool throwOnInsert{false};
@@ -351,9 +368,13 @@ private slots:
     void standaloneProjectionLeavesParentFieldsAbsent();
     void parsesOnlyObservedBandcampExpiryForm();
     void preservesLargeRepeatedInputOccurrences();
+    void mergesOnlyTransportAndPreservesResidentMetadata_data();
     void mergesOnlyTransportAndPreservesResidentMetadata();
+    void selectsLibraryThenFirstPlaylistOccurrence();
+    void rejectsConflictingPersistedTrackIdMirror_data();
     void rejectsConflictingPersistedTrackIdMirror();
     void reportsWriteFailuresWithoutMutatingResidents();
+    void serializesOnlyWithinOneSubmission_data();
     void serializesOnlyWithinOneSubmission();
     void timeoutDoesNotPoisonQueuedCommit();
     void activeDeadlineIncludesSnapshotWork();
@@ -361,6 +382,7 @@ private slots:
     void containsDependencyAndFutureExceptions();
     void correlatesAndRedactsEffectiveTransportChanges();
     void importsIntoCapturedUiPlaylist();
+    void importsPlaylistOnlyResidentMetadata();
     void createsNewForForcedAndInitiallyUnsuitableDestinations();
     void preservesOrderedAlbumBlocksAndRepeatedScopes();
     void advancesAfterFailuresAndLeavesEmptyImportsUncreated();
@@ -507,11 +529,26 @@ void FooyinTrackTests::preservesLargeRepeatedInputOccurrences()
     QCOMPARE(library.writeCalls, 0);
 }
 
+void FooyinTrackTests::mergesOnlyTransportAndPreservesResidentMetadata_data()
+{
+    QTest::addColumn<bool>("playlistOnly");
+    QTest::newRow("library") << false;
+    QTest::newRow("playlist-only") << true;
+}
+
 void FooyinTrackTests::mergesOnlyTransportAndPreservesResidentMetadata()
 {
+    QFETCH(bool, playlistOnly);
     LibraryBoundary library;
+    PlaylistBoundary playlists;
+    playlists.supplyResidents(library.api);
     const Fooyin::Track resident = residentWithUserEdits(700);
-    library.residents.push_back(resident);
+    if(playlistOnly) {
+        playlists.residents = {{resident}};
+    }
+    else {
+        library.residents.push_back(resident);
+    }
     library.makeWriteAvailable();
     BandcampLibraryGateway gateway{library.api};
     QObject receiver;
@@ -553,7 +590,8 @@ void FooyinTrackTests::mergesOnlyTransportAndPreservesResidentMetadata()
     QCOMPARE(write.extraProperties().value(BandcampStreamUrlProperty), SignedStream);
 
     // The boundary supplies only the async result; the plugin never mutates its resident snapshot.
-    QCOMPARE(library.residents.front().extraProperties().value(BandcampStreamUrlProperty),
+    const Fooyin::Track& unchanged = playlistOnly ? playlists.residents.first().front() : library.residents.front();
+    QCOMPARE(unchanged.extraProperties().value(BandcampStreamUrlProperty),
              u"https://cdn.example.com/old.mp3?sig=old"_s);
     library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
     QTRY_VERIFY(completed);
@@ -568,12 +606,70 @@ void FooyinTrackTests::mergesOnlyTransportAndPreservesResidentMetadata()
     QCOMPARE(result.tracks.at(1).extraProperties().value(BandcampStreamUrlProperty), OtherSignedStream);
 }
 
+void FooyinTrackTests::selectsLibraryThenFirstPlaylistOccurrence()
+{
+    for(const bool libraryPresent : {false, true}) {
+        LibraryBoundary library;
+        PlaylistBoundary playlists;
+        playlists.supplyResidents(library.api);
+        Fooyin::Track first = residentWithUserEdits(700);
+        first.setTitle(u"First playlist occurrence"_s);
+        Fooyin::Track laterOccurrence = first;
+        laterOccurrence.setTitle(u"Later occurrence"_s);
+        Fooyin::Track laterPlaylist = first;
+        laterPlaylist.setTitle(u"Later playlist"_s);
+        playlists.residents = {{project(standaloneTrack()), first, laterOccurrence}, {laterPlaylist}};
+        const Fooyin::Track authoritative = residentWithUserEdits(700);
+        if(libraryPresent) {
+            library.residents = {authoritative};
+        }
+        library.makeWriteAvailable();
+        BandcampLibraryGateway gateway{library.api};
+        QObject receiver;
+        bool completed = false;
+        FooyinTrackCommitOutcome outcome;
+        submit(gateway, {memberTrack(), memberTrack(42, OtherSignedStream)}, &receiver,
+               [&](FooyinTrackCommitOutcome value) {
+                   outcome = std::move(value);
+                   completed = true;
+               });
+
+        const QString expectedTitle = libraryPresent ? authoritative.title() : first.title();
+        QTRY_COMPARE(library.writeCalls, 1);
+        QCOMPARE(library.writeInputs.front().size(), std::size_t{1});
+        QCOMPARE(library.writeInputs.front().front().title(), expectedTitle);
+        library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+        QTRY_VERIFY(completed);
+        const auto* result = std::get_if<FooyinTrackCommitSuccess>(&outcome);
+        QVERIFY(result);
+        QCOMPARE(result->tracks.size(), std::size_t{2});
+        for(const auto& track : result->tracks) {
+            QCOMPARE(track.title(), expectedTitle);
+            QCOMPARE(track.id(), 700);
+        }
+        QCOMPARE(result->newIdentityCount, qsizetype{0});
+    }
+}
+
+void FooyinTrackTests::rejectsConflictingPersistedTrackIdMirror_data()
+{
+    mergesOnlyTransportAndPreservesResidentMetadata_data();
+}
+
 void FooyinTrackTests::rejectsConflictingPersistedTrackIdMirror()
 {
+    QFETCH(bool, playlistOnly);
     LibraryBoundary library;
+    PlaylistBoundary playlists;
+    playlists.supplyResidents(library.api);
     Fooyin::Track resident = residentWithUserEdits(710);
     resident.setExtraProperty(BandcampTrackIdProperty, u"43"_s);
-    library.residents.push_back(resident);
+    if(playlistOnly) {
+        playlists.residents = {{resident}};
+    }
+    else {
+        library.residents.push_back(resident);
+    }
     BandcampLibraryGateway gateway{library.api};
     QObject receiver;
     MessageCapture capture;
@@ -670,11 +766,24 @@ void FooyinTrackTests::reportsWriteFailuresWithoutMutatingResidents()
     QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(second));
 }
 
+void FooyinTrackTests::serializesOnlyWithinOneSubmission_data()
+{
+    mergesOnlyTransportAndPreservesResidentMetadata_data();
+}
+
 void FooyinTrackTests::serializesOnlyWithinOneSubmission()
 {
+    QFETCH(bool, playlistOnly);
     LibraryBoundary library;
+    PlaylistBoundary playlists;
+    playlists.supplyResidents(library.api);
     Fooyin::Track original = residentWithUserEdits(703);
-    library.residents.push_back(original);
+    if(playlistOnly) {
+        playlists.residents = {{original}};
+    }
+    else {
+        library.residents.push_back(original);
+    }
     library.makeWriteAvailable();
     library.makeWriteAvailable();
     BandcampLibraryGateway gateway{library.api};
@@ -696,15 +805,22 @@ void FooyinTrackTests::serializesOnlyWithinOneSubmission()
 
     QTRY_COMPARE(library.writeCalls, 1);
     QCOMPARE(library.snapshotCalls, 1);
+    QCOMPARE(playlists.snapshotCalls, 1);
     Fooyin::Track latest = library.writeInputs.front().front();
     latest.setTitle(u"Edit visible when queued work starts"_s);
     latest.replaceExtraTag(u"MOOD"_s, u"latest mood"_s);
     latest.setHash(u"latest hash"_s);
-    library.residents = {latest};
+    if(playlistOnly) {
+        playlists.residents = {{latest}};
+    }
+    else {
+        library.residents = {latest};
+    }
     library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
     QTRY_VERIFY(firstDone);
     QTRY_COMPARE(library.writeCalls, 2);
     QCOMPARE(library.snapshotCalls, 2);
+    QCOMPARE(playlists.snapshotCalls, 2);
     QCOMPARE(library.writeInputs.at(1).front().title(), u"Edit visible when queued work starts"_s);
     QCOMPARE(library.writeInputs.at(1).front().extraTag(u"MOOD"_s), QStringList{u"latest mood"_s});
     QCOMPARE(library.writeInputs.at(1).front().hash(), u"latest hash"_s);
@@ -713,6 +829,7 @@ void FooyinTrackTests::serializesOnlyWithinOneSubmission()
     QTRY_VERIFY(secondDone);
     QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(first));
     QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(second));
+    QCOMPARE(std::get<FooyinTrackCommitSuccess>(second).tracks.front().title(), latest.title());
 }
 
 void FooyinTrackTests::timeoutDoesNotPoisonQueuedCommit()
@@ -772,6 +889,28 @@ void FooyinTrackTests::activeDeadlineIncludesSnapshotWork()
 
 void FooyinTrackTests::guardsCallbacksAndObjectLifetimes()
 {
+    {
+        LibraryBoundary library;
+        PlaylistBoundary playlists;
+        playlists.supplyResidents(library.api);
+        BandcampLibraryGateway gateway{library.api};
+        QObject receiver;
+        bool called = false;
+        FooyinTrackCommitOutcome outcome;
+        submit(gateway, {memberTrack()}, &receiver, [&](FooyinTrackCommitOutcome value) {
+            outcome = std::move(value);
+            called = true;
+        });
+        playlists.owner.reset();
+        QTRY_VERIFY(called);
+        const auto* error = std::get_if<FooyinTrackCommitFailure>(&outcome);
+        QVERIFY(error);
+        QCOMPARE(error->code, FooyinTrackCommitErrorCode::LibraryUnavailable);
+        QCOMPARE(playlists.snapshotCalls, 0);
+        QCOMPARE(library.snapshotCalls, 0);
+        QCOMPARE(library.writeCalls, 0);
+    }
+
     {
         LibraryBoundary library;
         BandcampLibraryGateway gateway{library.api};
@@ -996,6 +1135,51 @@ void FooyinTrackTests::importsIntoCapturedUiPlaylist()
     QCOMPARE(playlists.createCalls, 0);
     QCOMPARE(playlists.insertedPlaylists, QList<Fooyin::UId>{selectedPlaylist});
     QVERIFY(playbackPlaylist != selectedPlaylist);
+}
+
+void FooyinTrackTests::importsPlaylistOnlyResidentMetadata()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    playlists.supplyResidents(library.api);
+    Fooyin::Track resident = makeFooyinTrack(importTrack(71, u"User-edited title"_s, AlbumSource));
+    resident.setId(700);
+    resident.replaceExtraTag(u"MOOD"_s, u"User mood"_s);
+    const QString incomingStream = resident.extraProperties().value(BandcampStreamUrlProperty);
+    resident.setExtraProperty(BandcampStreamUrlProperty, u"https://cdn.example.com/old.mp3"_s);
+    playlists.residents = {{resident}};
+    library.makeWriteAvailable();
+    const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    BandcampImportController controller{1,
+                                        {{BandcampPageKind::Album, AlbumSource, {}}},
+                                        false,
+                                        selected,
+                                        1000,
+                                        library.api,
+                                        playlists.api,
+                                        {}};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(1));
+    controller.finishResolution({1, 1, 1, 0, 0});
+
+    QTRY_COMPARE(library.writeCalls, 1);
+    QVERIFY(playlists.blocks.isEmpty());
+    library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+    QTRY_VERIFY(finished);
+    QCOMPARE(summary.added, 1);
+    QCOMPARE(playlists.insertedPlaylists, QList<Fooyin::UId>{selected});
+    QCOMPARE(playlists.blocks.first().size(), std::size_t{2});
+    QCOMPARE(playlists.blocks.first().at(1).filepath(), bandcampTrackUri(72));
+    for(const Fooyin::Track& chosen : {library.writeInputs.front().front(), playlists.blocks.first().front()}) {
+        QCOMPARE(chosen.filepath(), bandcampTrackUri(71));
+        QCOMPARE(chosen.id(), 700);
+        QCOMPARE(chosen.title(), resident.title());
+        QCOMPARE(chosen.extraTag(u"MOOD"_s), resident.extraTag(u"MOOD"_s));
+        QCOMPARE(chosen.extraProperties().value(BandcampStreamUrlProperty), incomingStream);
+    }
 }
 
 void FooyinTrackTests::createsNewForForcedAndInitiallyUnsuitableDestinations()

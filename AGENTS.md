@@ -172,6 +172,12 @@ database ID, or hash when the Bandcamp track ID is unavailable.
   writes only distinct resident targets through the public host API, and uses
   that request's `WriteResult` as its persistence outcome. It does not read back,
   observe host changes, or repair writes.
+- Library residents are authoritative. Identities absent there use the first
+  matching copy in current playlist order, then occurrence order within that
+  playlist. These owning-thread snapshots preserve the chosen whole Fooyin
+  record and merge only incoming transport properties; request occurrences and
+  order remain unchanged. First match is not a newest-edit rule, field merge,
+  or synchronization/repair of other live copies.
 - Extra tags already present on a resident track, including `COVERART`, are
   preserved. The plugin does not create artwork tags or artwork locators.
 

@@ -157,7 +157,7 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
         forceNewPlaylist,
         selectedPlaylistId,
         settings.itemTimeoutMs,
-        fooyinLibraryApi(interactor ? interactor->library() : nullptr),
+        fooyinLibraryApi(interactor ? interactor->library() : nullptr, handler),
         std::move(playlistApi),
         [service = QPointer<BandcampService>{m_service}](BandcampOperationId operationId) {
             if(service) {

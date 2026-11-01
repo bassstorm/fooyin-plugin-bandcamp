@@ -19,6 +19,10 @@
 #include <optional>
 #include <variant>
 
+namespace Fooyin {
+class PlaylistHandler;
+}
+
 namespace Fooyin::Bandcamp {
 inline constexpr auto StreamProviderProperty   = "_STREAM_PROVIDER";
 inline constexpr auto BandcampSourceUrlProperty = "_BANDCAMP_SOURCE_URL";
@@ -35,11 +39,14 @@ struct FooyinLibraryApi
 {
     QPointer<QObject> owner;
     std::function<Fooyin::TrackList()> tracks;
+    QPointer<QObject> playlistOwner;
+    // Copied in current playlist order, then occurrence order, on the owning thread.
+    std::function<Fooyin::TrackList()> playlistTracks;
     std::function<std::shared_ptr<Fooyin::TrackMetadataStore>()> metadataStore;
     std::function<Fooyin::WriteRequest(const Fooyin::TrackList&)> writeTrackMetadata;
 };
 
-[[nodiscard]] FooyinLibraryApi fooyinLibraryApi(Fooyin::MusicLibrary* library);
+[[nodiscard]] FooyinLibraryApi fooyinLibraryApi(Fooyin::MusicLibrary* library, Fooyin::PlaylistHandler* playlists);
 
 struct FooyinTrackCommitSuccess
 {

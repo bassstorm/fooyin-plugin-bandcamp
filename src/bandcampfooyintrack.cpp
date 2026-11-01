@@ -3,6 +3,9 @@
 #include "bandcamplogging.h"
 #include "bandcamptrackuri.h"
 
+#include <core/playlist/playlist.h>
+#include <core/playlist/playlisthandler.h>
+
 #include <QHash>
 #include <QMetaObject>
 #include <QRegularExpression>
@@ -155,10 +158,26 @@ std::optional<qint64> bandcampStreamExpiryMs(const QString& streamUrl)
     return seconds * 1000;
 }
 
-FooyinLibraryApi fooyinLibraryApi(Fooyin::MusicLibrary* library)
+FooyinLibraryApi fooyinLibraryApi(Fooyin::MusicLibrary* library, Fooyin::PlaylistHandler* playlists)
 {
     FooyinLibraryApi api;
     api.owner = library;
+    api.playlistOwner = playlists;
+    const QPointer<Fooyin::PlaylistHandler> guardedPlaylists{playlists};
+    api.playlistTracks = [guardedPlaylists]() -> Fooyin::TrackList {
+        if(!guardedPlaylists) {
+            throw std::runtime_error{"The playlist handler was destroyed."};
+        }
+        Fooyin::TrackList snapshot;
+        for(const Fooyin::Playlist* playlist : guardedPlaylists->playlists()) {
+            if(!playlist) {
+                throw std::runtime_error{"A playlist snapshot is unavailable."};
+            }
+            const Fooyin::TrackList& tracks = playlist->tracks();
+            snapshot.insert(snapshot.end(), tracks.cbegin(), tracks.cend());
+        }
+        return snapshot;
+    };
     if(!library) {
         return api;
     }
@@ -242,16 +261,16 @@ void BandcampLibraryGateway::commit(QList<BandcampResolvedTrack> incoming, int a
         return;
     }
 
-    if(!m_api.owner) {
+    if(!m_api.owner || !m_api.playlistOwner) {
         const auto error = failure(FooyinTrackCommitErrorCode::LibraryUnavailable, 0,
-                                   QStringLiteral("The music library is unavailable."));
+                                   QStringLiteral("The music library or playlist handler is unavailable."));
         logFailure(correlation, error);
         deliver(callbackContext, std::move(completion), error, correlation);
         return;
     }
 
     if(QThread::currentThread() != thread() || callbackContext->thread() != thread()
-       || m_api.owner->thread() != thread()) {
+       || m_api.owner->thread() != thread() || m_api.playlistOwner->thread() != thread()) {
         const auto error = failure(FooyinTrackCommitErrorCode::WrongThread, 0,
                                    QStringLiteral("The library submission must run on its owning thread."));
         logFailure(correlation, error);
@@ -321,9 +340,15 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
     }
     m_active->deadline.start();
     QTimer::singleShot(request.activeTimeoutMs, this, [this, token]() { onTimeout(token); });
-    if(!m_api.owner || !m_api.tracks || !m_api.metadataStore || !m_api.writeTrackMetadata) {
+    if(!m_api.owner || !m_api.playlistOwner || !m_api.tracks || !m_api.playlistTracks
+       || !m_api.metadataStore || !m_api.writeTrackMetadata) {
         failActive(failure(FooyinTrackCommitErrorCode::LibraryUnavailable, 0,
-                           QStringLiteral("The public library persistence interface is unavailable.")));
+                           QStringLiteral("The public library or playlist interface is unavailable.")));
+        return;
+    }
+    if(m_api.owner->thread() != thread() || m_api.playlistOwner->thread() != thread()) {
+        failActive(failure(FooyinTrackCommitErrorCode::WrongThread, 0,
+                           QStringLiteral("The resident snapshots must be read on their owning thread.")));
         return;
     }
 
@@ -332,33 +357,39 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
         requestedIds.insert(incoming.track.id);
     }
 
-    Fooyin::TrackList residentSnapshot;
+    Fooyin::TrackList librarySnapshot;
+    Fooyin::TrackList playlistSnapshot;
     std::shared_ptr<Fooyin::TrackMetadataStore> metadataStore;
     try {
-        residentSnapshot = m_api.tracks();
+        librarySnapshot  = m_api.tracks();
+        playlistSnapshot = m_api.playlistTracks();
         metadataStore    = m_api.metadataStore();
     }
     catch(...) {
         failActive(failure(FooyinTrackCommitErrorCode::HostOperationFailed, 0,
-                           QStringLiteral("The library snapshot could not be read.")));
+                           QStringLiteral("The library or playlist snapshot could not be read.")));
         return;
     }
 
     QHash<qint64, Fooyin::Track> residentsByTrackId;
-    for(const Fooyin::Track& resident : residentSnapshot) {
-        const auto id = parseBandcampTrackUri(resident.filepath());
-        if(!id || !requestedIds.contains(*id)) {
-            continue;
-        }
+    for(const auto* snapshot : {&librarySnapshot, &playlistSnapshot}) {
+        for(const Fooyin::Track& resident : *snapshot) {
+            const auto id = parseBandcampTrackUri(resident.filepath());
+            if(!id || !requestedIds.contains(*id)) {
+                continue;
+            }
 
-        if(resident.hasExtraProperty(BandcampTrackIdProperty)) {
-            if(trackProperty(resident, BandcampTrackIdProperty) != QString::number(*id)) {
-                failActive(failure(FooyinTrackCommitErrorCode::InvalidIdentity, *id,
-                                   QStringLiteral("A resident track ID mirror conflicts with its URI.")));
-                return;
+            if(resident.hasExtraProperty(BandcampTrackIdProperty)) {
+                if(trackProperty(resident, BandcampTrackIdProperty) != QString::number(*id)) {
+                    failActive(failure(FooyinTrackCommitErrorCode::InvalidIdentity, *id,
+                                       QStringLiteral("A resident track ID mirror conflicts with its URI.")));
+                    return;
+                }
+            }
+            if(snapshot == &librarySnapshot || !residentsByTrackId.contains(*id)) {
+                residentsByTrackId.insert(*id, resident);
             }
         }
-        residentsByTrackId.insert(*id, resident);
     }
 
     QSet<int> writeTargetIds;
@@ -472,9 +503,9 @@ void BandcampLibraryGateway::onWriteFinished(quint64 token)
         abandonActive();
         return;
     }
-    if(!m_api.owner) {
+    if(!m_api.owner || !m_api.playlistOwner) {
         failActive(failure(FooyinTrackCommitErrorCode::LibraryUnavailable, 0,
-                           QStringLiteral("The music library was destroyed during persistence.")));
+                           QStringLiteral("The music library or playlist handler was destroyed during persistence.")));
         return;
     }
 
