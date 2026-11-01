@@ -17,6 +17,8 @@ set(BANDCAMP_CORE_SOURCES
     ${BANDCAMP_SRC_DIR}/bandcampassembly.h
     ${BANDCAMP_SRC_DIR}/bandcampparser.cpp
     ${BANDCAMP_SRC_DIR}/bandcampparser.h
+    ${BANDCAMP_SRC_DIR}/bandcamphtmlreader.cpp
+    ${BANDCAMP_SRC_DIR}/bandcamphtmlreader_p.h
     ${BANDCAMP_SRC_DIR}/bandcampdirtytitle.cpp
     ${BANDCAMP_SRC_DIR}/bandcampdirtytitle.h
     ${BANDCAMP_SRC_DIR}/bandcampresolution.cpp

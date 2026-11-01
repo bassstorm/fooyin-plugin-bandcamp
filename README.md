@@ -21,13 +21,12 @@ version. Choose the bundle that matches your system and Fooyin.
 
 ### Runtime
 
-- libxml2.
+- None beyond Fooyin requirements.
 
 ### Compile time
 
 - CMake 3.21 or newer and a C++23 compiler.
 - Qt 6 development files: Core, Concurrent, and Network.
-- libxml2 development files, for example `libxml2-dev`.
 - A Fooyin development install: headers, the CMake package config, and libraries.
 
 CMake finds Fooyin through `Fooyin_ROOT`, which points to the Fooyin install

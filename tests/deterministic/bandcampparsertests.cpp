@@ -1,5 +1,6 @@
 #include "bandcampparser.h"
 
+#include "bandcamphtmlreader_p.h"
 #include "bandcamplogcapture.h"
 #include "bandcamptestpages.h"
 
@@ -88,6 +89,8 @@ private slots:
     void extractsOpaqueContinuationLocator();
     void malformedListingEntriesFailExplicitly_data();
     void malformedListingEntriesFailExplicitly();
+    void limitedHtmlReader_data();
+    void limitedHtmlReader();
 };
 
 void ParserTests::init()
@@ -726,6 +729,92 @@ void ParserTests::malformedListingEntriesFailExplicitly()
     const auto* failure = std::get_if<ResolutionFailure>(&outcome);
     QVERIFY(failure);
     QCOMPARE(failure->error.stage, ResolutionStage::Parse);
+}
+
+void ParserTests::limitedHtmlReader_data()
+{
+    QTest::addColumn<QByteArray>("markup");
+    QTest::addColumn<QString>("tags");
+    // 0=end, 1=malformed, 2=limit, 3=withdraw after the first tag.
+    QTest::addColumn<int>("terminal");
+    QTest::newRow("attributes")
+        << QByteArray("<X A = 'one>two' B=unquoted c=\"&amp;quot;\"disabled></X>")
+        << u"x:0 /x:0"_s << 0;
+    QTest::newRow("ignored-contexts")
+        << QByteArray("<!-- <x> --><![CDATA[<x>]]><SCRIPT/>'<x>'</SCRIPT><style><x></style><textarea><x></textarea>")
+        << u"script:0 /script:0 style:0 /style:0 textarea:0 /textarea:0"_s << 0;
+    QTest::newRow("omitted-rows")
+        << QByteArray("<ol><li><div><a></a><li><a></a></ol>")
+        << u"ol:0 li:1 div:2 a:3 /a:3 li:1 a:2 /a:2 /ol:0"_s << 0;
+    QTest::newRow("svg-reference-leaf") << QByteArray("<svg><use href='#icon'></svg>")
+        << u"svg:0 use:1 /svg:0"_s << 0;
+    QTest::newRow("unrelated-form-list")
+        << QByteArray("<ul><li><form><li></li></form></li></ul>")
+        << u"ul:0 li:1 form:2 li:3 /li:3 /form:2 /li:1 /ul:0"_s << 0;
+    QTest::newRow("stray-end") << QByteArray("<div></span></div>") << u"div:0 /span:1 /div:0"_s << 0;
+    QTest::newRow("duplicate-attribute") << QByteArray("<x A=one a=two><unknown></unknown>") << QString{} << 1;
+    QTest::newRow("truncated-quote") << QByteArray("<x a='one>") << QString{} << 1;
+    QTest::newRow("truncated-comment") << QByteArray("<x></x><!--") << u"x:0 /x:0"_s << 1;
+    QTest::newRow("truncated-raw-text") << QByteArray("<script><x>") << u"script:0"_s << 1;
+    QTest::newRow("truncated-list") << QByteArray("<ol><li><a></a>") << u"ol:0 li:1 a:2 /a:2"_s << 1;
+    QTest::newRow("field-boundary") << QByteArray("<x a='") + QByteArray(32, 'x') + "'></x>" << u"x:0 /x:0"_s << 0;
+    QTest::newRow("field-overflow") << QByteArray("<x a='") + QByteArray(33, 'x') + "'></x>" << QString{} << 2;
+    QTest::newRow("opaque-and-client")
+        << QByteArray("<x data-blob='") + QByteArray(33, 'x') + "' data-client-items='" + QByteArray(33, 'x') + "'></x>"
+        << u"x:0 /x:0"_s << 0;
+    QTest::newRow("depth-boundary") << QByteArray("<x><x><x><x><x></x></x></x></x></x>")
+        << u"x:0 x:1 x:2 x:3 x:4 /x:4 /x:3 /x:2 /x:1 /x:0"_s << 0;
+    QTest::newRow("depth-overflow") << QByteArray("<x><x><x><x><x><br>")
+        << u"x:0 x:1 x:2 x:3 x:4"_s << 2;
+    QTest::newRow("record-boundary") << QByteArray("<br>").repeated(32)
+        << QStringList(32, u"br:0"_s).join(u' ') << 0;
+    QTest::newRow("record-overflow") << QByteArray("<br>").repeated(33)
+        << QStringList(32, u"br:0"_s).join(u' ') << 2;
+    QTest::newRow("page-boundary") << QByteArray("<x>") + QByteArray(249, ' ') + "</x>" << u"x:0 /x:0"_s << 0;
+    QTest::newRow("page-overflow") << QByteArray(257, ' ') << QString{} << 2;
+    QTest::newRow("cancelled") << QByteArray("<script>ignored</script>") << u"script:0"_s << 3;
+    QTest::newRow("unfinished-utf8") << QByteArray("<x></x>\xc3") << QString{} << 1;
+}
+
+void ParserTests::limitedHtmlReader()
+{
+    QFETCH(QByteArray, markup);
+    QFETCH(QString, tags);
+    QFETCH(int, terminal);
+    std::atomic_bool stop{false};
+    Private::HtmlReader reader{markup, {256, 4, 32, 32}, &stop};
+    QStringList observed;
+    Private::HtmlRead read;
+    while(true) {
+        read = reader.next();
+        const auto* tag = std::get_if<Private::HtmlTag>(&read);
+        if(!tag) {
+            break;
+        }
+        observed.append((tag->closing ? u"/"_s : QString{}) + tag->name + u':' + QString::number(tag->depth));
+        if(!tag->closing && markup.contains("one>two")) {
+            QCOMPARE(tag->attributes.value(u"a"_s), u"one>two"_s);
+            QCOMPARE(tag->attributes.value(u"b"_s), u"unquoted"_s);
+            QCOMPARE(tag->attributes.value(u"c"_s), u"&quot;"_s);
+            QVERIFY(tag->attributes.contains(u"disabled"_s));
+        }
+        if(terminal == 3) {
+            stop.store(true);
+        }
+    }
+    QCOMPARE(observed.join(u' '), tags);
+    if(terminal == 0) {
+        QVERIFY(std::holds_alternative<Private::HtmlEnd>(read));
+    }
+    else if(terminal == 3) {
+        QVERIFY(std::holds_alternative<Private::HtmlCancelled>(read));
+    }
+    else {
+        QVERIFY(std::holds_alternative<Private::HtmlError>(read));
+        QCOMPARE(std::get<Private::HtmlError>(read).kind,
+                 terminal == 1 ? Private::HtmlError::Malformed : Private::HtmlError::ResourceLimit);
+    }
+    QCOMPARE(reader.next().index(), read.index());
 }
 } // namespace
 

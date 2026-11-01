@@ -6,9 +6,6 @@
     "updateRemoteUserUID": true,
 
     "features": {
-        "ghcr.io/devcontainers-extra/features/apt-packages:1": {
-            "packages": "libxml2-dev"
-        },
         "./features/fooyin": {
             "version": "latest"
         }

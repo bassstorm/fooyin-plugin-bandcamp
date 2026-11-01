@@ -19,7 +19,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libxml2-dev
+          sudo apt-get install -y ninja-build
 
       - name: Install Fooyin
         run: sudo bash .devcontainer/features/fooyin/install.sh
