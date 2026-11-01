@@ -10,6 +10,7 @@ add_executable(bandcamp_deterministic_tests
     bandcamporchestratortests.cpp
     bandcampservicetests.cpp
     bandcampfooyintracktests.cpp
+    bandcamprefreshtests.cpp
 )
 
 target_link_libraries(bandcamp_deterministic_tests PRIVATE bandcamp_fooyin bandcamp_core Fooyin::Core Qt6::Core Qt6::Test)

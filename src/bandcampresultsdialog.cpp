@@ -7,13 +7,14 @@
 #include <QVBoxLayout>
 
 namespace Fooyin::Bandcamp {
-BandcampResultsDialog::BandcampResultsDialog(QWidget* parent)
+BandcampResultsDialog::BandcampResultsDialog(QWidget* parent, bool refreshing)
     : QDialog{parent}
-    , m_status{new QLabel(tr("Starting Bandcamp import…"), this)}
+    , m_refreshing{refreshing}
+    , m_status{new QLabel(refreshing ? tr("Starting Bandcamp stream refresh…") : tr("Starting Bandcamp import…"), this)}
     , m_progress{new QProgressBar(this)}
     , m_buttons{new QDialogButtonBox(QDialogButtonBox::Cancel, this)}
 {
-    setWindowTitle(tr("Bandcamp Import"));
+    setWindowTitle(refreshing ? tr("Bandcamp Stream Refresh") : tr("Bandcamp Import"));
     setMinimumWidth(420);
     m_status->setWordWrap(true);
     m_status->setTextFormat(Qt::PlainText);
@@ -53,11 +54,20 @@ void BandcampResultsDialog::updateProgress(const BandcampOperationProgress& prog
             break;
         }
         case BandcampOperationPhase::Finished:
-            m_status->setText(tr("Finishing import…"));
+            m_status->setText(m_refreshing ? tr("Finishing stream updates…") : tr("Finishing import…"));
             m_progress->show();
             m_progress->setRange(0, 0);
             break;
     }
+}
+
+void BandcampResultsDialog::finishRefresh(const BandcampRefreshSummary& summary)
+{
+    m_status->setText(tr("Refresh finished (unique selected Bandcamp tracks): %1 updated, %2 unchanged, "
+                        "%3 failed, %4 cancelled.")
+                          .arg(summary.updated).arg(summary.unchanged).arg(summary.failed).arg(summary.cancelled));
+    m_progress->hide();
+    m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Close"));
 }
 
 void BandcampResultsDialog::showImporting()

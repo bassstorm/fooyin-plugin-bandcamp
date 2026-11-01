@@ -3,6 +3,8 @@
 #include <QString>
 
 namespace Fooyin::Bandcamp {
+inline constexpr qsizetype MaxBandcampStreamUrlChars = 16384;
+
 enum class BandcampPageKind : unsigned char
 {
     Discography,
@@ -26,4 +28,5 @@ struct BandcampPageUrl
 
 BandcampPageUrl parseBandcampPageUrl(const QString& text);
 QString pageKindName(BandcampPageKind kind);
+[[nodiscard]] bool isSupportedBandcampStreamUrl(const QString& text);
 } // namespace Fooyin::Bandcamp

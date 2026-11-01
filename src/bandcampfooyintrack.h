@@ -61,6 +61,7 @@ enum class FooyinTrackCommitErrorCode : quint8
 {
     Cancelled,
     InvalidIdentity,
+    MissingResident,
     InvalidTimeout,
     LibraryUnavailable,
     WrongThread,
@@ -88,8 +89,12 @@ public:
     void cancel();
     void commit(QList<BandcampResolvedTrack> incoming, int activeTimeoutMs, QObject* callbackContext,
                 CorrelationContext correlation, Completion completion);
+    void refreshTransport(BandcampResolvedTrack incoming, int activeTimeoutMs, QObject* callbackContext,
+                          CorrelationContext correlation, Completion completion);
 
 private:
+    void enqueue(QList<BandcampResolvedTrack> incoming, int activeTimeoutMs, QObject* callbackContext,
+                 CorrelationContext correlation, Completion completion, bool refreshOnly);
     struct CommitRequest
     {
         quint64 token{0};
@@ -99,6 +104,7 @@ private:
         CorrelationContext correlation;
         Completion completion;
         QMetaObject::Connection receiverDestroyed;
+        bool refreshOnly{false};
     };
 
     struct ActiveCommit
@@ -113,6 +119,7 @@ private:
         bool timedOut{false};
         bool callbackDelivered{false};
         bool withdrawn{false};
+        bool enteringWrite{false};
     };
 
     void scheduleNext();

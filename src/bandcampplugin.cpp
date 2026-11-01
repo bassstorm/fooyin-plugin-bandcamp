@@ -3,6 +3,7 @@
 #include "bandcampimportcontroller.h"
 #include "bandcamplogging.h"
 #include "bandcampresultsdialog.h"
+#include "bandcamprefresh.h"
 #include "bandcampsettings.h"
 #include "bandcampsettingsdialog.h"
 #include "bandcampurldialog.h"
@@ -17,6 +18,7 @@
 #include <gui/plugins/guiplugincontext.h>
 #include <gui/playlist/currentplaylistcontroller.h>
 #include <gui/playlist/playlistinteractor.h>
+#include <gui/trackselectioncontroller.h>
 #include <utils/actions/actioncontainer.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/actions/command.h>
@@ -24,6 +26,8 @@
 
 #include <QAction>
 #include <QMainWindow>
+#include <QMenu>
+#include <QDateTime>
 
 #include <stdexcept>
 
@@ -64,6 +68,59 @@ void BandcampPlugin::initialise(const GuiPluginContext& context)
     context.actionManager->actionContainer(Constants::Menus::File)->addAction(command, Actions::Groups::One);
 
     QObject::connect(addUrlAction, &QAction::triggered, this, &BandcampPlugin::showAddUrlDialog);
+    if(context.trackSelection) {
+        const bool registered = context.trackSelection->registerTrackContextAction(
+            this, TrackContextMenuArea::Track, Constants::Menus::Context::TrackSelection,
+            "Bandcamp.RefreshStreams", tr("Refresh Bandcamp streams"),
+            [this](QMenu* menu, const Fooyin::TrackSelection& selection) {
+                auto* action = menu->addAction(tr("Refresh Bandcamp streams"));
+                action->setEnabled(hasSelectedBandcampTracks(selection.tracks));
+                connect(action, &QAction::triggered, this, [this, tracks = selection.tracks]() {
+                    refreshSelectedTracks(tracks);
+                });
+            },
+            Constants::Menus::Context::TrackFinalSeparator);
+        if(!registered) {
+            qCWarning(BANDCAMP_UI) << "Failed to register the Bandcamp stream refresh track context action";
+        }
+    }
+    else {
+        qCWarning(BANDCAMP_UI) << "Track selection controller unavailable; stream refresh action was not registered";
+    }
+}
+
+void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
+{
+    if(!hasSelectedBandcampTracks(tracks)) {
+        return;
+    }
+    try {
+        FySettings fySettings;
+        const auto settings = loadBandcampSettings(fySettings);
+        OperationOptions options;
+        options.parallelism = settings.parallelism;
+        options.itemTimeoutMs = settings.itemTimeoutMs;
+        options.discographyOrder = settings.discographyOrder;
+        options.prePlaybackRefreshWindowMs
+            = refreshWindowMilliseconds(settings.prePlaybackRefreshWindowMinutes);
+        const QPointer<Fooyin::PlaylistInteractor> interactor{m_playlistInteractor};
+        auto* operation = new BandcampRefreshOperation{
+            m_service, tracks, options,
+            fooyinLibraryApi(interactor ? interactor->library() : nullptr,
+                            interactor ? interactor->handler() : nullptr), this};
+        auto* dialog = new BandcampResultsDialog(Utils::getMainWindow(), true);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(operation, &BandcampRefreshOperation::progressChanged, dialog,
+                &BandcampResultsDialog::updateProgress);
+        connect(operation, &BandcampRefreshOperation::finished, dialog, &BandcampResultsDialog::finishRefresh);
+        connect(operation, &BandcampRefreshOperation::finished, operation, &QObject::deleteLater);
+        connect(dialog, &QDialog::finished, operation, &BandcampRefreshOperation::cancel);
+        dialog->open();
+        operation->start(QDateTime::currentMSecsSinceEpoch());
+    }
+    catch(...) {
+        qCWarning(BANDCAMP_UI) << "Starting the selected Bandcamp stream refresh failed";
+    }
 }
 
 void BandcampPlugin::showAddUrlDialog()

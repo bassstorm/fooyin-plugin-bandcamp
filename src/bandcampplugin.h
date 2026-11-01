@@ -4,6 +4,7 @@
 #include "bandcampurl.h"
 
 #include <core/plugins/coreplugin.h>
+#include <core/track.h>
 #include <core/plugins/plugin.h>
 #include <gui/plugins/guiplugin.h>
 #include <gui/plugins/pluginconfigguiplugin.h>
@@ -41,6 +42,7 @@ public:
 private:
     void showAddUrlDialog();
     void onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool forceNewPlaylist);
+    void refreshSelectedTracks(const Fooyin::TrackList& tracks);
 
     // Kept alive for as long as the service that uses it.
     std::shared_ptr<NetworkAccessManager> m_network;

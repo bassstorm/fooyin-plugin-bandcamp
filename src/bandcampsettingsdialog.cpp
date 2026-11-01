@@ -34,11 +34,12 @@ BandcampSettingsDialog::BandcampSettingsDialog(QWidget* parent)
     m_discographyOrder->addItems({tr("Default"), tr("Unsorted"), tr("Ascending"), tr("Descending")});
     m_discographyOrder->setToolTip(tr("Default currently uses the unsorted listing order"));
 
-    auto* refreshLabel = new QLabel(tr("Pre-playback refresh window") + u":"_s, this);
+    auto* refreshLabel = new QLabel(tr("Stream refresh window") + u":"_s, this);
     m_refreshWindow->setRange(MinRefreshWindowMinutes, MaxRefreshWindowMinutes);
     m_refreshWindow->setSuffix(u" min"_s);
     m_refreshWindow->setToolTip(
-        tr("Refresh streams with less than this lifetime remaining; zero refreshes expired streams only"));
+        tr("Manual refresh updates streams with less than this lifetime remaining. Zero refreshes expired "
+           "streams only; unknown or untrusted expiry is always refreshed."));
 
     auto* note = new QLabel(tr("Changes apply to the next submission."), this);
 

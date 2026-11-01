@@ -283,16 +283,44 @@ even when some candidates cannot become valid domain tracks.
 
 ### Stream refresh
 
-- Stream URLs are signed and expire. Before playback, refresh an expired stream
-  or one whose remaining lifetime is less than the configured refresh window
-  (default 60 minutes). Reuse a stream outside that window. The window is a
-  remaining-lifetime threshold, not a periodic refresh interval.
+- Stream URLs are signed and expire. Manual refresh and playback preparation
+  use the existing configured refresh window (default 60 minutes): refresh an
+  expired stream or one whose remaining lifetime is strictly less than the
+  window. Exactly the threshold remains reusable; zero means expired-only.
+  The window is a remaining-lifetime threshold, not a periodic refresh interval.
 - Refresh by `sourceUrl`: one album fetch supplies refreshed streams for its
   member tracks; one standalone-track fetch supplies its own stream.
 - Group tracks sharing a release within one refresh submission; distribute
   refreshed streams by stable track ID, not filtered list position.
   Separate submissions are independent. An album-linked track does not require
   another track-page fetch on refresh.
+- Refresh resolves deduplicated canonical release URLs through the normal
+  orchestration/resolution pipeline. Album sources use whole-album admission;
+  selection restricts transport updates, not the album's validity requirements.
+  A failed album resolution fails refresh for all its requested consumers,
+  without stopping unrelated releases. A successful model must contain each
+  selected track ID before that track's transport can be updated.
+- This release-level failure policy is an accepted trade-off: a sibling losing
+  its stream can prevent refreshing an otherwise usable selected track. A track
+  successfully imported from its own page can also fail refresh via its album
+  source when an unrelated sibling was already unresolved at import time.
+  Do not add selected-ID album admission or fetch member pages to bypass this.
+  Resolution failures leave existing transport unchanged, potentially expired;
+  logs retain the cause and the UI summary counts failed requested tracks.
+- Manual refresh uses this freshness policy over explicitly selected Bandcamp
+  tracks, with the window and other settings captured at submission.
+  Disable the action when none are selected; never fall back to a full playlist.
+  Ignore selected non-Bandcamp entries. Unknown/untrusted expiry requires
+  refresh, not an assumption of infinite validity. Reuse the existing setting
+  and persisted key; do not introduce a separate manual-refresh window.
+  Forced refresh is deferred until after the development plan is complete.
+- Persisted expiry is trusted only when its positive decimal milliseconds agree
+  with the observed stream `ts` seconds. Missing or untrusted expiry is eligible.
+  A refresh pass requires a usable future expiry; a still-valid returned stream
+  inside the window is accepted without a second refresh.
+- Manual refresh counts unique selected Bandcamp identities, not playlist
+  occurrences or non-Bandcamp entries. An update is counted only after a
+  successful resident transport write; withdrawal does not undo accepted writes.
 - Keep signed stream locators separate from canonical release identity. Never
   derive metadata or membership from them, and never strip their required query
   parameters when using them for playback.

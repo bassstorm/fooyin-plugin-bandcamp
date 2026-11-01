@@ -45,8 +45,12 @@ than being deferred to a final hardening step.
   failures remain in existing logs. Page fetches are not automatically retried.
   Already committed results remain when a run is cancelled or its target becomes
   unavailable.
-- Support manual expired-only and forced stream refresh for selected Bandcamp
-  tracks, or the UI-selected playlist when no tracks are selected.
+- Support manual stream refresh for selected Bandcamp tracks using the existing
+  refresh-window setting: expired, unknown/untrusted expiry, or strictly less
+  remaining lifetime than the window. Exactly the threshold remains reusable;
+  zero means expired-only. Capture the window with the submission's options.
+  Disable the action when no Bandcamp tracks are selected; never fall back to
+  the whole playlist. Forced refresh is deferred until after this plan is complete.
 - Before playback, refresh an expired stream or one whose remaining lifetime
   is less than a configurable threshold, default **60 minutes**. This is a
   pre-playback freshness check, not a periodic refresh schedule.
@@ -165,9 +169,10 @@ infrastructure, not a second implementation. No additional input
 
 - Keep the occurrence/order map separate from the unique work queue.
   Deduplicating work must not remove requested playlist occurrences.
-- A release request contains its URL and the minimum selection information
-  needed to distinguish a whole release from selected track IDs. Original UI
-  inputs and final ordering stay outside the resolver.
+- A release request identifies an album or track-page URL. Refresh submits
+  canonical release URLs through the same pipeline and keeps its selected
+  consumer IDs outside the resolver for matching against successful models.
+  Original UI inputs and final ordering stay outside the resolver.
 - The resolver acquires any required parent as part of the same item workflow,
   then assembles, admits, and refines the result. Parent acquisition is not a
   new top-level item requiring another item-admission slot.
@@ -176,8 +181,10 @@ infrastructure, not a second implementation. No additional input
   candidates, or failures. Reuse must preserve source authority and selection
   scope; selected-track validity does not imply whole-album validity.
 - Playlist import and stream refresh consume the same plugin model. Refresh
-  selects the required tracks and updates transport fields only; it does not
-  introduce a parallel parser, model-building pipeline, or warning mechanism.
+  selects the required tracks from successfully resolved release models and
+  updates transport fields only. Album refresh retains whole-album atomicity;
+  it does not introduce selected-ID album admission, a parallel parser,
+  model-building pipeline, or warning mechanism.
 - Snapshot options and preserve an outcome for every accepted request.
   Expected failures are typed values; cancellation is distinct. A failed item
   does not stop unrelated work or block final ordering.
@@ -358,9 +365,10 @@ HTTP or worker simulation; happy-path composition uses the production pipeline.
   complete chronological order is intentional, not stalled progress.
 - Add persisted **Default / Unsorted / Ascending / Descending** options to the
   settings dialog, preserving Default as a setting distinct from its current
-  Unsorted interpretation. Add the pre-playback refresh-window setting with a
+  Unsorted interpretation. Add the shared refresh-window setting with a
   60-minute default, finite nonnegative bounds, and checked unit conversions.
-  Zero means expired-only refresh. Preserve timeout/parallelism settings.
+  Manual refresh and pre-playback checks reuse this setting and its persisted
+  key. Zero means expired-only refresh. Preserve timeout/parallelism settings.
 
 **Complete when:** paginated synthetic listings resolve without missing entries
 or order instability; both date directions, unknowns, ties, discovery failures,
@@ -498,28 +506,50 @@ logging; completion logs contain high-level counts and integration-owned failure
 
 ### Increment 9 - Shared stream refresh and manual actions
 
-- Build the stream resolver on the existing release pipeline and stable-ID
-  selection logic. Refresh canonical album sources for members and track sources
-  for standalone tracks; do not add a second raw parser or per-member fetch path.
-- One album request distributes available refreshed transport state by track ID
-  to its consumers. Missing selected children fail their own refresh scope;
-  unrelated bad siblings do not discard usable selected streams.
+- Resolve deduplicated canonical source URLs through the existing orchestration
+  and release pipeline: album sources for members, track sources for standalone
+  tracks. Do not add selected-ID album admission, a second raw parser, or a
+  per-member fetch path.
+- One successfully resolved album supplies refreshed transport state to its
+  selected consumers by track ID. Missing selected IDs fail their own refresh;
+  an album resolution failure fails all its requested consumers, while unrelated
+  releases continue. Selection restricts updates, not whole-album admission.
+- Accepted risk: a sibling losing its stream after import can block refresh of
+  an otherwise usable selected track. A member imported through its track page
+  can also fail album-source refresh if an unrelated sibling was already
+  unresolved at import time. Failed resolution leaves stored transport unchanged,
+  potentially expired; logs report the cause and the UI summary counts failed
+  requested tracks. Do not bypass this policy with partial album results.
 - Validate source/URI/ID consistency and signed HTTPS locators. Preserve query
   parameters for transport and parse expiry without overflow. Unknown/untrusted
   expiry requires establishing fresh usable state, not assuming infinite validity.
-- Implement manual expired-only and forced modes over selected Bandcamp tracks,
-  falling back to the UI-selected playlist when selection is empty. Ignore
-  non-Bandcamp tracks as outside the requested action's scope.
+- Implement manual refresh over selected Bandcamp tracks using the existing
+  refresh-window setting and persisted key, captured with submission options.
+  Refresh expired streams, unknown/untrusted expiry, and streams with strictly
+  less remaining lifetime than the window. Exactly the threshold remains
+  reusable; zero means expired-only. Do not add a separate manual setting.
+  Disable the action when no Bandcamp tracks are selected; never refresh the
+  whole playlist as a fallback. Ignore non-Bandcamp tracks as outside the
+  requested action's scope.
+  Forced refresh is deferred until after this plan is complete.
 - Persist only provider/source/stream/expiry transport properties on the latest
   resident identities. Report refresh and write outcomes separately; never
   overwrite user tags, artwork edits, statistics, or filepath.
 - Group same-release tracks within one refresh submission and associate cached
   domain entities with validated release/track identities and selection scope.
   Separate submissions have independent acquisition, caches, and cancellation.
+- The track context action consumes its supplied explicit selection; it does not
+  use retained display selection or playback selection. Summaries count unique
+  selected Bandcamp identities as updated, unchanged, failed, or cancelled.
+  Updated requires successful persistence, not merely successful resolution.
 
 **Complete when:** one album acquisition refreshes several selected members,
 standalone refresh works, malformed or mismatched state fails explicitly, and
 manual refresh persists transport changes without changing edited metadata.
+No-selection disables the action, and failed release resolution leaves existing
+transport unchanged while reporting failed consumer counts. Deterministic tests
+verify the configured window, zero/default values, unknown expiry, and the exact
+threshold boundary; changing settings affects only subsequent submissions.
 
 ### Increment 10 - Playback and bounded reopen recovery
 

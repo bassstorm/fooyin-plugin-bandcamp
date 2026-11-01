@@ -6,6 +6,16 @@
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::Bandcamp {
+bool isSupportedBandcampStreamUrl(const QString& text)
+{
+    if(text.isEmpty() || text.size() > MaxBandcampStreamUrlChars) {
+        return false;
+    }
+    const QUrl url{text, QUrl::StrictMode};
+    return url.isValid() && url.scheme() == QStringLiteral("https")
+        && !url.host().isEmpty() && url.userInfo().isEmpty() && !url.hasFragment();
+}
+
 namespace {
 constexpr int MaxUrlLength = 2048;
 

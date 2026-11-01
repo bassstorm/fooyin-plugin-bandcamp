@@ -547,9 +547,7 @@ CandidateField<QString> streamLocator(const QJsonValue& value)
             return false;
         }
         out = input.toString();
-        const QUrl url(out, QUrl::StrictMode);
-        return url.isValid() && url.scheme() == u"https" && !url.host().isEmpty() && url.userInfo().isEmpty()
-            && !url.hasFragment();
+        return isSupportedBandcampStreamUrl(out);
     });
 }
 

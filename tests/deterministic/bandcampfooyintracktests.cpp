@@ -130,6 +130,9 @@ public:
                 throw std::runtime_error{"write promise unavailable"};
             }
             auto promise = promises.at(promiseIndex++);
+            if(writeHook) {
+                writeHook();
+            }
             return Fooyin::WriteRequest{[this]() { ++cancelCalls; }, promise->future()};
         };
     }
@@ -169,6 +172,7 @@ public:
     int snapshotFailuresRemaining{0};
     int snapshotDelayMs{0};
     std::function<void()> snapshotHook;
+    std::function<void()> writeHook;
 };
 
 struct PlaylistBoundary
@@ -889,6 +893,22 @@ void FooyinTrackTests::activeDeadlineIncludesSnapshotWork()
 
 void FooyinTrackTests::guardsCallbacksAndObjectLifetimes()
 {
+    {
+        LibraryBoundary library;
+        library.residents.push_back(residentWithUserEdits(704));
+        library.makeWriteAvailable();
+        BandcampLibraryGateway gateway{library.api};
+        library.writeHook = [&gateway]() { gateway.cancel(); };
+        QObject receiver;
+        bool called = false;
+        submit(gateway, {memberTrack()}, &receiver, [&called](FooyinTrackCommitOutcome) { called = true; });
+        QTRY_COMPARE(library.writeCalls, 1);
+        QCOMPARE(library.cancelCalls, 1);
+        library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+        QTest::qWait(10);
+        QVERIFY(!called);
+    }
+
     {
         LibraryBoundary library;
         PlaylistBoundary playlists;
