@@ -1,4 +1,3 @@
-# Fooyin-independent sources shared by bandcamp_core and the standalone probe.
 # The including project sets BANDCAMP_SRC_DIR to the plugin's src directory first.
 set(BANDCAMP_CORE_SOURCES
     ${BANDCAMP_SRC_DIR}/bandcampclient.cpp

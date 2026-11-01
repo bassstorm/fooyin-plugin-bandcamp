@@ -27,8 +27,6 @@ const QUrl StandaloneTrackUrl{u"https://ravver.bandcamp.com/track/burial-shutta-
 constexpr int DefaultMutationIterations = 10000;
 constexpr std::uint32_t MutationSeed    = 0x5EEDB4C5U;
 
-// Synthetic pages shaped like Bandcamp's data-tralbum model. No real page is
-// stored on disk; live checks against Bandcamp belong to the integration probe.
 QByteArray sampleAlbumPage()
 {
     return tralbumPage(

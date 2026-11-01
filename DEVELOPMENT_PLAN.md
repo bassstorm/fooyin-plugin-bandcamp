@@ -66,7 +66,7 @@ not proof of contract compliance: some tests assert superseded behaviour.
 | Fetching | [bandcampclient.cpp](src/bandcampclient.cpp) has useful byte/redirect controls, but appends reads before checking limits, lacks a final-read size check, and returns the requested rather than effective response URL. Keep the transport wrapper and correct these boundaries without adding retries or cross-call sharing. |
 | Settings and UI | [bandcampsettings.cpp](src/bandcampsettings.cpp) already validates persisted timeout/parallelism. [bandcampplugin.cpp](src/bandcampplugin.cpp) mutates shared service settings and only opens [bandcampresultsdialog.cpp](src/bandcampresultsdialog.cpp). Snapshot per-operation options, add order/freshness settings, and introduce a separate import controller. |
 | Diagnostics | [bandcamplogging.cpp](src/bandcamplogging.cpp) has the standard categories, but no native TRACE categories, source snapshots, or propagated correlation. Current logs and warning bags do not implement the agreed transition contract. |
-| Tests and build | [tests/unit/CMakeLists.txt](tests/unit/CMakeLists.txt) duplicates production source lists and does not register CTest tests. It does not exercise the network client/service. [tests/integration/CMakeLists.txt](tests/integration/CMakeLists.txt) builds a standalone probe with independent source extraction and live metadata snapshots. Consolidate shared code and add deterministic orchestration tests plus default live CTest coverage. |
+| Tests and build | [tests/deterministic/CMakeLists.txt](tests/deterministic/CMakeLists.txt) registers isolated unit, synthetic composition, robustness, and mutation cases as `bandcamp.deterministic` in CTest, linked to the shared production core. [tests/live/CMakeLists.txt](tests/live/CMakeLists.txt) registers production-chain compatibility smoke tests as `bandcamp.live` with the `live` label. The `bandcamp_deterministic_tests` and `bandcamp_live_tests` targets are built by both test configurations; CI selects only the deterministic group. |
 
 ### Reuse rather than discard
 
@@ -368,23 +368,51 @@ than issuing hundreds of live release requests during routine validation.
 ### Increment 6 - Live integration tests and probe retirement
 
 - Replace the standalone probe with ordinary QtTest integration tests linked
-  to the production resolution target. Carry forward representative URLs for
-  artist/label listings, album, member track, and standalone track.
+  to the production resolution target under `tests/live/`. Carry forward
+  representative URLs for artist/label listings, album, member track, and
+  standalone track. Keep unit tests, synthetic composition coverage,
+  robustness, and mutation cases under `tests/deterministic/`.
 - Assert timely successful completion and meaningful nonempty results of the
   requested scope. Do not duplicate parsing/validation or snapshot mutable
-  metadata. Use ordinary QtTest/CTest assertions and failure reporting.
-- Register live tests in the default CTest run, including CI, with a separate
-  live label for explicit offline runs. Bound request concurrency and give the
-  suite a finite watchdog. External failures fail visibly rather than skip.
-- Add a CI build/test job that builds the plugin and test targets and runs the
-  default CTest suite without excluding live coverage.
+  metadata. Keep these happy-path compatibility smoke tests, leaving detailed
+  edge-case coverage to deterministic tests. Use ordinary QtTest/CTest
+  assertions and failure reporting.
+- Follow the dependency classification and preset matrix in
+  [AGENTS.md](AGENTS.md#9-testing-strategy): deterministic tests include semantic,
+  component-composition, and robustness coverage; live tests check compatibility.
+  ASan/UBSan is instrumentation of the same cases, not another test group.
+- Register the `bandcamp_live_tests` target as CTest entry `bandcamp.live` with
+  the `live` label, and the `bandcamp_deterministic_tests` target as
+  `bandcamp.deterministic`. Preserve `tests` as the
+  complete normal local run and `tests-sanitize` as the complete instrumented
+  run; neither filters out live tests. Add `tests-ci` selecting all deterministic
+  tests from the sanitized build and `tests-live` selecting only live tests from
+  the normal build. Reuse existing configure/build setups; no separate build
+  flag, duplicate build directories, or duplicate configure/build presets are
+  needed. Continue compiling deterministic and live targets when testing is
+  enabled; compilation makes no live requests.
+  Bound live request volume/concurrency and give the suite a finite watchdog.
+  External failures fail visibly rather than skip.
+- Add a CI build/test job that builds the ordinary plugin and sanitized test
+  targets and runs all deterministic tests through `ctest --preset tests-ci`.
+  Configure/build those targets with `tests-sanitize`; ensure sanitizer
+  diagnostics fail execution rather than merely logging. Do not run any live
+  tests in CI for this increment. A live CI step can be added deliberately later;
+  repeating the deterministic suite without sanitizers is not required.
+- Document `tests` first as the complete manual local run in
+  [README.md](README.md), followed by full sanitized execution (`tests-sanitize`),
+  offline CI execution (`tests-ci`), and explicit live execution (`tests-live`).
+  Include the required configure/build setup for each test preset.
 - Remove the probe implementation, standalone build, snapshot checks, command
   line options, and README instructions only after the replacement and production
   diagnostics work. Keep deterministic mutation testing and sanitizer support.
 
-**Complete when:** normal test execution includes all supported live resource
-types, offline selection remains available, and there is one production source
-interpretation path with no test-side extraction or metadata snapshots.
+**Complete when:** `tests` and `tests-sanitize` run all registered test cases,
+`tests-ci` runs all deterministic cases under ASan/UBSan without live execution,
+and `tests-live` exercises all supported live resource types explicitly.
+CI uses `tests-ci`, sanitizer diagnostics fail visibly, and there is one
+production source interpretation path with no test-side extraction or metadata
+snapshots.
 
 ### Increment 7 - Fooyin identity, metadata, and persistence
 
@@ -494,7 +522,7 @@ track to completion, including after restart with an expired stored stream.
 - Exercise discography/album/track import into persistent playlists, artwork,
   normal properties editing, restart, re-add, manual refresh, and playback.
   Verify user-edited metadata survives each path.
-- Run deterministic semantic/robustness suites, default live CTest coverage,
+- Run deterministic semantic/robustness suites, explicit `tests-live` coverage,
   and targeted ASan/UBSan runs, including increased seeded mutation iterations.
   Verify bounded heavy working data and full processing of a large lightweight
   input list rather than relying only on a small live discography.
@@ -506,5 +534,6 @@ track to completion, including after restart with an expired stored stream.
   adapters and debug actions; do not leave parallel legacy paths.
 
 **Complete when:** the requested feature chain works through the plugin, the
-contract's three test families are exercised, documentation matches behaviour,
-and no temporary migration code or obsolete diagnostic tool remains.
+contract's deterministic semantic/robustness and live compatibility coverage
+are exercised, documentation matches behaviour, and no temporary migration code
+or obsolete diagnostic tool remains.

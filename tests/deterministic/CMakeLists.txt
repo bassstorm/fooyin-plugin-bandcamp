@@ -1,6 +1,6 @@
 find_package(Qt6 REQUIRED COMPONENTS Core Test)
 
-add_executable(bandcamp_unit_tests
+add_executable(bandcamp_deterministic_tests
     bandcamptests.cpp
     bandcampparsertests.cpp
     bandcamppostprocessortests.cpp
@@ -11,7 +11,7 @@ add_executable(bandcamp_unit_tests
     bandcampservicetests.cpp
 )
 
-target_link_libraries(bandcamp_unit_tests PRIVATE bandcamp_core Qt6::Core Qt6::Test)
-set_target_properties(bandcamp_unit_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(bandcamp_deterministic_tests PRIVATE bandcamp_core Qt6::Core Qt6::Test)
+set_target_properties(bandcamp_deterministic_tests PROPERTIES AUTOMOC ON)
 
-add_test(NAME bandcamp.unit COMMAND bandcamp_unit_tests)
+add_test(NAME bandcamp.deterministic COMMAND bandcamp_deterministic_tests)

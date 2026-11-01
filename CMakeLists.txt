@@ -9,8 +9,8 @@ project(
 
 set(CMAKE_AUTOMOC ON)
 
-option(BANDCAMP_BUILD_TESTS "Build the Bandcamp unit tests" OFF)
-option(BANDCAMP_SANITIZE "Build the unit tests with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(BANDCAMP_BUILD_TESTS "Build the Bandcamp deterministic and live tests" OFF)
+option(BANDCAMP_SANITIZE "Instrument test targets with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 
 find_package(Fooyin REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Network)
@@ -20,12 +20,12 @@ find_package(LibXml2 REQUIRED)
 # library is instrumented and linked against the sanitizer runtime.
 add_library(bandcamp_sanitize INTERFACE)
 if(BANDCAMP_SANITIZE AND NOT MSVC)
-    set(_bandcamp_sanitize_flags -fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    # Recoverable UBSan reports would otherwise print and let the run pass.
+    set(_bandcamp_sanitize_flags -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g)
     target_compile_options(bandcamp_sanitize INTERFACE ${_bandcamp_sanitize_flags})
     target_link_options(bandcamp_sanitize INTERFACE ${_bandcamp_sanitize_flags})
 endif()
 
-# Fooyin-independent code shared by the plugin, the unit tests, and the probe.
 set(BANDCAMP_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 include(cmake/BandcampCoreSources.cmake)
 add_library(bandcamp_core STATIC ${BANDCAMP_CORE_SOURCES})
@@ -93,5 +93,6 @@ add_custom_target(
 
 if(BANDCAMP_BUILD_TESTS)
     enable_testing()
-    add_subdirectory(tests/unit)
+    add_subdirectory(tests/deterministic)
+    add_subdirectory(tests/live)
 endif()

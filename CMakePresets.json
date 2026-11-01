@@ -13,7 +13,7 @@
     },
     {
       "name": "tests",
-      "displayName": "Unit tests",
+      "displayName": "Deterministic and live tests",
       "binaryDir": "${sourceDir}/build-tests",
       "cacheVariables": {
         "BANDCAMP_BUILD_TESTS": "ON"
@@ -21,7 +21,7 @@
     },
     {
       "name": "tests-sanitize",
-      "displayName": "Unit tests with AddressSanitizer and UndefinedBehaviorSanitizer",
+      "displayName": "Deterministic and live tests with AddressSanitizer and UndefinedBehaviorSanitizer",
       "binaryDir": "${sourceDir}/build-sanitize",
       "cacheVariables": {
         "BANDCAMP_SANITIZE": "ON"
@@ -45,12 +45,12 @@
     {
       "name": "tests",
       "configurePreset": "tests",
-      "targets": [ "bandcamp_unit_tests" ]
+      "targets": [ "bandcamp_deterministic_tests", "bandcamp_live_tests" ]
     },
     {
       "name": "tests-sanitize",
       "configurePreset": "tests-sanitize",
-      "targets": [ "bandcamp_unit_tests" ]
+      "targets": [ "bandcamp_deterministic_tests", "bandcamp_live_tests" ]
     },
     {
       "name": "release",
@@ -73,6 +73,30 @@
     {
       "name": "tests-sanitize",
       "configurePreset": "tests-sanitize",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tests-ci",
+      "configurePreset": "tests-sanitize",
+      "filter": {
+        "exclude": {
+          "label": "^live$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tests-live",
+      "configurePreset": "tests",
+      "filter": {
+        "include": {
+          "label": "^live$"
+        }
+      },
       "output": {
         "outputOnFailure": true
       }

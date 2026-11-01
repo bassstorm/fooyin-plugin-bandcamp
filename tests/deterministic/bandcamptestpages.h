@@ -3,8 +3,7 @@
 #include <QByteArray>
 #include <QList>
 
-// Synthetic pages shaped like Bandcamp's data-tralbum model. No real page is stored on disk;
-// live checks against Bandcamp belong to the integration probe.
+// Synthetic pages shaped like Bandcamp's data-tralbum model.
 namespace BandcampTestPages {
 // Wraps raw JSON the way Bandcamp does: as an HTML-escaped data-tralbum attribute.
 inline QByteArray tralbumPage(QByteArray json)

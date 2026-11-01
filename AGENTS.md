@@ -517,10 +517,26 @@ undefined behavior, or an unresponsive host.
 ## 9. Testing strategy
 
 Tests establish semantic correctness, host safety, and live compatibility.
-Coverage follows these responsibilities rather than a duplicate catalogue of
-individual test cases in this document.
+Classify them by dependency into **deterministic** and **live** execution groups.
+Semantic correctness and robustness are coverage goals, not separate execution
+groups. Unit versus integration describes test scope, not whether a test needs
+Bandcamp. Sanitizers are a build mode applied to the same test cases.
+Coverage follows the owning component's responsibilities rather than a duplicate
+catalogue of individual test cases in this document.
 
-### Semantic unit tests
+### Deterministic tests
+
+Tests in [tests/deterministic](tests/deterministic/) use synthetic inputs and
+controlled dependencies, with no live Bandcamp or other external-service
+dependency. This group includes isolated unit tests, deterministic
+component-composition tests, and fault/mutation tests. The
+`bandcamp_deterministic_tests` target is registered with CTest as
+`bandcamp.deterministic`. CI runs the entire group, not just semantic happy
+paths.
+
+An integration-scope test using synthetic inputs remains deterministic.
+
+#### Semantic correctness
 
 - Cover each post-processor's business rules in isolation and the composed
   pipelines' ordering, context, and invariant preservation.
@@ -532,24 +548,26 @@ individual test cases in this document.
   effective changes versus no-ops, and redaction, not incidental message
   formatting.
 - Add focused deterministic regression coverage alongside defect fixes.
-- Unit tests live in [tests/unit](tests/unit/) and require no live network.
 
-### Robustness tests
+#### Robustness and host safety
 
 - Exercise malformed, truncated, and oversized external data, invalid types,
   numeric overflow, and resource-limit boundaries.
 - Exercise operational failures and asynchronous lifecycle safety, including
   deadlines, cancellation, shared work, consumer destruction, and exception
   containment. Verify bounded, explicit outcomes rather than merely no crash.
-- Use fault/mutation tests for recoverable failures and sanitizers to support
-  checks for lifetime errors and undefined behaviour. These tests remain
-  deterministic and independent of live Bandcamp.
+- Use deterministic fault/mutation tests for recoverable failures. Keep these
+  cases in the normal deterministic suite rather than an optional hardening
+  suite.
 
-### Live integration tests
+### Live compatibility tests
 
-- Tests in [tests/integration](tests/integration/) invoke the production
+- Tests in [tests/live](tests/live/) invoke the production
   resolution entry point with real Bandcamp URLs, exercising fetching,
   parsing, assembly, validation, and post-processing as one chain.
+- These are happy-path compatibility smoke tests, not exhaustive catalogue or
+  edge-case tests. Reuse the existing production infrastructure; deterministic
+  tests own detailed mapping, reconciliation, and failure-policy coverage.
 - Cover artist and label discographies, albums, album-member tracks, and
   standalone tracks. Assert successful completion within finite deadlines
   and meaningful, nonempty results for the requested scope.
@@ -559,11 +577,48 @@ individual test cases in this document.
 - Network errors, rate limits, challenge pages, and unavailable resources are
   visible test failures, not passing skips. They mean live compatibility was
   not demonstrated, not necessarily that the code regressed.
-- Bound request volume and concurrency. Integration tests compile with the
-  project when testing is enabled and run in the default CTest test phase,
-  including CI. Compilation itself performs no live requests.
-- Label live tests separately so an explicitly offline run can exclude them
-  without removing them from the normal test suite.
+- Bound request volume and concurrency and give the suite a finite watchdog.
+- The `bandcamp_live_tests` target is registered with CTest as `bandcamp.live`
+  and labeled `live`. Excluding that label selects all deterministic tests,
+  including deterministic integration and robustness coverage.
+
+### Build instrumentation and execution presets
+
+- Compile deterministic and live test targets when testing is enabled.
+  Compilation itself performs no live requests.
+- The `tests` configure/build setup is the normal build. The `tests-sanitize`
+  setup instruments production code and test binaries with ASan/UBSan on
+  supported compilers. It runs the same assertions with additional checks for
+  memory errors and undefined behaviour; it is not another test suite.
+- Sanitizers complement semantic and robustness assertions and detect defects
+  only on exercised paths. Sanitizer diagnostics must fail the run, not merely
+  appear in successful test logs.
+
+| Test preset | Selected tests | Configure/build preset | Intended use |
+| --- | --- | --- | --- |
+| `tests` | All deterministic and live tests | `tests` | Default manual local run; first in README |
+| `tests-sanitize` | All deterministic and live tests | `tests-sanitize` | Manual full run with ASan/UBSan |
+| `tests-ci` | All deterministic tests; exclude label `live` | `tests-sanitize` | CI with ASan/UBSan; also usable locally offline |
+| `tests-live` | Only tests labelled `live` | `tests` | Manual Bandcamp compatibility check |
+
+Only `tests-ci` excludes live tests. "All tests" means all registered test cases,
+not every possible compiler or build-mode combination. `tests-ci` and
+`tests-live` are test-selection presets reusing existing build setups; do not
+add duplicate build directories or a live-test build flag.
+
+CI builds the ordinary plugin and the sanitized test targets, then runs the
+entire deterministic suite:
+
+```sh
+cmake --preset tests-sanitize
+cmake --build --preset tests-sanitize
+ctest --preset tests-ci
+```
+
+Do not additionally run `tests`, `tests-sanitize`, or `tests-live` test presets in
+CI for Increment 6: each includes live execution. A live CI step may be added
+later through an explicit policy change. CI need not repeat the deterministic
+suite without sanitizers for this increment.
 
 ## 10. Logging and diagnostic events
 

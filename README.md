@@ -80,7 +80,19 @@ The bundle is written to `build-release/`, for example
 
 ## Test
 
-Run the unit tests, which need no network access:
+The suite has two CTest entries:
+
+- `bandcamp.deterministic` uses synthetic inputs and controlled dependencies.
+  It covers isolated unit, component-composition, and robustness tests without
+  live service access. Its source is under
+  [`tests/deterministic/`](tests/deterministic/) and its target is
+  `bandcamp_deterministic_tests`.
+- `bandcamp.live` (label `live`) resolves real Bandcamp pages through
+  integration-scope smoke tests. Its source is under [`tests/live/`](tests/live/)
+  and its target is `bandcamp_live_tests`. It needs network access, and it fails
+  visibly if Bandcamp is unreachable or its pages change incompatibly.
+
+Run the complete suite locally:
 
 ```sh
 cmake --preset tests
@@ -88,5 +100,26 @@ cmake --build --preset tests
 ctest --preset tests
 ```
 
-To also check for memory and undefined-behavior errors, use the
-`tests-sanitize` preset instead (AddressSanitizer and UndefinedBehaviorSanitizer).
+Run the complete suite under AddressSanitizer and UndefinedBehaviorSanitizer:
+
+```sh
+cmake --preset tests-sanitize
+cmake --build --preset tests-sanitize
+ctest --preset tests-sanitize
+```
+
+Run only the deterministic tests, offline and sanitized (this is what CI runs):
+
+```sh
+cmake --preset tests-sanitize
+cmake --build --preset tests-sanitize
+ctest --preset tests-ci
+```
+
+Run only the live tests, against Bandcamp:
+
+```sh
+cmake --preset tests
+cmake --build --preset tests
+ctest --preset tests-live
+```
