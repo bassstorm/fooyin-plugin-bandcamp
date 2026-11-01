@@ -8,7 +8,6 @@
 #include <gui/plugins/guiplugin.h>
 #include <gui/plugins/pluginconfigguiplugin.h>
 
-#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QPointer>
@@ -17,9 +16,12 @@
 
 namespace Fooyin {
 class NetworkAccessManager;
+class CurrentPlaylistController;
+class PlaylistInteractor;
 } // namespace Fooyin
 
 namespace Fooyin::Bandcamp {
+class BandcampImportController;
 class BandcampResultsDialog;
 class BandcampPlugin : public QObject,
                        public Plugin,
@@ -38,15 +40,13 @@ public:
 
 private:
     void showAddUrlDialog();
-    void onUrlsSubmitted(const QList<BandcampPageUrl>& urls);
-    void onScopeResolved(const BandcampScopeResult& result);
-    void onOperationProgress(const BandcampOperationProgress& progress);
-    void onOperationFinished(const BandcampOperationSummary& summary);
+    void onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool forceNewPlaylist);
 
     // Kept alive for as long as the service that uses it.
     std::shared_ptr<NetworkAccessManager> m_network;
     // Owned by this plugin through the QObject parent tree.
     BandcampService* m_service{nullptr};
-    QHash<BandcampOperationId, QPointer<BandcampResultsDialog>> m_resultDialogs;
+    QPointer<Fooyin::CurrentPlaylistController> m_playlistSelection;
+    QPointer<Fooyin::PlaylistInteractor> m_playlistInteractor;
 };
 } // namespace Fooyin::Bandcamp

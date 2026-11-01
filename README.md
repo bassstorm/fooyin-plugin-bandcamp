@@ -4,7 +4,10 @@ Adds Bandcamp as an audio source to [Fooyin](https://www.fooyin.org/).
 
 ## Features
 
-- Brings Bandcamp albums, tracks, and discographies into Fooyin.
+- Import Bandcamp albums, tracks, and discographies into an existing or new
+  Fooyin playlist as regular playlist entries with editable track properties.
+
+Playlist import is supported; playback and stream refresh are not implemented yet.
 
 ## Installation
 

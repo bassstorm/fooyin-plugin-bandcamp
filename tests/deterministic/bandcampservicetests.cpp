@@ -843,6 +843,234 @@ private slots:
         QCOMPARE(next.summary.failed, 0);
         QCOMPARE(network.requested.size(), 2);
     }
+
+    void resolverProgressPrecedesOrderedPublicationAndCountsDeduplicatedWork()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest& request) {
+            if(request.url().path() == u"/album/parent"_s) {
+                return FakeResponse{.body = AlbumDocument, .delayMs = 250};
+            }
+            return FakeResponse{.body = SecondAlbumDocument};
+        });
+        BandcampService service{&network};
+        QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        timeout.start(5000);
+        QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+        QList<BandcampScopeResult> results;
+        QList<BandcampOperationProgress> progressValues;
+        bool sawOrderedWait = false;
+        bool finished = false;
+        BandcampOperationSummary summary;
+        BandcampOperationId id = 0;
+        QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+                         [&results](const BandcampScopeResult& result) { results.append(result); });
+        QObject::connect(&service, &BandcampService::progressChanged, &loop,
+                         [&progressValues, &results, &sawOrderedWait, &id](const BandcampOperationProgress& value) {
+                             if(value.operationId != id) {
+                                 return;
+                             }
+                             progressValues.append(value);
+                             if(value.phase == BandcampOperationPhase::Resolving && value.totalWork == 2
+                                && value.completedWork == 1 && results.isEmpty()) {
+                                 sawOrderedWait = true;
+                             }
+                         });
+        QObject::connect(&service, &BandcampService::operationFinished, &loop,
+                         [&finished, &summary, &loop, &id](const BandcampOperationSummary& value) {
+                             if(value.operationId == id) {
+                                 summary = value;
+                                 finished = true;
+                                 loop.quit();
+                             }
+                         });
+
+        const auto submission = service.submit({page(AlbumUrl), page(AlbumUrl), page(SecondAlbumUrl)},
+                                               OperationOptions{2, 10000});
+        QVERIFY(std::holds_alternative<BandcampOperationAccepted>(submission));
+        id = std::get<BandcampOperationAccepted>(submission).id;
+        loop.exec();
+
+        QVERIFY(finished);
+        QVERIFY(sawOrderedWait);
+        QCOMPARE(summary.requested, 3);
+        QCOMPARE(results.size(), 3);
+        QVERIFY(!progressValues.isEmpty());
+        QCOMPARE(progressValues.first().phase, BandcampOperationPhase::Resolving);
+        QCOMPARE(progressValues.first().totalWork, 2);
+        QCOMPARE(progressValues.last().phase, BandcampOperationPhase::Finished);
+        QCOMPARE(progressValues.last().totalWork, 2);
+        QCOMPARE(progressValues.last().completedWork, 2);
+        qsizetype previousCompleted = 0;
+        for(const BandcampOperationProgress& value : std::as_const(progressValues)) {
+            QVERIFY(value.completedWork >= previousCompleted);
+            QVERIFY(value.completedWork <= value.totalWork);
+            previousCompleted = value.completedWork;
+        }
+    }
+
+    void cancellingFromImmediateProgressKeepsOutcomeStableAndDeliversOnce()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument}; });
+        BandcampService service{&network};
+        QList<BandcampPageUrl> pages;
+        for(int i = 0; i < 300; ++i) {
+            pages.append(page(QStringLiteral("https://artist-%1.bandcamp.com/album/parent").arg(i)));
+        }
+
+        QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        timeout.start(7000);
+        QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+        QList<BandcampScopeResult> results;
+        QList<BandcampOperationProgress> progressValues;
+        bool cancelledFromProgress = false;
+        bool firstProgressHadNoOrderedResult = false;
+        bool finished = false;
+        BandcampOperationSummary summary;
+        BandcampOperationId id = 0;
+        QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+                         [&results](const BandcampScopeResult& result) { results.append(result); });
+        QObject::connect(&service, &BandcampService::progressChanged, &loop,
+                         [&service, &progressValues, &results, &cancelledFromProgress,
+                          &firstProgressHadNoOrderedResult, &id](const BandcampOperationProgress& value) {
+                             if(value.operationId != id) {
+                                 return;
+                             }
+                             progressValues.append(value);
+                             if(!cancelledFromProgress && value.phase == BandcampOperationPhase::Resolving
+                                && value.completedWork == 1) {
+                                 firstProgressHadNoOrderedResult = results.isEmpty();
+                                 cancelledFromProgress = true;
+                                 service.cancel(id);
+                             }
+                         });
+        QObject::connect(&service, &BandcampService::operationFinished, &loop,
+                         [&finished, &summary, &loop, &id](const BandcampOperationSummary& value) {
+                             if(value.operationId == id) {
+                                 finished = true;
+                                 summary = value;
+                                 loop.quit();
+                             }
+                         });
+
+        const auto submission = service.submit(pages, OperationOptions{1, 10000});
+        QVERIFY(std::holds_alternative<BandcampOperationAccepted>(submission));
+        id = std::get<BandcampOperationAccepted>(submission).id;
+        loop.exec();
+
+        QVERIFY(finished);
+        QVERIFY(cancelledFromProgress);
+        QVERIFY(firstProgressHadNoOrderedResult);
+        QCOMPARE(summary.requested, 300);
+        QCOMPARE(summary.succeeded, 1);
+        QCOMPARE(summary.failed, 0);
+        QCOMPARE(summary.cancelled, 299);
+        QCOMPARE(results.size(), 300);
+        for(qsizetype i = 0; i < results.size(); ++i) {
+            QCOMPARE(results.at(i).ordinal, i);
+            if(i == 0) {
+                QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(results.at(i).outcome));
+            }
+            else {
+                QVERIFY(std::holds_alternative<ResolutionCancelled>(results.at(i).outcome));
+            }
+        }
+        QCOMPARE(progressValues.last().completedWork, 300);
+        QCOMPARE(progressValues.last().totalWork, 300);
+    }
+
+    void deletingServiceFromImmediateProgressIsSafe()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument}; });
+        auto* service = new BandcampService{&network};
+        QPointer<BandcampService> guard{service};
+        QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        timeout.start(5000);
+        QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+        bool deleted = false;
+        BandcampOperationId id = 0;
+        QObject::connect(service, &BandcampService::progressChanged, &loop,
+                         [&service, &loop, &deleted, &id](const BandcampOperationProgress& progress) {
+                             if(progress.operationId == id && progress.completedWork > 0) {
+                                 delete service;
+                                 service = nullptr;
+                                 deleted = true;
+                                 loop.quit();
+                             }
+                         });
+
+        const auto submission = service->submit({page(AlbumUrl)});
+        QVERIFY(std::holds_alternative<BandcampOperationAccepted>(submission));
+        id = std::get<BandcampOperationAccepted>(submission).id;
+        loop.exec();
+
+        QVERIFY(deleted);
+        QVERIFY(guard.isNull());
+    }
+
+    void discoveryAndZeroWorkHaveExplicitProgressPhases()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.body = discographyPage({}), .delayMs = 30};
+        });
+        BandcampService service{&network};
+        QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        timeout.start(5000);
+        QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+        QList<BandcampOperationProgress> progressValues;
+        QList<BandcampScopeResult> results;
+        bool finished = false;
+        BandcampOperationSummary summary;
+        BandcampOperationId id = 0;
+        QObject::connect(&service, &BandcampService::progressChanged, &loop,
+                         [&progressValues, &id](const BandcampOperationProgress& value) {
+                             if(value.operationId == id) {
+                                 progressValues.append(value);
+                             }
+                         });
+        QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+                         [&results](const BandcampScopeResult& result) { results.append(result); });
+        QObject::connect(&service, &BandcampService::operationFinished, &loop,
+                         [&finished, &summary, &loop, &id](const BandcampOperationSummary& value) {
+                             if(value.operationId == id) {
+                                 summary = value;
+                                 finished = true;
+                                 loop.quit();
+                             }
+                         });
+
+        const auto submission = service.submit({page(u"https://artist.bandcamp.com/music"_s)});
+        QVERIFY(std::holds_alternative<BandcampOperationAccepted>(submission));
+        id = std::get<BandcampOperationAccepted>(submission).id;
+        loop.exec();
+
+        QVERIFY(finished);
+        QCOMPARE(summary.requested, 1);
+        QCOMPARE(summary.failed, 1);
+        QCOMPARE(results.size(), 1);
+        QVERIFY(std::holds_alternative<ResolutionFailure>(results.first().outcome));
+        QVERIFY(!progressValues.isEmpty());
+        QCOMPARE(progressValues.first().phase, BandcampOperationPhase::Discovering);
+        QCOMPARE(progressValues.first().totalWork, 0);
+        QCOMPARE(progressValues.last().phase, BandcampOperationPhase::Finished);
+        QCOMPARE(progressValues.last().totalWork, 0);
+        QCOMPARE(progressValues.last().completedWork, 0);
+    }
 };
 
 int runServiceTests(int argc, char** argv)

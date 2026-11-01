@@ -77,6 +77,7 @@ public:
     [[nodiscard]] std::optional<ResolutionError> start();
     void cancel();
     [[nodiscard]] bool isComplete() const;
+    [[nodiscard]] qsizetype completedOutcomeCount() const;
 
 signals:
     void keyedOutcomeReady(const QString& key, const Fooyin::Bandcamp::BandcampResolutionOutcome& outcome);

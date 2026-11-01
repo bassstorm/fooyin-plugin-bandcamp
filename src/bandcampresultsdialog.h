@@ -1,10 +1,12 @@
 #pragma once
 
-#include "bandcampservice.h"
+#include "bandcampimportcontroller.h"
 
 #include <QDialog>
 
-class QPlainTextEdit;
+class QDialogButtonBox;
+class QLabel;
+class QProgressBar;
 
 namespace Fooyin::Bandcamp {
 class BandcampResultsDialog : public QDialog
@@ -14,17 +16,15 @@ class BandcampResultsDialog : public QDialog
 public:
     explicit BandcampResultsDialog(QWidget* parent = nullptr);
 
-    void appendResult(const BandcampScopeResult& result);
     void updateProgress(const BandcampOperationProgress& progress);
-    void finish(const BandcampOperationSummary& summary);
+    void showImporting();
+    void showIntegrationError(const QString& reason);
+    void finish(const BandcampImportSummary& summary);
     void showRejection(const ResolutionError& error);
 
 private:
-    void appendBounded(QString text);
-    [[nodiscard]] QString formatResult(const BandcampScopeResult& result) const;
-
-    QPlainTextEdit* m_text{nullptr};
-    qsizetype m_displayedChars{0};
-    bool m_displayTruncated{false};
+    QLabel* m_status{nullptr};
+    QProgressBar* m_progress{nullptr};
+    QDialogButtonBox* m_buttons{nullptr};
 };
 } // namespace Fooyin::Bandcamp

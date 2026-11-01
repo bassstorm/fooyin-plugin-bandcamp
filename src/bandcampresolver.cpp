@@ -1182,4 +1182,9 @@ bool BandcampResolver::isComplete() const
 {
     return m_impl->completionSent;
 }
+
+qsizetype BandcampResolver::completedOutcomeCount() const
+{
+    return static_cast<qsizetype>(m_impl->outcomes.size());
+}
 } // namespace Fooyin::Bandcamp

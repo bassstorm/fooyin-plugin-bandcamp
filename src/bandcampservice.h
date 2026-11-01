@@ -32,12 +32,22 @@ struct BandcampScopeResult
     BandcampResolutionOutcome outcome;
 };
 
+enum class BandcampOperationPhase : quint8
+{
+    Discovering,
+    Resolving,
+    Finished,
+};
+
 struct BandcampOperationProgress
 {
     BandcampOperationId operationId{0};
     qsizetype requested{0};
     qsizetype delivered{0};
     qsizetype active{0};
+    BandcampOperationPhase phase{BandcampOperationPhase::Resolving};
+    qsizetype completedWork{0};
+    qsizetype totalWork{0};
 };
 
 struct BandcampOperationSummary

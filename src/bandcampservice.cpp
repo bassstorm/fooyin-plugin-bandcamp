@@ -285,7 +285,15 @@ private:
                                           m_workflowSlots, this};
         QObject::connect(
             m_resolver, &BandcampResolver::keyedOutcomeReady, this,
-            [this](const QString& key, const BandcampResolutionOutcome& outcome) { onReleaseOutcome(key, outcome); });
+            [this](const QString& key, const BandcampResolutionOutcome& outcome) {
+                const QString keyCopy = key;
+                const BandcampResolutionOutcome outcomeCopy = outcome;
+                const QPointer<BandcampOperation> guard{this};
+                publishProgress();
+                if(guard) {
+                    guard->onReleaseOutcome(keyCopy, outcomeCopy);
+                }
+            });
         QObject::connect(m_resolver, &BandcampResolver::activeCountChanged, this, [this](qsizetype active) {
             m_active = active;
             publishProgress();
@@ -432,7 +440,14 @@ private:
     {
         try {
             const qsizetype active = m_active + (m_currentListingResolver ? 1 : 0);
-            m_progressHandler({m_id, m_orchestrator.occurrenceCount(), m_orchestrator.deliveredCount(), active});
+            const BandcampOperationPhase phase
+                = m_finished ? BandcampOperationPhase::Finished
+                             : (m_orchestrator.isDiscoveryComplete() ? BandcampOperationPhase::Resolving
+                                                                    : BandcampOperationPhase::Discovering);
+            const qsizetype totalWork = m_orchestrator.isDiscoveryComplete() ? m_orchestrator.requests().size() : 0;
+            const qsizetype completedWork = m_resolver ? m_resolver->completedOutcomeCount() : 0;
+            m_progressHandler({m_id, m_orchestrator.occurrenceCount(), m_orchestrator.deliveredCount(), active,
+                               phase, completedWork, totalWork});
         }
         catch(...) {
             qCWarning(BANDCAMP_RESOLVE) << "An operation progress handler threw";

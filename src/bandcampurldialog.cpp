@@ -2,6 +2,7 @@
 
 #include "bandcamplogging.h"
 
+#include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -52,6 +53,7 @@ BandcampUrlDialog::BandcampUrlDialog(QWidget* parent)
     m_input->setPlaceholderText(u"https://artist.bandcamp.com/album/name\n"
                                 "https://artist.bandcamp.com/track/name\n"
                                 "https://artist.bandcamp.com/music"_s);
+    m_forceNewPlaylist = new QCheckBox(tr("Create as a new playlist"), this);
 
     m_status = new QLabel(this);
     m_status->setTextFormat(Qt::PlainText);
@@ -62,6 +64,7 @@ BandcampUrlDialog::BandcampUrlDialog(QWidget* parent)
     auto* layout = new QVBoxLayout(this);
     layout->addWidget(hint);
     layout->addWidget(m_input);
+    layout->addWidget(m_forceNewPlaylist);
     layout->addWidget(m_status);
     layout->addWidget(m_buttons);
 
@@ -127,7 +130,7 @@ void BandcampUrlDialog::submit()
         return;
     }
 
-    emit urlsSubmitted(urls);
+    emit urlsSubmitted(urls, m_forceNewPlaylist->isChecked());
     accept();
 }
 } // namespace Fooyin::Bandcamp

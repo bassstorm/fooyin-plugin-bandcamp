@@ -41,6 +41,8 @@ target_link_libraries(bandcamp_core
 add_library(bandcamp_fooyin STATIC
     src/bandcampfooyintrack.cpp
     src/bandcampfooyintrack.h
+    src/bandcampimportcontroller.cpp
+    src/bandcampimportcontroller.h
 )
 set_target_properties(bandcamp_fooyin PROPERTIES
     AUTOMOC ON

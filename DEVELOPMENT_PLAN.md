@@ -36,9 +36,15 @@ than being deferred to a final hardening step.
   One album or album-member track uses the album title; one standalone track
   uses its title; a discography or mixed submission uses "Bandcamp".
   There is no manual naming field.
-- Retain progress, per-input failure reporting, and user cancellation.
-  Page fetches are not automatically retried. Already committed results remain
-  when a run is cancelled or its target becomes unavailable.
+- Show an indeterminate discovery phase while discographies unfold, then report
+  resolution progress as terminal resolver outcomes become available, independently
+  of ordered publication. Count release/selection work, not tracks or HTTP requests.
+- Retain a release-level added/failed/cancelled summary and user cancellation,
+  without original-input grouping or repeated resolution diagnostics in the UI.
+  Show a concise integration error when importing must stop; detailed resolution
+  failures remain in existing logs. Page fetches are not automatically retried.
+  Already committed results remain when a run is cancelled or its target becomes
+  unavailable.
 - Support manual expired-only and forced stream refresh for selected Bandcamp
   tracks, or the UI-selected playlist when no tracks are selected.
 - Before playback, refresh an expired stream or one whose remaining lifetime
@@ -450,27 +456,45 @@ playlist occurrences remain present.
 
 ### Increment 8 - Playlist import controller and operational UI
 
-- Keep action registration in the plugin and move per-import orchestration into
-  a controller. Widgets consume progress and structured outcomes; they do not
-  schedule requests, reconcile data, or inspect diagnostic warning bags.
+- Keep action registration in the plugin and move per-import coordination into
+  one submission-owned controller. Widgets collect intent and consume progress
+  and summaries; they do not schedule requests or reconcile data. Reuse the
+  existing service's ordering and the existing library gateway.
 - Add "Create as new playlist" and capture the UI-selected destination and
   options at submission. Validate the destination again before each commit.
+  An initially unsuitable destination selects new-playlist creation; a captured
+  valid destination later becoming unsuitable stops the run without redirecting it.
 - Lazily create a persistent destination with the agreed automatic name.
-  If no results succeed, create no playlist and report the outcome.
+  Create it only after successful gateway preparation, using the host's
+  genuinely-new creation API rather than its same-name reuse API. If no results
+  succeed, create no playlist and report the outcome.
 - Commit successful scopes on the main thread in submission/collection order,
-  keeping each admitted whole album as one ordered block. Failed scopes advance
-  ordering without blocking unrelated results.
+  consuming already ordered outcomes and keeping each admitted whole album as
+  one insertion block. Failed scopes advance the queue without blocking unrelated
+  results. Do not add another ordering or association mechanism.
 - Preserve user-requested repeated entries. Shared acquisition and stable
   database identity are optimizations, not playlist deduplication policies.
-- Replace the diagnostic results-only flow with bounded progress and per-input
-  failure presentation. Allow cancellation; retain committed tracks and withdraw
-  unused work. If the fixed destination is removed or becomes unwritable, stop
-  further commits, report the reason, and release the run's remaining work.
+- Replace the diagnostic results-only flow with discovery/resolution progress
+  and a minimal release-level summary. Forward completion statistics from the
+  resolver's existing outcome records through the existing progress callback;
+  ordered publication and sorting must not hold back resolution progress.
+  Resolution work counts deduplicated requests; playlist additions retain
+  requested occurrences. Do not add raw data, domain fields, or original-input
+  identifiers for reporting.
+- Finish the import only after resolution has ended and pending gateway/playlist
+  handoffs have drained. Trust normal playlist insertion; do not invent database
+  acknowledgements, observers, readbacks, or repair writes.
+- Allow cancellation; retain accepted changes and withdraw unused work without
+  claiming rollback. If the fixed destination is removed or becomes unwritable,
+  stop further commits, report the reason, and release the run's remaining work.
+  Independent submissions have no plugin-global queue or cache.
 
 **Complete when:** selected/current versus playback playlist, new/temporary/
 locked/automatic/deleted targets, empty outcomes, parallel ordering, repeated
-entries, cancellation, and restart persistence are verified through controller
-tests and focused Fooyin smoke checks.
+entries, immediate resolution progress despite ordered publication, cancellation,
+and restart persistence are verified through plugin-owned controller tests and
+focused Fooyin smoke checks. Resolution details are not duplicated in integration
+logging; completion logs contain high-level counts and integration-owned failures.
 
 ### Increment 9 - Shared stream refresh and manual actions
 

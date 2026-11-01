@@ -1,4 +1,5 @@
 #include "bandcampfooyintrack.h"
+#include "bandcampimportcontroller.h"
 #include "bandcamplogging.h"
 #include "bandcamptrackuri.h"
 
@@ -103,6 +104,9 @@ public:
                 --snapshotFailuresRemaining;
                 throw std::runtime_error{"transient snapshot failure"};
             }
+            if(snapshotHook) {
+                snapshotHook();
+            }
             return residents;
         };
         api.metadataStore = [this]() -> std::shared_ptr<Fooyin::TrackMetadataStore> {
@@ -162,7 +166,130 @@ public:
     bool invalidWriteRequest{false};
     int snapshotFailuresRemaining{0};
     int snapshotDelayMs{0};
+    std::function<void()> snapshotHook;
 };
+
+struct PlaylistBoundary
+{
+    PlaylistBoundary()
+    {
+        api.owner = owner.get();
+        api.ownersAvailable = [this]() { return owner != nullptr; };
+        api.inspect = [this](const Fooyin::UId& id) {
+            inspected.append(id);
+            if(!owner) {
+                return BandcampPlaylistAvailability::OwnerUnavailable;
+            }
+            return availability.value(id.toString(QUuid::WithoutBraces), BandcampPlaylistAvailability::Missing);
+        };
+        api.createNew = [this](const QString& name) -> std::optional<Fooyin::UId> {
+            ++createCalls;
+            names.append(name);
+            if(failCreate) {
+                return std::nullopt;
+            }
+            const Fooyin::UId id = Fooyin::UId::create();
+            availability.insert(id.toString(QUuid::WithoutBraces), BandcampPlaylistAvailability::Writable);
+            if(createHook) {
+                createHook();
+            }
+            return id;
+        };
+        api.insert = [this](const Fooyin::UId& id, const Fooyin::TrackList& tracks) {
+            if(throwOnInsert) {
+                throw std::runtime_error{"playlist insertion failed"};
+            }
+            insertedPlaylists.append(id);
+            blocks.append(tracks);
+            if(insertHook) {
+                insertHook();
+            }
+        };
+    }
+
+    Fooyin::UId addPlaylist(BandcampPlaylistAvailability state)
+    {
+        const Fooyin::UId id = Fooyin::UId::create();
+        availability.insert(id.toString(QUuid::WithoutBraces), state);
+        return id;
+    }
+
+    BandcampPlaylistApi api;
+    std::unique_ptr<QObject> owner{std::make_unique<QObject>()};
+    QHash<QString, BandcampPlaylistAvailability> availability;
+    QList<Fooyin::UId> inspected;
+    QList<Fooyin::UId> insertedPlaylists;
+    QList<Fooyin::TrackList> blocks;
+    QStringList names;
+    int createCalls{0};
+    bool failCreate{false};
+    bool throwOnInsert{false};
+    std::function<void()> createHook;
+    std::function<void()> insertHook;
+};
+
+BandcampResolvedTrack importTrack(qint64 id, const QString& title, const QString& sourceUrl,
+                                  std::optional<BandcampAlbumMetadata> album = std::nullopt)
+{
+    BandcampTrack track;
+    track.id = id;
+    track.title = title;
+    track.artist = u"Recording artist"_s;
+    track.sourceUrl = sourceUrl;
+    track.streamUrl = u"https://t4.bcbits.com/stream/0123456789abcdef0123456789abcdef?token=secret&ts=1793621993"_s;
+    track.trackNumber = 1;
+    return {std::move(track), std::move(album)};
+}
+
+BandcampAlbumMetadata importAlbumMetadata()
+{
+    BandcampAlbumMetadata metadata;
+    metadata.id = 70;
+    metadata.title = u"Admitted album"_s;
+    metadata.artist = u"Album artist"_s;
+    metadata.sourceUrl = AlbumSource;
+    metadata.trackTotal = 2;
+    return metadata;
+}
+
+BandcampScopeResult successfulAlbumScope(BandcampOperationId operationId, qsizetype ordinal = 0)
+{
+    BandcampAlbum album;
+    album.metadata = importAlbumMetadata();
+    album.tracks.append(importTrack(71, u"First track"_s, AlbumSource).track);
+    album.tracks.append(importTrack(72, u"Second track"_s, AlbumSource).track);
+    return {operationId, ordinal, {BandcampPageKind::Album, AlbumSource, {}},
+            ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(album)}}};
+}
+
+BandcampScopeResult successfulTrackScope(BandcampOperationId operationId, bool albumMember = false,
+                                         qsizetype ordinal = 0)
+{
+    std::optional<BandcampAlbumMetadata> album;
+    if(albumMember) {
+        album = importAlbumMetadata();
+    }
+    const QString sourceUrl = albumMember ? AlbumSource : TrackSource;
+    return {operationId, ordinal, {BandcampPageKind::Track, TrackSource, {}},
+            ResolutionSuccess<BandcampResolvedData>{
+                BandcampResolvedData{importTrack(73, u"Standalone title"_s, sourceUrl, std::move(album))}}};
+}
+
+BandcampScopeResult failedScope(BandcampOperationId operationId, qsizetype ordinal = 0)
+{
+    return {operationId, ordinal, {BandcampPageKind::Album, AlbumSource, {}},
+            ResolutionFailure{ResolutionError{ResolutionErrorCode::FetchFailed, ResolutionStage::Acquire,
+                                              QUrl{AlbumSource}, 0, u"page"_s, u"fetch failed"_s}}};
+}
+
+void connectImportCompletion(BandcampImportController& controller, bool& finished, BandcampImportSummary& summary)
+{
+    QObject::connect(&controller, &BandcampImportController::finished, &controller,
+                     [&finished, &summary](const BandcampImportSummary& value) {
+                         finished = true;
+                         summary = value;
+                     });
+}
 
 void submit(BandcampLibraryGateway& gateway, QList<BandcampResolvedTrack> incoming, QObject* context,
             BandcampLibraryGateway::Completion completion, int timeoutMs = 1000, CorrelationContext correlation = {})
@@ -233,6 +360,17 @@ private slots:
     void guardsCallbacksAndObjectLifetimes();
     void containsDependencyAndFutureExceptions();
     void correlatesAndRedactsEffectiveTransportChanges();
+    void importsIntoCapturedUiPlaylist();
+    void createsNewForForcedAndInitiallyUnsuitableDestinations();
+    void preservesOrderedAlbumBlocksAndRepeatedScopes();
+    void advancesAfterFailuresAndLeavesEmptyImportsUncreated();
+    void stopsWhenDestinationChangesDuringPreparation();
+    void waitsForGatewayBeforeFinishingResolutionImport();
+    void cancellationWithdrawsPendingGatewayHandoff();
+    void deletingControllerFromPlaylistCallbackWithdrawsResolution();
+    void cancellationDuringPlaylistCreationDoesNotInsert();
+    void cancellationDuringInsertionDefersSummaryAndCountsAcceptedBlock();
+    void deletingControllerFromIntegrationErrorWithdrawsResolution();
 };
 
 void FooyinTrackTests::canonicalTrackUriRoundTrips()
@@ -829,6 +967,575 @@ void FooyinTrackTests::correlatesAndRedactsEffectiveTransportChanges()
         }
     }
     QVERIFY(found);
+}
+
+void FooyinTrackTests::importsIntoCapturedUiPlaylist()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    const Fooyin::UId selectedPlaylist = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    const Fooyin::UId playbackPlaylist = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    BandcampImportController controller{1,
+                                        {{BandcampPageKind::Album, AlbumSource, {}}},
+                                        false,
+                                        selectedPlaylist,
+                                        1000,
+                                        library.api,
+                                        playlists.api,
+                                        {}};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(1));
+    controller.finishResolution({1, 1, 1, 0, 0});
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QCOMPARE(summary.added, 1);
+    QCOMPARE(playlists.createCalls, 0);
+    QCOMPARE(playlists.insertedPlaylists, QList<Fooyin::UId>{selectedPlaylist});
+    QVERIFY(playbackPlaylist != selectedPlaylist);
+}
+
+void FooyinTrackTests::createsNewForForcedAndInitiallyUnsuitableDestinations()
+{
+    const QList<BandcampPlaylistAvailability> unsuitable{
+        BandcampPlaylistAvailability::Missing,
+        BandcampPlaylistAvailability::Temporary,
+        BandcampPlaylistAvailability::Automatic,
+        BandcampPlaylistAvailability::Locked,
+    };
+    for(const BandcampPlaylistAvailability state : unsuitable) {
+        LibraryBoundary library;
+        PlaylistBoundary playlists;
+        const Fooyin::UId selected = playlists.addPlaylist(state);
+        BandcampImportController controller{2,
+                                            {{BandcampPageKind::Album, AlbumSource, {}}},
+                                            false,
+                                            selected,
+                                            1000,
+                                            library.api,
+                                            playlists.api,
+                                            {}};
+        bool finished = false;
+        BandcampImportSummary summary;
+        connectImportCompletion(controller, finished, summary);
+        controller.start();
+        controller.acceptScopeResult(successfulAlbumScope(2));
+        controller.finishResolution({2, 1, 1, 0, 0});
+
+        QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+        QCOMPARE(summary.added, 1);
+        QCOMPARE(playlists.createCalls, 1);
+        QCOMPARE(playlists.names, QStringList{u"Admitted album"_s});
+        QCOMPARE(playlists.insertedPlaylists.size(), 1);
+        QVERIFY(playlists.insertedPlaylists.first() != selected);
+        QCOMPARE(playlists.blocks.first().at(0).extraProperties().value(BandcampSourceUrlProperty), AlbumSource);
+    }
+
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    BandcampImportController forced{3,
+                                    {{BandcampPageKind::Track, TrackSource, {}}},
+                                    true,
+                                    selected,
+                                    1000,
+                                    library.api,
+                                    playlists.api,
+                                    {}};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(forced, finished, summary);
+    forced.start();
+    forced.acceptScopeResult(successfulTrackScope(3, true));
+    forced.finishResolution({3, 1, 1, 0, 0});
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QCOMPARE(summary.added, 1);
+    QCOMPARE(playlists.createCalls, 1);
+    QCOMPARE(playlists.names, QStringList{u"Admitted album"_s});
+    QVERIFY(playlists.insertedPlaylists.first() != selected);
+
+    LibraryBoundary standaloneLibrary;
+    PlaylistBoundary standalonePlaylists;
+    BandcampImportController standalone{13,
+                                        {{BandcampPageKind::Track, TrackSource, {}}},
+                                        true,
+                                        {},
+                                        1000,
+                                        standaloneLibrary.api,
+                                        standalonePlaylists.api,
+                                        {}};
+    bool standaloneFinished = false;
+    BandcampImportSummary standaloneSummary;
+    connectImportCompletion(standalone, standaloneFinished, standaloneSummary);
+    standalone.start();
+    standalone.acceptScopeResult(successfulTrackScope(13));
+    standalone.finishResolution({13, 1, 1, 0, 0});
+
+    QTRY_VERIFY_WITH_TIMEOUT(standaloneFinished, 2000);
+    QCOMPARE(standaloneSummary.added, 1);
+    QCOMPARE(standalonePlaylists.names, QStringList{u"Standalone title"_s});
+}
+
+void FooyinTrackTests::preservesOrderedAlbumBlocksAndRepeatedScopes()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    BandcampImportController controller{4,
+                                        {{BandcampPageKind::Album, AlbumSource, {}},
+                                         {BandcampPageKind::Album, AlbumSource, {}},
+                                         {BandcampPageKind::Track, TrackSource, {}}},
+                                        true,
+                                        {},
+                                        1000,
+                                        library.api,
+                                        playlists.api,
+                                        {}};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(4, 0));
+    controller.acceptScopeResult(successfulAlbumScope(4, 1));
+    controller.acceptScopeResult(successfulTrackScope(4, true, 2));
+    controller.finishResolution({4, 3, 3, 0, 0});
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 3000);
+    QCOMPARE(summary.added, 3);
+    QCOMPARE(playlists.createCalls, 1);
+    QCOMPARE(playlists.names, QStringList{u"Bandcamp"_s});
+    QCOMPARE(playlists.blocks.size(), 3);
+    QCOMPARE(playlists.blocks.at(0).size(), 2);
+    QCOMPARE(playlists.blocks.at(1).size(), 2);
+    QCOMPARE(playlists.blocks.at(2).size(), 1);
+    QCOMPARE(playlists.blocks.at(0).at(0).filepath(), u"bandcamp://track/71"_s);
+    QCOMPARE(playlists.blocks.at(1).at(0).filepath(), u"bandcamp://track/71"_s);
+    QCOMPARE(playlists.blocks.at(0).at(1).album(), u"Admitted album"_s);
+    QCOMPARE(playlists.blocks.at(2).at(0).album(), u"Admitted album"_s);
+    QCOMPARE(playlists.blocks.at(2).at(0).extraProperties().value(BandcampSourceUrlProperty), AlbumSource);
+    QCOMPARE(playlists.insertedPlaylists.at(0), playlists.insertedPlaylists.at(1));
+    QCOMPARE(playlists.insertedPlaylists.at(1), playlists.insertedPlaylists.at(2));
+}
+
+void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
+{
+    {
+        LibraryBoundary library;
+        PlaylistBoundary playlists;
+        BandcampImportController controller{5,
+                                            {{BandcampPageKind::Album, AlbumSource, {}}},
+                                            true,
+                                            {},
+                                            1000,
+                                            library.api,
+                                            playlists.api,
+                                            {}};
+        bool finished = false;
+        BandcampImportSummary summary;
+        connectImportCompletion(controller, finished, summary);
+        controller.start();
+        controller.acceptScopeResult(failedScope(5));
+        controller.finishResolution({5, 1, 0, 1, 0});
+
+        QTRY_VERIFY_WITH_TIMEOUT(finished, 1000);
+        QCOMPARE(summary.added, 0);
+        QCOMPARE(summary.failed, 1);
+        QCOMPARE(playlists.createCalls, 0);
+        QVERIFY(playlists.blocks.isEmpty());
+    }
+
+    {
+        LibraryBoundary library;
+        PlaylistBoundary playlists;
+        const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+        BandcampImportController controller{6,
+                                            {{BandcampPageKind::Album, AlbumSource, {}},
+                                             {BandcampPageKind::Track, TrackSource, {}}},
+                                            false,
+                                            selected,
+                                            1000,
+                                            library.api,
+                                            playlists.api,
+                                            {}};
+        bool finished = false;
+        BandcampImportSummary summary;
+        connectImportCompletion(controller, finished, summary);
+        controller.start();
+        controller.acceptScopeResult(failedScope(6, 0));
+        controller.acceptScopeResult(successfulTrackScope(6, false, 1));
+        controller.finishResolution({6, 2, 1, 1, 0});
+
+        QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+        QCOMPARE(summary.added, 1);
+        QCOMPARE(summary.failed, 1);
+        QCOMPARE(playlists.createCalls, 0);
+        QCOMPARE(playlists.blocks.size(), 1);
+        QCOMPARE(playlists.insertedPlaylists.first(), selected);
+    }
+
+    {
+        LibraryBoundary library;
+        library.snapshotFailuresRemaining = 1;
+        PlaylistBoundary playlists;
+        BandcampImportController controller{10,
+                                            {{BandcampPageKind::Album, AlbumSource, {}},
+                                             {BandcampPageKind::Track, TrackSource, {}}},
+                                            true,
+                                            {},
+                                            1000,
+                                            library.api,
+                                            playlists.api,
+                                            {}};
+        bool finished = false;
+        BandcampImportSummary summary;
+        connectImportCompletion(controller, finished, summary);
+        controller.start();
+        controller.acceptScopeResult(successfulAlbumScope(10, 0));
+        controller.acceptScopeResult(successfulTrackScope(10, false, 1));
+        controller.finishResolution({10, 2, 2, 0, 0});
+
+        QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+        QCOMPARE(summary.added, 1);
+        QCOMPARE(summary.failed, 1);
+        QVERIFY(summary.stopReason.isEmpty());
+        QCOMPARE(library.snapshotCalls, 2);
+        QCOMPARE(playlists.createCalls, 1);
+        QCOMPARE(playlists.names, QStringList{u"Bandcamp"_s});
+        QCOMPARE(playlists.blocks.size(), 1);
+    }
+
+    {
+        LibraryBoundary library;
+        PlaylistBoundary playlists;
+        playlists.throwOnInsert = true;
+        BandcampImportController controller{11,
+                                            {{BandcampPageKind::Track, TrackSource, {}}},
+                                            true,
+                                            {},
+                                            1000,
+                                            library.api,
+                                            playlists.api,
+                                            {}};
+        bool finished = false;
+        BandcampImportSummary summary;
+        connectImportCompletion(controller, finished, summary);
+        controller.start();
+        controller.acceptScopeResult(successfulTrackScope(11));
+        controller.finishResolution({11, 1, 1, 0, 0});
+
+        QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+        QCOMPARE(summary.added, 0);
+        QCOMPARE(summary.failed, 1);
+        QCOMPARE(summary.stopReason, u"The prepared tracks could not be added to the playlist."_s);
+        QCOMPARE(playlists.createCalls, 1);
+        QVERIFY(playlists.blocks.isEmpty());
+    }
+}
+
+void FooyinTrackTests::stopsWhenDestinationChangesDuringPreparation()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    library.snapshotHook = [&playlists, selected]() {
+        playlists.availability.insert(selected.toString(QUuid::WithoutBraces),
+                                      BandcampPlaylistAvailability::Locked);
+    };
+    BandcampOperationId cancelledOperation = 0;
+    BandcampImportController controller{7,
+                                        {{BandcampPageKind::Album, AlbumSource, {}}},
+                                        false,
+                                        selected,
+                                        1000,
+                                        library.api,
+                                        playlists.api,
+                                        [&cancelledOperation](BandcampOperationId id) {
+                                            cancelledOperation = id;
+                                        }};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(7));
+    controller.finishResolution({7, 1, 1, 0, 0});
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QCOMPARE(summary.added, 0);
+    QCOMPARE(summary.failed, 1);
+    QCOMPARE(summary.stopReason, u"The selected playlist is no longer available or writable."_s);
+    QCOMPARE(cancelledOperation, BandcampOperationId{7});
+    QVERIFY(playlists.blocks.isEmpty());
+    QCOMPARE(playlists.createCalls, 0);
+
+    PlaylistBoundary unavailable;
+    unavailable.owner.reset();
+    BandcampImportController unavailableController{12,
+                                                   {{BandcampPageKind::Track, TrackSource, {}}},
+                                                   true,
+                                                   {},
+                                                   1000,
+                                                   library.api,
+                                                   unavailable.api,
+                                                   [&cancelledOperation](BandcampOperationId id) {
+                                                       cancelledOperation = id;
+                                                   }};
+    bool unavailableFinished = false;
+    BandcampImportSummary unavailableSummary;
+    connectImportCompletion(unavailableController, unavailableFinished, unavailableSummary);
+    unavailableController.start();
+    unavailableController.finishResolution({12, 0, 0, 0, 0});
+
+    QVERIFY(unavailableFinished);
+    QCOMPARE(unavailableSummary.failed, 0);
+    QCOMPARE(unavailableSummary.stopReason, u"The playlist service is unavailable."_s);
+    QCOMPARE(cancelledOperation, BandcampOperationId{12});
+    QCOMPARE(unavailable.createCalls, 0);
+}
+
+void FooyinTrackTests::waitsForGatewayBeforeFinishingResolutionImport()
+{
+    LibraryBoundary library;
+    library.residents.push_back(residentWithUserEdits(710));
+    library.makeWriteAvailable();
+    PlaylistBoundary playlists;
+    const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    BandcampImportController controller{8,
+                                        {{BandcampPageKind::Track, TrackSource, {}}},
+                                        false,
+                                        selected,
+                                        1000,
+                                        library.api,
+                                        playlists.api,
+                                        {}};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+
+    BandcampResolvedTrack member = memberTrack();
+    BandcampScopeResult scope{8,
+                              0,
+                              {BandcampPageKind::Track, TrackSource, {}},
+                              ResolutionSuccess<BandcampResolvedData>{
+                                  BandcampResolvedData{std::move(member)}}};
+    controller.start();
+    controller.acceptScopeResult(scope);
+    QTRY_COMPARE_WITH_TIMEOUT(library.writeCalls, 1, 2000);
+    controller.finishResolution({8, 1, 1, 0, 0});
+    QVERIFY(!finished);
+
+    library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QCOMPARE(summary.added, 1);
+    QCOMPARE(playlists.blocks.size(), 1);
+    QCOMPARE(playlists.insertedPlaylists.first(), selected);
+}
+
+void FooyinTrackTests::cancellationWithdrawsPendingGatewayHandoff()
+{
+    LibraryBoundary library;
+    library.residents.push_back(residentWithUserEdits(711));
+    library.makeWriteAvailable();
+    PlaylistBoundary playlists;
+    const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    BandcampOperationId cancelledOperation = 0;
+    BandcampImportController controller{9,
+                                        {{BandcampPageKind::Track, TrackSource, {}}},
+                                        false,
+                                        selected,
+                                        1000,
+                                        library.api,
+                                        playlists.api,
+                                        [&cancelledOperation](BandcampOperationId id) {
+                                            cancelledOperation = id;
+                                        }};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+    BandcampResolvedTrack member = memberTrack();
+    controller.start();
+    controller.acceptScopeResult(
+        {9, 0, {BandcampPageKind::Track, TrackSource, {}},
+         ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(member)}}});
+    QTRY_COMPARE_WITH_TIMEOUT(library.writeCalls, 1, 2000);
+
+    controller.cancel();
+    QCOMPARE(library.cancelCalls, 1);
+    QCOMPARE(cancelledOperation, BandcampOperationId{9});
+    controller.finishResolution({9, 1, 1, 0, 0});
+    QVERIFY(finished);
+    QCOMPARE(summary.added, 0);
+    QCOMPARE(summary.cancelled, 1);
+    QVERIFY(playlists.blocks.isEmpty());
+
+    library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+    QCoreApplication::processEvents();
+}
+
+void FooyinTrackTests::deletingControllerFromPlaylistCallbackWithdrawsResolution()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    BandcampImportController* controller = nullptr;
+    BandcampOperationId cancelledOperation = 0;
+    playlists.insertHook = [&controller]() {
+        BandcampImportController* doomed = controller;
+        controller = nullptr;
+        delete doomed;
+    };
+    controller = new BandcampImportController{14,
+                                              {{BandcampPageKind::Album, AlbumSource, {}},
+                                               {BandcampPageKind::Track, TrackSource, {}}},
+                                              true,
+                                              {},
+                                              1000,
+                                              library.api,
+                                              playlists.api,
+                                              [&cancelledOperation](BandcampOperationId id) {
+                                                  cancelledOperation = id;
+                                              }};
+    QPointer<BandcampImportController> guard{controller};
+    bool finished = false;
+    BandcampImportSummary summary;
+    QObject::connect(controller, &BandcampImportController::finished, controller,
+                     [&finished, &summary](const BandcampImportSummary& value) {
+                         finished = true;
+                         summary = value;
+                     });
+
+    controller->start();
+    controller->acceptScopeResult(successfulAlbumScope(14, 0));
+    controller->acceptScopeResult(successfulTrackScope(14, false, 1));
+
+    QTRY_VERIFY_WITH_TIMEOUT(guard.isNull(), 2000);
+    QCOMPARE(cancelledOperation, BandcampOperationId{14});
+    QCOMPARE(playlists.blocks.size(), 1);
+    QVERIFY(!finished);
+}
+
+void FooyinTrackTests::cancellationDuringPlaylistCreationDoesNotInsert()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    BandcampImportController* controllerPointer = nullptr;
+    bool finished = false;
+    bool finishedDuringCreation = false;
+    BandcampImportSummary summary;
+    BandcampOperationId cancelledOperation = 0;
+    BandcampImportController controller{15,
+                                        {{BandcampPageKind::Album, AlbumSource, {}}},
+                                        true,
+                                        {},
+                                        1000,
+                                        library.api,
+                                        playlists.api,
+                                        [&controllerPointer, &cancelledOperation](BandcampOperationId id) {
+                                            cancelledOperation = id;
+                                            controllerPointer->finishResolution({id, 1, 1, 0, 0});
+                                        }};
+    controllerPointer = &controller;
+    connectImportCompletion(controller, finished, summary);
+    playlists.createHook = [&controller, &finished, &finishedDuringCreation]() {
+        controller.cancel();
+        finishedDuringCreation = finished;
+    };
+
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(15));
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QVERIFY(!finishedDuringCreation);
+    QCOMPARE(cancelledOperation, BandcampOperationId{15});
+    QCOMPARE(summary.added, 0);
+    QCOMPARE(summary.cancelled, 1);
+    QCOMPARE(playlists.createCalls, 1);
+    QVERIFY(playlists.blocks.isEmpty());
+}
+
+void FooyinTrackTests::cancellationDuringInsertionDefersSummaryAndCountsAcceptedBlock()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    BandcampImportController* controllerPointer = nullptr;
+    bool finished = false;
+    bool finishedDuringInsertion = false;
+    BandcampImportSummary summary;
+    BandcampOperationId cancelledOperation = 0;
+    BandcampImportController controller{16,
+                                        {{BandcampPageKind::Track, TrackSource, {}}},
+                                        true,
+                                        {},
+                                        1000,
+                                        library.api,
+                                        playlists.api,
+                                        [&controllerPointer, &cancelledOperation](BandcampOperationId id) {
+                                            cancelledOperation = id;
+                                            controllerPointer->finishResolution({id, 1, 1, 0, 0});
+                                        }};
+    controllerPointer = &controller;
+    connectImportCompletion(controller, finished, summary);
+    playlists.insertHook = [&controller, &finished, &finishedDuringInsertion]() {
+        controller.cancel();
+        finishedDuringInsertion = finished;
+    };
+
+    controller.start();
+    controller.acceptScopeResult(successfulTrackScope(16));
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QVERIFY(!finishedDuringInsertion);
+    QCOMPARE(cancelledOperation, BandcampOperationId{16});
+    QCOMPARE(summary.added, 1);
+    QCOMPARE(summary.failed, 0);
+    QCOMPARE(summary.cancelled, 0);
+    QCOMPARE(playlists.blocks.size(), 1);
+}
+
+void FooyinTrackTests::deletingControllerFromIntegrationErrorWithdrawsResolution()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    playlists.owner.reset();
+
+    BandcampImportController* controller = nullptr;
+    QPointer<BandcampImportController> guard;
+    QObject connectionContext;
+    BandcampOperationId cancelledOperation = 0;
+    bool finished = false;
+    int integrationErrors = 0;
+    controller = new BandcampImportController{17,
+                                              {{BandcampPageKind::Album, AlbumSource, {}}},
+                                              true,
+                                              {},
+                                              1000,
+                                              library.api,
+                                              playlists.api,
+                                              [&cancelledOperation](BandcampOperationId id) {
+                                                  cancelledOperation = id;
+                                              }};
+    guard = controller;
+    QObject::connect(controller, &BandcampImportController::integrationError, &connectionContext,
+                     [&controller, &integrationErrors](const QString&) {
+                         ++integrationErrors;
+                         delete controller;
+                         controller = nullptr;
+                     });
+    QObject::connect(controller, &BandcampImportController::finished, &connectionContext,
+                     [&finished](const BandcampImportSummary&) { finished = true; });
+
+    controller->start();
+    QCoreApplication::processEvents();
+
+    QVERIFY(guard.isNull());
+    QCOMPARE(integrationErrors, 1);
+    QCOMPARE(cancelledOperation, BandcampOperationId{17});
+    QVERIFY(!finished);
+    QCOMPARE(playlists.createCalls, 0);
+    QVERIFY(playlists.blocks.isEmpty());
 }
 
 int runFooyinTrackTests(int argc, char** argv)

@@ -487,6 +487,26 @@ See [bandcamppostprocessor.h](src/bandcamppostprocessor.h) and
 - Request state, continuation locators, caches, and diagnostics remain
   operational context rather than plugin domain metadata.
 
+### Import coordination boundary
+
+- One controller owns one import submission, its captured destination intent,
+  and its library gateway. Consume trusted, already ordered resolution outcomes;
+  do not add metadata processing, original-input grouping, another ordering
+  mechanism, or a plugin-global queue/cache.
+- Resolution progress reports terminal resolver outcomes immediately, independently
+  of orchestrator ordering or publication. Discovery has an indeterminate phase
+  until its release list is complete. Progress statistics remain operational
+  context, not domain fields; resolution work and repeated playlist occurrences
+  are distinct counts.
+- UI reporting is a minimal release-level progress/summary and a concise error
+  when integration must stop. Do not replay resolution diagnostics or propagated
+  failures in integration logs. Log high-level completion counts and failures
+  owned by integration, not copies of resolved metadata.
+- Use the captured playlist ID and normal public creation/insertion APIs.
+  Import completion waits for resolution and pending gateway/playlist handoffs,
+  not a new database acknowledgement protocol. Cancellation retains accepted
+  changes and withdraws unfinished work without claiming rollback.
+
 ## 8. Host safety and resource constraints
 
 Fooyin process safety takes precedence over completing a resolution. Failures
