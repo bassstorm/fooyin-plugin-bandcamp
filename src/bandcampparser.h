@@ -35,7 +35,6 @@ struct TrackCandidate
     // Validated HTTPS locator kept verbatim: QUrl serialization can change signed queries.
     CandidateField<QString> streamUrl;
     CandidateField<QDate> releaseDate;
-    CandidateField<qint64> artId;
 };
 
 struct AlbumCandidate
@@ -45,7 +44,6 @@ struct AlbumCandidate
     CandidateField<QString> title;
     CandidateField<QString> artist;
     CandidateField<QDate> releaseDate;
-    CandidateField<qint64> artId;
     QList<TrackCandidate> tracks;
 };
 
@@ -73,7 +71,6 @@ struct TrackPageCandidate
     ParentEvidence parent;
     // Context, not explicit facts about the track.
     CandidateField<QString> fallbackArtist;
-    CandidateField<qint64> fallbackArtId;
 };
 
 using ReleaseCandidate    = std::variant<AlbumCandidate, TrackPageCandidate>;

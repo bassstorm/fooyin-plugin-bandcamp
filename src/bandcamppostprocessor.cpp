@@ -142,8 +142,6 @@ const BandcampTrackProcessorPipeline& standardTrackProcessors()
         built.add(std::make_unique<TrackArtistInferenceProcessor>());
         built.add(std::make_unique<TrackArtistFallbackProcessor>());
         built.add(std::make_unique<TrackDateInheritanceProcessor>());
-        built.add(std::make_unique<TrackArtworkInheritanceProcessor>());
-        built.add(std::make_unique<TrackArtworkFallbackProcessor>());
         built.add(std::make_unique<TrackTitlePrefixProcessor>());
         built.add(std::make_unique<TrackNumberRepairProcessor>());
         return built;
@@ -166,7 +164,6 @@ void postProcessAlbum(AlbumAdmission& admission, const std::atomic_bool* stop)
                                            siblings,
                                            true,
                                            i,
-                                           {},
                                            {},
                                            admission.correlation.withTrack(admission.album.tracks.at(i).id),
                                            admission.trackProvenance[i],
@@ -204,7 +201,6 @@ void postProcessTrack(TrackAdmission& admission, const std::atomic_bool* stop)
                                        admission.completeSiblingSet,
                                        admission.siblingIndex,
                                        admission.fallbackArtist,
-                                       admission.fallbackArtId,
                                        admission.correlation.withTrack(admission.result.track.id),
                                        admission.trackProvenance,
                                        std::move(trackFacts),

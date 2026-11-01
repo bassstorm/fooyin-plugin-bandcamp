@@ -1,5 +1,7 @@
 #include "bandcampdiagnostics.h"
 
+#include "bandcamptrackuri.h"
+
 #include <QRegularExpression>
 #include <QStringBuilder>
 
@@ -125,7 +127,7 @@ QString formatTraceEvent(const CorrelationContext& context, const QString& event
 
     // A track URI leads once the track ID is trustworthy. Before then, job and release context identify the event.
     if(context.trackId > 0) {
-        record += QStringLiteral("bandcamp://track/%1 ").arg(context.trackId);
+        record += bandcampTrackUri(context.trackId) + QLatin1Char(' ');
     }
     if(context.jobId > 0) {
         record += keyValue(QStringLiteral("job"), QString::number(context.jobId)) + QLatin1Char(' ');

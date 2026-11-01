@@ -34,7 +34,6 @@ AlbumCandidate albumCandidate(qint64 id = 40, QString title = u"Album"_s, QList<
     album.title       = explicitValue(std::move(title));
     album.artist      = explicitValue(QStringLiteral("Album artist"));
     album.releaseDate = explicitValue(QDate(2020, 1, 1));
-    album.artId       = explicitValue(qint64{80});
     album.tracks      = std::move(tracks);
     return album;
 }
@@ -101,7 +100,6 @@ void verifyParserNullOptionals()
     QVERIFY(album);
     QCOMPARE(album->artist.state, FieldState::Invalid);
     QCOMPARE(album->releaseDate.state, FieldState::Invalid);
-    QCOMPARE(album->artId.state, FieldState::Invalid);
     QCOMPARE(album->tracks.first().artist.state, FieldState::Invalid);
     QCOMPARE(album->tracks.first().trackNumber.state, FieldState::Invalid);
     QCOMPARE(album->tracks.first().durationMs.state, FieldState::Invalid);
@@ -112,7 +110,6 @@ void verifyParserNullOptionals()
     postProcessAlbum(albumAdmission);
     QVERIFY(albumAdmission.album.metadata.artist.isEmpty());
     QVERIFY(!albumAdmission.album.metadata.releaseDate.isValid());
-    QCOMPARE(albumAdmission.album.metadata.artId, qint64{0});
     QVERIFY(albumAdmission.album.tracks.first().artist.isEmpty());
     QCOMPARE(albumAdmission.album.tracks.first().trackNumber, 1);
     QCOMPARE(albumAdmission.album.tracks.first().durationMs, qint64{0});
@@ -128,7 +125,6 @@ void verifyParserNullOptionals()
     QVERIFY(page);
     QCOMPARE(page->track.trackNumber.state, FieldState::Invalid);
     QCOMPARE(page->track.releaseDate.state, FieldState::Invalid);
-    QCOMPARE(page->track.artId.state, FieldState::Invalid);
 
     auto admittedTrack = admitStandaloneTrack(*page);
     QVERIFY(isSuccess(admittedTrack));
@@ -136,7 +132,6 @@ void verifyParserNullOptionals()
     postProcessTrack(trackAdmission);
     QVERIFY(!trackAdmission.result.album.has_value());
     QVERIFY(!trackAdmission.result.track.releaseDate.isValid());
-    QCOMPARE(trackAdmission.result.track.artId, qint64{0});
     QCOMPARE(trackAdmission.result.track.trackNumber, 0);
     QCOMPARE(trackAdmission.result.track.streamUrl, u"https://cdn.example.com/solo.mp3?sig=solo"_s);
 }
@@ -176,13 +171,11 @@ private slots:
         auto album              = albumCandidate(40, u"Album"_s, {child(1, u"One"_s)});
         album.artist            = CandidateField<QString>::invalid();
         album.releaseDate       = CandidateField<QDate>::invalid();
-        album.artId             = CandidateField<qint64>::invalid();
         auto& sourceTrack       = album.tracks[0];
         sourceTrack.artist      = CandidateField<QString>::invalid();
         sourceTrack.trackNumber = CandidateField<qint64>::invalid();
         sourceTrack.durationMs  = CandidateField<qint64>::invalid();
         sourceTrack.releaseDate = CandidateField<QDate>::invalid();
-        sourceTrack.artId       = CandidateField<qint64>::invalid();
 
         const auto result = admitAlbum(album);
         QVERIFY(isSuccess(result));
@@ -190,12 +183,10 @@ private slots:
         postProcessAlbum(admitted);
         QVERIFY(admitted.album.metadata.artist.isEmpty());
         QVERIFY(!admitted.album.metadata.releaseDate.isValid());
-        QCOMPARE(admitted.album.metadata.artId, qint64{0});
         QVERIFY(admitted.album.tracks.first().artist.isEmpty());
         QCOMPARE(admitted.album.tracks.first().trackNumber, 1);
         QCOMPARE(admitted.album.tracks.first().durationMs, qint64{0});
         QVERIFY(!admitted.album.tracks.first().releaseDate.isValid());
-        QCOMPARE(admitted.album.tracks.first().artId, qint64{0});
     }
 
     void emptyAlbumFailsExplicitly()
@@ -215,33 +206,6 @@ private slots:
         QCOMPARE(failure(result)->code, ResolutionErrorCode::RequiredFieldMissing);
         QCOMPARE(failure(result)->trackId, qint64{2});
         QCOMPARE(failure(result)->field, u"track.streamUrl"_s);
-    }
-
-    void invalidUsableOptionalValuesAreNotProjected()
-    {
-        auto album              = albumCandidate(40, u"Album"_s, {child(9, u"Nine"_s)});
-        album.artist            = explicitValue(QStringLiteral("   "));
-        album.releaseDate       = explicitValue(QDate{});
-        album.artId             = explicitValue(qint64{-8});
-        auto& sourceTrack       = album.tracks[0];
-        sourceTrack.artist      = explicitValue(QStringLiteral(" "));
-        sourceTrack.trackNumber = explicitValue(qint64{-2});
-        sourceTrack.durationMs  = explicitValue(qint64{-1});
-        sourceTrack.releaseDate = explicitValue(QDate{});
-        sourceTrack.artId       = explicitValue(qint64{-4});
-
-        const auto result = admitAlbum(album);
-        QVERIFY(isSuccess(result));
-        auto admitted = std::get<ResolutionSuccess<AlbumAdmission>>(result).value;
-        postProcessAlbum(admitted);
-        QVERIFY(admitted.album.metadata.artist.isEmpty());
-        QVERIFY(!admitted.album.metadata.releaseDate.isValid());
-        QCOMPARE(admitted.album.metadata.artId, qint64{0});
-        QVERIFY(admitted.album.tracks.first().artist.isEmpty());
-        QCOMPARE(admitted.album.tracks.first().trackNumber, 1);
-        QCOMPARE(admitted.album.tracks.first().durationMs, qint64{0});
-        QVERIFY(!admitted.album.tracks.first().releaseDate.isValid());
-        QCOMPARE(admitted.album.tracks.first().artId, qint64{0});
     }
 
     void selectedTrackIgnoresMalformedUnrelatedSibling()
@@ -290,7 +254,6 @@ private slots:
     {
         auto page               = trackPage();
         page.track.releaseDate  = explicitValue(QDate(2024, 5, 1));
-        page.track.artId        = explicitValue(qint64{901});
         auto parentChild        = child(1, u"Album child title"_s);
         parentChild.artist      = explicitValue(QStringLiteral("Child artist"));
         parentChild.trackNumber = explicitValue(qint64{4});
@@ -304,7 +267,6 @@ private slots:
         QCOMPARE(admitted.result.track.durationMs, qint64{90000});
         postProcessTrack(admitted);
         QCOMPARE(admitted.result.track.releaseDate, QDate(2024, 5, 1));
-        QCOMPARE(admitted.result.track.artId, qint64{901});
     }
 
     void missingChildFactsMayUseSelectedPage()
@@ -456,7 +418,7 @@ private slots:
         QVERIFY(failure(missingTitle));
         QCOMPARE(failure(missingTitle)->trackId, qint64{7});
 
-        page.parent.albumUrl = explicitValue(QUrl(u"ftp://artist.bandcamp.com/album/parent"_s));
+        page.parent.albumUrl = CandidateField<QUrl>::invalid();
         const auto location  = classifyParentEvidence(page);
         QVERIFY(std::holds_alternative<ResolutionFailure>(location));
         QCOMPARE(std::get<ResolutionFailure>(location).error.trackId, qint64{7});
@@ -505,13 +467,13 @@ private slots:
         QCOMPARE(admitted.result.track.trackNumber, 0);
     }
 
-    void standaloneRejectsInvalidSupportedStream()
+    void standaloneRejectsUnresolvedStream()
     {
         auto page               = trackPage();
         page.parent.declaration = ParentDeclaration::NoParent;
         page.parent.albumId     = CandidateField<qint64>::invalid();
         page.parent.albumUrl    = CandidateField<QUrl>::missing();
-        page.track.streamUrl    = explicitValue(QStringLiteral("http://cdn.example.com/track.mp3"));
+        page.track.streamUrl    = CandidateField<QString>::invalid();
         const auto result       = admitStandaloneTrack(page);
         QVERIFY(!isSuccess(result));
         QCOMPARE(failure(result)->field, u"track.streamUrl"_s);
@@ -530,7 +492,7 @@ private slots:
         QVERIFY(album.artist.isEmpty());
 
         TrackMetadataProvenance trackProvenance;
-        TrackProcessorContext trackContext{nullptr, siblings, false, 0, {}, {}, {}, trackProvenance};
+        TrackProcessorContext trackContext{nullptr, siblings, false, 0, {}, {}, trackProvenance};
         auto track = siblings.first();
         TrackArtistInferenceProcessor{}.process(track, trackContext);
         QVERIFY(track.artist.isEmpty());
@@ -550,7 +512,7 @@ private slots:
 
         QList<BandcampTrack> siblings{trackValue(1, u"Artist - One"_s), trackValue(2, u"Artist - Two"_s)};
         TrackMetadataProvenance provenance;
-        TrackProcessorContext context{nullptr, siblings, true, 0, {}, {}, {}, provenance};
+        TrackProcessorContext context{nullptr, siblings, true, 0, {}, {}, provenance};
         context.facts.inferredArtist = QStringLiteral("Artist");
         auto track                   = siblings.first();
         QCOMPARE(TrackArtistInferenceProcessor{}.process(track, context), 1);
@@ -575,32 +537,17 @@ private slots:
         BandcampAlbumMetadata parent;
         parent.artist      = u"Album artist"_s;
         parent.releaseDate = QDate(2023, 4, 5);
-        parent.artId       = 44;
         TrackMetadataProvenance provenance;
-        TrackProcessorContext context{&parent, siblings, false, -1, {}, {}, {}, provenance};
+        TrackProcessorContext context{&parent, siblings, false, -1, {}, {}, provenance};
         auto track = trackValue(4, u"Song"_s);
 
         QCOMPARE(TrackArtistFallbackProcessor{}.process(track, context), 1);
         QCOMPARE(track.artist, u"Album artist"_s);
         QVERIFY(!track.releaseDate.isValid());
-        QCOMPARE(track.artId, qint64{0});
         QCOMPARE(provenance.artist, FieldProvenance::Inherited);
 
         QCOMPARE(TrackDateInheritanceProcessor{}.process(track, context), 1);
         QCOMPARE(track.releaseDate, QDate(2023, 4, 5));
-        QCOMPARE(track.artId, qint64{0});
-
-        QCOMPARE(TrackArtworkInheritanceProcessor{}.process(track, context), 1);
-        QCOMPARE(track.artId, qint64{44});
-
-        TrackMetadataProvenance fallbackProvenance;
-        TrackProcessorContext fallbackContext{nullptr, siblings,          false, -1, {}, explicitValue(qint64{55}),
-                                              {},      fallbackProvenance};
-        auto standalone  = trackValue(5, u"Standalone"_s);
-        standalone.artId = 0;
-        QCOMPARE(TrackArtworkFallbackProcessor{}.process(standalone, fallbackContext), 1);
-        QCOMPARE(standalone.artId, qint64{55});
-        QCOMPARE(fallbackProvenance.artId, FieldProvenance::Fallback);
     }
 
     void sharedArtistInferenceAndCleanupComposeInOrder()
@@ -713,35 +660,29 @@ private slots:
         }
     }
 
-    void trackDateAndArtStayOwnedWhenParentDiffers()
+    void trackDateStaysOwnedWhenParentDiffers()
     {
         auto page              = trackPage();
         page.track.releaseDate = explicitValue(QDate(2024, 2, 3));
-        page.track.artId       = explicitValue(qint64{990});
         auto album             = albumCandidate(40, u"Parent"_s, {child(1, u"One"_s)});
         album.releaseDate      = explicitValue(QDate(2019, 1, 1));
-        album.artId            = explicitValue(qint64{80});
         auto result            = admitAlbumTrack(page, album);
         QVERIFY(isSuccess(result));
         auto admitted = std::get<ResolutionSuccess<TrackAdmission>>(result).value;
         postProcessTrack(admitted);
         QCOMPARE(admitted.result.track.releaseDate, QDate(2024, 2, 3));
-        QCOMPARE(admitted.result.track.artId, qint64{990});
     }
 
-    void missingTrackDateAndArtInheritFromParent()
+    void missingTrackDateInheritsFromParent()
     {
         auto page              = trackPage();
         page.track.releaseDate = CandidateField<QDate>::missing();
-        page.track.artId       = CandidateField<qint64>::missing();
         auto result            = admitAlbumTrack(page, albumCandidate(40, u"Parent"_s, {child(1, u"One"_s)}));
         QVERIFY(isSuccess(result));
         auto admitted = std::get<ResolutionSuccess<TrackAdmission>>(result).value;
         postProcessTrack(admitted);
         QCOMPARE(admitted.result.track.releaseDate, QDate(2020, 1, 1));
-        QCOMPARE(admitted.result.track.artId, qint64{80});
         QCOMPARE(admitted.trackProvenance.releaseDate, FieldProvenance::Inherited);
-        QCOMPARE(admitted.trackProvenance.artId, FieldProvenance::Inherited);
     }
 
     void trackNumberRepairReservesEveryExplicitNumber()
@@ -749,7 +690,7 @@ private slots:
         QList<BandcampTrack> siblings{trackValue(1, u"One"_s, {}, 1), trackValue(2, u"Missing"_s),
                                       trackValue(3, u"Two"_s, {}, 2)};
         TrackMetadataProvenance provenance;
-        TrackProcessorContext context{nullptr, siblings, true, 1, {}, {}, {}, provenance};
+        TrackProcessorContext context{nullptr, siblings, true, 1, {}, {}, provenance};
         context.facts.repairedTrackNumber = 3;
         auto missing                      = siblings.at(1);
         QCOMPARE(TrackNumberRepairProcessor{}.process(missing, context), 1);
@@ -763,7 +704,7 @@ private slots:
         QList<BandcampTrack> siblings{trackValue(1, u"One"_s, {}, 1), trackValue(2, u"Two"_s, {}, 2),
                                       trackValue(3, u"Missing"_s), trackValue(4, u"Four"_s, {}, 4)};
         TrackMetadataProvenance provenance;
-        TrackProcessorContext context{nullptr, siblings, true, 2, {}, {}, {}, provenance};
+        TrackProcessorContext context{nullptr, siblings, true, 2, {}, {}, provenance};
         context.facts.repairedTrackNumber = 3;
         auto missing                      = siblings.at(2);
         QCOMPARE(TrackNumberRepairProcessor{}.process(missing, context), 1);
@@ -775,7 +716,7 @@ private slots:
         QList<BandcampTrack> siblings{trackValue(1, u"One"_s, {}, 2), trackValue(2, u"Two"_s, {}, 2),
                                       trackValue(3, u"Missing"_s)};
         TrackMetadataProvenance provenance;
-        TrackProcessorContext context{nullptr, siblings, true, 1, {}, {}, {}, provenance};
+        TrackProcessorContext context{nullptr, siblings, true, 1, {}, {}, provenance};
         auto repeated = siblings.at(1);
         QCOMPARE(TrackNumberRepairProcessor{}.process(repeated, context), 0);
         QCOMPARE(repeated.trackNumber, 2);

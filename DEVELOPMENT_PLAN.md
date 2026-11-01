@@ -59,7 +59,7 @@ not proof of contract compliance: some tests assert superseded behaviour.
 | Area | Evidence and necessary change |
 | --- | --- |
 | Domain and outcomes | [bandcampmodel.h](src/bandcampmodel.h), [bandcampparser.h](src/bandcampparser.h), and [bandcampservice.h](src/bandcampservice.h) expose default-filled models, error strings, warning lists, and a result containing both album and track slots. Separate incomplete candidates from admitted metadata and use tagged outcomes. A selected track must retain validated parent metadata, including album identity/title. |
-| Source mapping | [bandcampparser.cpp](src/bandcampparser.cpp) selects the first track row, ignores several identity aliases and declared parent identity, treats page artist/artwork as resolved track context, truncates oversized fields, and skips malformed album rows. Implement the exact mapping/ownership rules, retain declared membership, and preserve unresolved evidence. |
+| Source mapping | [bandcampparser.cpp](src/bandcampparser.cpp) selects the first track row, ignores several identity aliases and declared parent identity, treats page artist as resolved track context, truncates oversized fields, and skips malformed album rows. Implement the exact mapping/ownership rules, retain declared membership, and preserve unresolved evidence. |
 | Assembly and admission | [bandcampservice.cpp](src/bandcampservice.cpp) post-processes each page before fetching the parent. Parent fetch, parse, and timeout failures return partial track success; parent children are not matched by ID. Introduce authoritative assembly and scope validation before processors. |
 | Processors | [bandcamppostprocessor.cpp](src/bandcamppostprocessor.cpp) interleaves album and track steps. [bandcampprocessors.cpp](src/bandcampprocessors.cpp) lets album processors mutate children, removes streamless tracks, and reports missing titles through warnings. Reclassify rules, enforce album-first/track-second passes, and move rejection to admission. |
 | Scheduling and lifecycle | [bandcampservice.cpp](src/bandcampservice.cpp) queues all inputs and retains all results until a batch ends. Timed-out parse futures can outlive active slots; destruction waits for them. Separate input association/ordering from bounded release execution and use cooperative, nonblocking shutdown. Add operation cancellation and a simple operation-local domain cache, not a shared-request broker. |
@@ -96,9 +96,9 @@ input devices. Implementation must target these actual interfaces:
 - `RemoteIoService` supplies bounded streaming devices, but its public remote
   interfaces do not expose numeric HTTP status. Do not parse error-message
   text or use private host headers to implement playback recovery.
-- Fooyin's cover repository recognizes the `COVERART` extra tag. Standard
-  virtual-track metadata editing and restart persistence should be reused,
-  not replaced by a plugin-specific editor or database schema.
+- Existing user extra tags, including `COVERART`, are preserved on resident
+  tracks. Bandcamp artwork import and artwork locator construction are out of
+  scope.
 
 ## 3. Target design
 
@@ -246,7 +246,7 @@ or deliberately replaced with contract-correct expectations.
   from its validated source representation rather than trusting the input URL
   alone. Release metadata comes only from decoded `data-tralbum`.
 - Implement section 6 of [AGENTS.md](AGENTS.md): known same-owner aliases,
-  identity agreement, stable-ID row matching, explicit track-owned date/artwork,
+  identity agreement, stable-ID row matching, explicit track-owned dates,
   fallback context, and declared parent identity/location.
 - Preserve every declared album member, including malformed and streamless
   candidates, with the original membership/count and ordering evidence.
@@ -280,8 +280,8 @@ and neither raw source objects nor warning bags leave the parser.
   missing-title warning processors; admission owns those validity decisions.
   Remove the separate post-parent patch pipeline and all warning-list plumbing.
 - Keep processor mutations traceable with old/new values and reasons. A no-op
-  emits no processor event; owner-specific date/artwork differences are not
-  themselves processor conflicts.
+  emits no processor event; owner-specific date differences are not themselves
+  processor conflicts.
 
 **Complete when:** the production album/track path enforces admission before
 refinement; isolated rules and composed passes are deterministic and preserve
@@ -417,28 +417,36 @@ snapshots.
 ### Increment 7 - Fooyin identity, metadata, and persistence
 
 - Add one strict URI serializer/parser for `bandcamp://track/<trackId>` and
-  reuse it at construction, lookup, refresh, and decoder boundaries.
+  reuse it at construction, resident lookup, refresh, and decoder boundaries.
 - Project admitted metadata into Fooyin tracks: title/artist, parent album
   title/artist when present, release year, supplied/reconciled number and total,
-  duration, and artwork. Leave unknown optional values absent; do not fabricate
-  album metadata for standalone tracks.
+  duration, and transport properties. Projection copies trusted domain values;
+  it does not normalize, infer, inherit, or reinterpret metadata. No artwork
+  import or artwork locator is created.
 - Store provider, canonical source, signed stream, and expiry in the agreed
   `ExtraProperties`. Parse expiry safely from transport data, outside descriptive
   metadata. Any retained ID mirror must agree with the URI.
-- Use the host cover repository's `COVERART` path for artwork locators. Mark
-  metadata read and initialize host identity/hash through supported APIs.
-- Put URI-based resident lookup, reuse, and persistence in a library gateway.
-  Resolve a bounded incoming batch against host tracks rather than scanning the
-  entire library separately for each track. Do not use private database helpers
-  or invent a nonexistent path-lookup API.
-- Reuse the latest resident track at commit time, preserving edited tags and
-  database ID; merge only validated transport changes. Handle overlapping imports
-  and delayed writes without overwriting newer edits with stale snapshots.
-  Observe asynchronous host write outcomes and report persistence failures.
+- Mark metadata read and initialize Fooyin hash through supported APIs.
+- Give each import submission its own library gateway. It accepts ordered
+  resolved track occurrences and returns ordered Fooyin tracks for the caller's
+  normal insertion path. At the start of each queued commit, take one
+  resident-track snapshot, match persisted identities with the strict URI,
+  preserve all resident metadata and merge only the four transport properties.
+  Deduplicate database write targets without changing incoming occurrences.
+- New tracks remain ID-less and are handed to the normal playlist insertion
+  path; the gateway does not assign host IDs or write private database state.
+  Observe `WriteResult` counts and report write failures. These are one-way
+  snapshot writes; do not add observers, readbacks, repair writes, or concurrent
+  edit tracking around the host API.
+- Pending commits are a FIFO owned by the submission gateway. Active writes use
+  the submitted timeout; cancellation withdraws unfinished work but does not
+  claim to roll back an already accepted host write.
 
 **Complete when:** album and track inputs produce identical stable identities;
-tag/artwork mapping and URI rejection have deterministic tests; re-add preserves
-edits and database identity while allowing repeated playlist occurrences.
+trusted projection, strict URI handling, resident transport merging, write
+outcomes, and callback lifetimes have focused plugin-boundary tests; re-add
+preserves the latest resident edits present in the commit snapshot and repeated
+playlist occurrences remain present.
 
 ### Increment 8 - Playlist import controller and operational UI
 
@@ -519,7 +527,7 @@ track to completion, including after restart with an expired stored stream.
 
 ### Increment 11 - End-to-end acceptance and documentation
 
-- Exercise discography/album/track import into persistent playlists, artwork,
+- Exercise discography/album/track import into persistent playlists,
   normal properties editing, restart, re-add, manual refresh, and playback.
   Verify user-edited metadata survives each path.
 - Run deterministic semantic/robustness suites, explicit `tests-live` coverage,

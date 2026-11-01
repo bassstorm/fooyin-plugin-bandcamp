@@ -317,6 +317,7 @@ int runClientTests(int argc, char** argv);
 int runServiceTests(int argc, char** argv);
 int runOrchestratorTests(int argc, char** argv);
 int runParserTests(int argc, char** argv);
+int runFooyinTrackTests(int argc, char** argv);
 
 int main(int argc, char** argv)
 {
@@ -339,6 +340,9 @@ int main(int argc, char** argv)
             SettingsTests tests;
             return QTest::qExec(&tests, argc - 1, argv + 1);
         }
+        if(qstrcmp(argv[1], "--fooyin-track-tests") == 0) {
+            return runFooyinTrackTests(argc - 1, argv + 1);
+        }
     }
 
     int status = 0;
@@ -355,6 +359,7 @@ int main(int argc, char** argv)
     status |= runClientTests(argc, argv);
     status |= runOrchestratorTests(argc, argv);
     status |= runServiceTests(argc, argv);
+    status |= runFooyinTrackTests(argc, argv);
     return status;
 }
 

@@ -38,20 +38,6 @@ public:
     int process(BandcampTrack& track, TrackProcessorContext& context) const override;
 };
 
-class TrackArtworkInheritanceProcessor final : public TrackPostProcessor
-{
-public:
-    [[nodiscard]] QString name() const override;
-    int process(BandcampTrack& track, TrackProcessorContext& context) const override;
-};
-
-class TrackArtworkFallbackProcessor final : public TrackPostProcessor
-{
-public:
-    [[nodiscard]] QString name() const override;
-    int process(BandcampTrack& track, TrackProcessorContext& context) const override;
-};
-
 class TrackTitlePrefixProcessor final : public TrackPostProcessor
 {
 public:

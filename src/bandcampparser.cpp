@@ -1166,9 +1166,6 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
             = mapper.select(QStringLiteral("album.releaseDate"), date(current.value(u"release_date")),
                             QStringLiteral("$.current.release_date"), date(root.value(u"album_release_date")),
                             QStringLiteral("$.album_release_date"));
-        album.artId
-            = mapper.select(QStringLiteral("album.artId"), current.integer(u"art_id"),
-                            QStringLiteral("$.current.art_id"), root.integer(u"art_id"), QStringLiteral("$.art_id"));
         album.tracks.reserve(info.size());
         for(qsizetype i = 0; i < info.size(); ++i) {
             if(stopRequested(stop)) {
@@ -1223,14 +1220,9 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
                         rowPath + QStringLiteral(".track_num"), FieldProvenance::Explicit);
     page.track.releaseDate = mapper.owned(QStringLiteral("track.releaseDate"), date(current.value(u"release_date")),
                                           QStringLiteral("$.current.release_date"));
-    page.track.artId
-        = mapper.owned(QStringLiteral("track.artId"), current.integer(u"art_id"), QStringLiteral("$.current.art_id"));
     page.fallbackArtist
         = mapper.owned(QStringLiteral("fallbackArtist"), text(root.value(u"artist")), QStringLiteral("$.artist"));
     page.fallbackArtist.provenance = FieldProvenance::Fallback;
-    page.fallbackArtId
-        = mapper.owned(QStringLiteral("fallbackArtId"), root.integer(u"art_id"), QStringLiteral("$.art_id"));
-    page.fallbackArtId.provenance = FieldProvenance::Fallback;
 
     const auto parentId  = current.value(u"album_id");
     page.parent.albumUrl = mapper.owned(QStringLiteral("parent.albumUrl"), location(root.value(u"album_url"), pageUrl),

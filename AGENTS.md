@@ -50,7 +50,7 @@ the HTML document.
 | `$` | Release-page data with supporting context, not a uniform album tree. |
 | `$.current` | The entity being viewed: an album on an album page, a track on a track page. |
 | `$.current.type`, `$.current.id` | The viewed entity's kind and stable identity. |
-| `$.artist`, `$.art_id` | Effective page-level values; their presence alone does not establish explicit track ownership. |
+| `$.artist` | Effective page-level value; its presence alone does not establish explicit track ownership. |
 | `$.trackinfo[*]` | Track records: listed children on an album page, selected-track data on a track page. |
 | `$.current.album_id`, `$.album_url` | Parent album identity and location on a track page; the location can be relative. |
 | `$.album_release_date` | Album-scoped date, including on a track page; not an alias for that track's own release date. |
@@ -78,7 +78,7 @@ authoritative album or track metadata.
 ### Identity and relationship invariants
 
 - Album membership is established by explicit relationships and stable IDs,
-  not matching titles, URL slugs, track counts, artwork, or track numbers.
+  not matching titles, URL slugs, track counts, or track numbers.
 - Unknown or malformed membership is distinct from standalone status.
   Explicit no-parent values establish standalone status; a missing or invalid
   parent location does not negate a known album ID.
@@ -87,8 +87,8 @@ authoritative album or track metadata.
 
 ### Metadata invariants
 
-- Album facts and track facts have different owners. Track artist, artwork,
-  and date can differ from the corresponding album values without conflict.
+- Album facts and track facts have different owners. Track artist and date can
+  differ from the corresponding album values without conflict.
   The hosting account is not necessarily the recording artist or album artist.
 - `trackTotal` is the size of the declared track set, not the number selected
   or successfully resolved, or an assumed count of undisclosed tracks. Supplied
@@ -107,8 +107,8 @@ resolution context, not represented by invented metadata.
 
 | Entity | Required before post-processing | Optional metadata |
 | --- | --- | --- |
-| Album metadata | Positive stable album ID, canonical album `sourceUrl`, and nonblank title. | Artist, release date, artwork. |
-| Track | Positive stable track ID, canonical release `sourceUrl`, nonblank title, and valid supported HTTPS `streamUrl`. | Artist, album artist, duration, release date, artwork, track number, and total. |
+| Album metadata | Positive stable album ID, canonical album `sourceUrl`, and nonblank title. | Artist, release date. |
+| Track | Positive stable track ID, canonical release `sourceUrl`, nonblank title, and valid supported HTTPS `streamUrl`. | Artist, album artist, duration, release date, track number, and total. |
 
 Album membership adds required context: validated parent metadata and a matching
 selected child. Stream presence is a domain requirement, not a post-processing
@@ -121,7 +121,7 @@ and selected-track requirements are defined by the resolution scope below.
 ### Representation constraints
 
 - Include only metadata consumed by Fooyin plus stable identity and playback
-  locators needed to use it (`id`, `sourceUrl`, stream and artwork locators).
+  locators needed to use it (`id`, `sourceUrl`, and stream locator).
 - Exclude Bandcamp source structures, field provenance, request/effective URLs,
   scheduling, cache state, and diagnostics from final domain metadata.
 - There is no discography domain entity.
@@ -156,7 +156,7 @@ database ID, or hash when the Bandcamp track ID is unavailable.
 - The same Bandcamp track has the same URI when imported from its album, track
   page, or a discovered release candidate. Album membership is not encoded in
   the URI and does not create a second identity.
-- Titles, artists, numbering, artwork, release URLs, and signed streams are
+- Titles, artists, numbering, release URLs, and signed streams are
   metadata or locators, not URI components. Their changes do not change the
   persistent identity.
 - The URI serializes the plugin domain track's `id` at the Fooyin construction
@@ -164,8 +164,16 @@ database ID, or hash when the Bandcamp track ID is unavailable.
 - For a persisted Fooyin track, the URI is the authoritative serialized track
   ID. Any `_BANDCAMP_TRACK_ID` mirror must match it; disagreement is an error,
   not permission to refresh or play a different track.
-- Re-adding the same URI reuses the existing identity and preserves user-edited
-  metadata. Refreshing streams never changes `filepath` or user-edited tags.
+- Re-adding the same URI reuses the existing identity and snapshots current
+  user-edited metadata before a transport-only write. The plugin does not
+  serialize simultaneous external edits with that write. Refreshing streams
+  never changes `filepath` or user-edited tags in the snapshot.
+- A submission-scoped gateway takes the snapshot when each queued commit starts,
+  writes only distinct resident targets through the public host API, and uses
+  that request's `WriteResult` as its persistence outcome. It does not read back,
+  observe host changes, or repair writes.
+- Extra tags already present on a resident track, including `COVERART`, are
+  preserved. The plugin does not create artwork tags or artwork locators.
 
 ### Persistent locators and playback state
 
@@ -300,14 +308,14 @@ page's decoded release JSON. Cross-resource policy is defined separately below.
 | --- | --- | --- |
 | Viewed entity kind/ID | `$.current.type`, `$.current.id`; root aliases `$.item_type`, `$.id` | Prefer valid explicit current values; validate aliases as the same entity. Keep kind in resolution context. |
 | Album title/artist | `$.current.title`, `$.current.artist`; `$.artist` | Prefer explicit album values; root artist is the page-level fallback. |
-| Album date/artwork | `$.current.release_date`, `$.current.art_id`; `$.album_release_date`, `$.art_id` | Prefer explicit album values, then validated same-album root fallbacks. |
+| Album date | `$.current.release_date`; `$.album_release_date` | Prefer explicit album values, then validated same-album root fallbacks. |
 | Track ID | `$.trackinfo[*].id`, `$.trackinfo[*].track_id`; viewed track `$.current.id` | Validate aliases and match the viewed track to its record; never match by array position. |
 | Track title/artist | `$.trackinfo[*].title`, `$.trackinfo[*].artist`; viewed track `$.current.title`, `$.current.artist` | Read each child from its row. For the viewed track, prefer valid explicit current values over its local row equivalents. |
 | Track number | `$.trackinfo[*].track_num`; viewed track `$.current.track_number` | Read each child's number; for the viewed track, prefer a valid explicit current number over its local row equivalent. |
 | Track duration | `$.trackinfo[*].duration` | Convert valid seconds to domain `durationMs`. |
 | Track stream | `$.trackinfo[*].file['mp3-128']` | Map the supported signed stream locator without altering its required query parameters. |
-| Track-owned date/artwork | `$.current.release_date`, `$.current.art_id` on a track page | Map explicit track values without substituting album-scoped fields. |
-| Page fallback context | `$.artist`, `$.art_id` on a track page | Retain contextual values with fallback provenance, not as explicit track-owned facts. |
+| Track-owned date | `$.current.release_date` on a track page | Map explicit track values without substituting album-scoped fields. |
+| Page fallback context | `$.artist` on a track page | Retain contextual artist with fallback provenance, not as an explicit track-owned fact. |
 | Parent context | `$.current.album_id`, `$.album_url` | Extract declared album identity and location without assuming successful parent resolution. |
 | Listed children | Album `$.trackinfo[*]` | Produce typed child candidates and retain declared membership/counts; never silently discard malformed or unavailable children. |
 
@@ -329,9 +337,9 @@ page's decoded release JSON. Cross-resource policy is defined separately below.
 
 | Domain facts | Authority and fallback |
 | --- | --- |
-| Album title, album artist, membership, listed total, album date/artwork | The resolved parent album is authoritative for album context. |
+| Album title, album artist, membership, listed total, album date | The resolved parent album is authoritative for album context. |
 | Matched track title, artist, number, duration | Valid explicit album-child values precede conflicting track-page equivalents. Missing child metadata can be filled from the selected track page. |
-| Track-owned date/artwork | Preserve explicit track values; inherit album values only when those values are missing. |
+| Track-owned date | Preserve explicit track values; inherit album values only when those values are missing. |
 | Track artist versus album artist | Preserve meaningful track artist; album artist is a separate concept, not an unconditional replacement. |
 | Album-backed track stream | Use the matched album child's stream. An absent stream cannot be bypassed with an older track-page stream. |
 | Track total | Derive it from declared album membership, not successful/selected children, and inherit it for album members. |
@@ -361,7 +369,30 @@ titles, credits, and legitimate differences between album and track metadata.
 | HTTP client | One bounded HTTP fetch, redirects, effective response location, and physical reply lifetime. | Automatic retries, metadata interpretation, or domain caching. |
 | Album processors | Semantic refinement of admitted album-owned metadata. | Track mutation, resource rejection, raw source access, or network requests. |
 | Track processors | Semantic refinement of one admitted track with validated parent context when present. | Album mutation, resource rejection, raw source access, or network requests. |
-| Fooyin track construction | Serialization of domain identity into the virtual URI and projection of resolved metadata/locators into Fooyin tracks. | Inventing identity, source interpretation, or network resolution. |
+| Fooyin track construction | Serialization of domain identity into the virtual URI and direct projection of resolved metadata/locators into Fooyin tracks. | Inventing identity, source interpretation, metadata normalization/inheritance, or network resolution. |
+
+### Trust and validation ownership
+
+- Validate external values once at the boundary that interprets them. A parser
+  field marked `Usable` already satisfies its value's type, syntax, and range
+  contract; `Missing` and `Invalid` retain unresolved source observations.
+- Internal consumers trust established producer contracts. Do not repeat value
+  validation, normalize already validated optionals, or re-admit resolved domain
+  objects. Projection copies trusted metadata without further post-processing.
+- Assembly owns required-field availability after reconciliation, authoritative
+  source selection, relationships, and requested-scope atomicity. These are
+  resolution decisions, not duplicate parser checks. Preserve permitted fallback:
+  an unusable page-local field is not terminal when an authoritative source can
+  still supply it, and unrelated siblings do not fail a selected-track scope.
+- Stop resolution as soon as the deciding owner establishes a terminal failure
+  for the requested scope. Propagate its structured failure rather than defer it
+  to downstream validation or turn it into a success-shaped fallback.
+- Tests establish producer guarantees at the owning boundary and consumer
+  business rules using contract-valid inputs. Do not fabricate `Usable` fields
+  with invalid values to justify defensive consumer checks. Explicit unresolved
+  candidate states and untrusted persisted host properties remain valid test
+  inputs at their respective boundaries; Fooyin API correctness is not ours to
+  test.
 
 ### Parser boundary
 
@@ -382,6 +413,8 @@ See [bandcampparser.cpp](src/bandcampparser.cpp) and
 - Record each decoded release JSON snapshot before field mapping, including
   snapshots later rejected for invalid shape. Field fallback/conflict events
   retain concrete JSONPaths and source values here, not in post-processors.
+  A raw snapshot may naturally contain `art_id`; artwork is not mapped into
+  candidates or plugin domain metadata.
 
 ### Resolution boundary
 

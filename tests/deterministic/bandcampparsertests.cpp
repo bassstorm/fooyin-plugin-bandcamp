@@ -206,13 +206,11 @@ void ParserTests::albumOwnershipAndProvenance()
     QCOMPARE(album->artist.provenance, FieldProvenance::Explicit);
     QCOMPARE(album->releaseDate.value, QDate(2024, 5, 6));
     QCOMPARE(album->releaseDate.provenance, FieldProvenance::Fallback);
-    QCOMPARE(album->artId.value, qint64{3});
     const auto& child = album->tracks.first();
     QCOMPARE(child.id.value, qint64{7});
     QCOMPARE(child.id.provenance, FieldProvenance::Explicit);
     QCOMPARE(child.artist.state, FieldState::Missing);
     QCOMPARE(child.releaseDate.state, FieldState::Missing);
-    QCOMPARE(child.artId.state, FieldState::Missing);
 
     const auto fallback = parse(
         R"({"current":{"type":"album","artist":null},"artist":"Root","title":"Not album title","trackinfo":[]})");
@@ -243,11 +241,8 @@ void ParserTests::viewedTrackUsesStableIdAndOwnFields()
     QCOMPARE(page->track.durationMs.value, qint64{183429});
     QCOMPARE(page->track.streamUrl.value, u"https://cdn.example.com/a.mp3?token=abc%2f%41def&expires=123"_s);
     QCOMPARE(page->track.releaseDate.value, QDate(2020, 1, 2));
-    QCOMPARE(page->track.artId.value, qint64{8});
     QCOMPARE(page->fallbackArtist.value, u"Album artist"_s);
     QCOMPARE(page->fallbackArtist.provenance, FieldProvenance::Fallback);
-    QCOMPARE(page->fallbackArtId.value, qint64{99});
-    QCOMPARE(page->fallbackArtId.provenance, FieldProvenance::Fallback);
     QCOMPARE(page->parent.declaration, ParentDeclaration::AlbumBacked);
     QCOMPARE(page->parent.albumUrl.value.toString(), u"https://artist.bandcamp.com/album/parent?from=track"_s);
 }
@@ -265,7 +260,6 @@ void ParserTests::rowFallbackIsExplicitAndRootIsOnlyContext()
     QCOMPARE(page->track.artist.provenance, FieldProvenance::Explicit);
     QCOMPARE(page->track.trackNumber.value, qint64{4});
     QCOMPARE(page->track.releaseDate.state, FieldState::Missing);
-    QCOMPARE(page->track.artId.state, FieldState::Missing);
     QCOMPARE(page->parent.declaration, ParentDeclaration::Unknown);
 }
 

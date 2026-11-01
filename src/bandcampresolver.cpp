@@ -4,6 +4,7 @@
 #include "bandcampclient.h"
 #include "bandcamplogging.h"
 #include "bandcamppostprocessor.h"
+#include "bandcamptrackuri.h"
 
 #include <QFutureWatcher>
 #include <QNetworkAccessManager>
@@ -24,11 +25,6 @@ ResolutionError makeError(ResolutionErrorCode code, ResolutionStage stage, const
                           QString field, QString reason)
 {
     return {code, stage, url, trackId, std::move(field), std::move(reason)};
-}
-
-QString trackUri(qint64 id)
-{
-    return id > 0 ? QStringLiteral("bandcamp://track/%1").arg(id) : QString{};
 }
 
 QString cacheIdentity(const BandcampPageUrl& page)
@@ -81,7 +77,7 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
     }
     if(track->track.id.isUsable()) {
         context.trackId     = track->track.id.value;
-        context.resourceUrl = QUrl(trackUri(track->track.id.value));
+        context.resourceUrl = QUrl(bandcampTrackUri(track->track.id.value));
     }
     const ParentRequirement requirement = classifyParentEvidence(*track, context);
     if(const auto* failure = std::get_if<ResolutionFailure>(&requirement)) {
@@ -401,7 +397,7 @@ private:
         }
         if(track->track.id.isUsable()) {
             m_context.trackId     = track->track.id.value;
-            m_context.resourceUrl = QUrl(trackUri(track->track.id.value));
+            m_context.resourceUrl = QUrl(bandcampTrackUri(track->track.id.value));
         }
         const ParentRequirement requirement = classifyParentEvidence(*track, m_context);
         if(const auto* failure = std::get_if<ResolutionFailure>(&requirement)) {
@@ -441,7 +437,7 @@ private:
             context.trackId     = 0;
         }
         else if(primaryTrackId() > 0) {
-            context.resourceUrl = QUrl(trackUri(primaryTrackId()));
+            context.resourceUrl = QUrl(bandcampTrackUri(primaryTrackId()));
             context.trackId     = primaryTrackId();
         }
         m_currentUrl = context.resourceUrl;

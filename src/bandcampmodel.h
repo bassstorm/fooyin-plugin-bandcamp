@@ -19,8 +19,6 @@ struct BandcampTrack
     QString sourceUrl;
     QString streamUrl;
     QDate releaseDate;
-    // Reserved for cover art. Not used yet.
-    qint64 artId{0};
     // 0 when unknown.
     int trackNumber{0};
     // 0 when unknown.
@@ -34,8 +32,6 @@ struct BandcampAlbumMetadata
     QString artist;
     QString sourceUrl;
     QDate releaseDate;
-    // Reserved for cover art. Not used yet.
-    qint64 artId{0};
     // Number of declared album members, including any without a usable stream.
     int trackTotal{0};
 };

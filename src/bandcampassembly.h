@@ -11,7 +11,6 @@ struct AlbumMetadataProvenance
     FieldProvenance title{FieldProvenance::Explicit};
     FieldProvenance artist{FieldProvenance::Explicit};
     FieldProvenance releaseDate{FieldProvenance::Explicit};
-    FieldProvenance artId{FieldProvenance::Explicit};
 };
 
 struct TrackMetadataProvenance
@@ -21,7 +20,6 @@ struct TrackMetadataProvenance
     FieldProvenance trackNumber{FieldProvenance::Explicit};
     FieldProvenance durationMs{FieldProvenance::Explicit};
     FieldProvenance releaseDate{FieldProvenance::Explicit};
-    FieldProvenance artId{FieldProvenance::Explicit};
     FieldProvenance streamUrl{FieldProvenance::Explicit};
 };
 
@@ -39,7 +37,6 @@ struct TrackAdmission
     TrackMetadataProvenance trackProvenance;
     AlbumMetadataProvenance parentProvenance;
     CandidateField<QString> fallbackArtist;
-    CandidateField<qint64> fallbackArtId;
     QList<BandcampTrack> siblings;
     bool completeSiblingSet{false};
     qsizetype siblingIndex{-1};

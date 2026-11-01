@@ -188,43 +188,6 @@ int TrackDateInheritanceProcessor::process(BandcampTrack& track, TrackProcessorC
     return 1;
 }
 
-QString TrackArtworkInheritanceProcessor::name() const
-{
-    return QStringLiteral("track-artwork-inheritance");
-}
-
-int TrackArtworkInheritanceProcessor::process(BandcampTrack& track, TrackProcessorContext& context) const
-{
-    if(!context.parent || track.artId != 0 || context.parent->artId <= 0) {
-        return 0;
-    }
-    const qint64 old         = track.artId;
-    track.artId              = context.parent->artId;
-    context.provenance.artId = FieldProvenance::Inherited;
-    logTrackChange(name(), QStringLiteral("track.artId"), old > 0 ? QString::number(old) : QStringLiteral("<unset>"),
-                   QString::number(track.artId), QStringLiteral("track has no owned artwork; album artwork inherited"),
-                   context.provenance.artId, context.correlation);
-    return 1;
-}
-
-QString TrackArtworkFallbackProcessor::name() const
-{
-    return QStringLiteral("track-artwork-fallback");
-}
-
-int TrackArtworkFallbackProcessor::process(BandcampTrack& track, TrackProcessorContext& context) const
-{
-    if(context.parent || track.artId != 0 || !context.fallbackArtId.isUsable() || context.fallbackArtId.value <= 0) {
-        return 0;
-    }
-    track.artId              = context.fallbackArtId.value;
-    context.provenance.artId = FieldProvenance::Fallback;
-    logTrackChange(name(), QStringLiteral("track.artId"), QStringLiteral("<unset>"), QString::number(track.artId),
-                   QStringLiteral("standalone track artwork filled from page fallback context"),
-                   context.provenance.artId, context.correlation);
-    return 1;
-}
-
 QString TrackTitlePrefixProcessor::name() const
 {
     return QStringLiteral("track-title-prefix");

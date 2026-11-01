@@ -9,9 +9,10 @@ add_executable(bandcamp_deterministic_tests
     bandcampclienttests.cpp
     bandcamporchestratortests.cpp
     bandcampservicetests.cpp
+    bandcampfooyintracktests.cpp
 )
 
-target_link_libraries(bandcamp_deterministic_tests PRIVATE bandcamp_core Qt6::Core Qt6::Test)
+target_link_libraries(bandcamp_deterministic_tests PRIVATE bandcamp_fooyin bandcamp_core Fooyin::Core Qt6::Core Qt6::Test)
 set_target_properties(bandcamp_deterministic_tests PROPERTIES AUTOMOC ON)
 
 add_test(NAME bandcamp.deterministic COMMAND bandcamp_deterministic_tests)

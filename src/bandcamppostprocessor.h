@@ -29,7 +29,6 @@ struct TrackProcessorContext
     bool completeSiblingSet{false};
     qsizetype siblingIndex{-1};
     CandidateField<QString> fallbackArtist;
-    CandidateField<qint64> fallbackArtId;
     CorrelationContext correlation;
     TrackMetadataProvenance& provenance;
     TrackProcessorFacts facts;

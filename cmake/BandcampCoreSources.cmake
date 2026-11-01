@@ -27,6 +27,8 @@ set(BANDCAMP_CORE_SOURCES
     ${BANDCAMP_SRC_DIR}/bandcampprocessors.h
     ${BANDCAMP_SRC_DIR}/bandcampservice.cpp
     ${BANDCAMP_SRC_DIR}/bandcampservice.h
+    ${BANDCAMP_SRC_DIR}/bandcamptrackuri.cpp
+    ${BANDCAMP_SRC_DIR}/bandcamptrackuri.h
     ${BANDCAMP_SRC_DIR}/bandcampsettings.cpp
     ${BANDCAMP_SRC_DIR}/bandcampsettings.h
     ${BANDCAMP_SRC_DIR}/bandcampurl.cpp

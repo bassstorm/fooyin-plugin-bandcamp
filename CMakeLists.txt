@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 project(
     bandcamp
-    VERSION 0.1.4
+    VERSION 0.1.5
     DESCRIPTION "Bandcamp plugin for fooyin"
     LANGUAGES CXX
 )
@@ -38,10 +38,23 @@ target_link_libraries(bandcamp_core
     PUBLIC Qt6::Core Qt6::Concurrent Qt6::Network LibXml2::LibXml2 bandcamp_sanitize
 )
 
+add_library(bandcamp_fooyin STATIC
+    src/bandcampfooyintrack.cpp
+    src/bandcampfooyintrack.h
+)
+set_target_properties(bandcamp_fooyin PROPERTIES
+    AUTOMOC ON
+    POSITION_INDEPENDENT_CODE ON
+)
+target_include_directories(bandcamp_fooyin PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(bandcamp_fooyin
+    PUBLIC bandcamp_core Fooyin::Core Qt6::Core Qt6::Concurrent bandcamp_sanitize
+)
+
 create_fooyin_plugin(
     bandcamp
     JSON_IN src/bandcamp.json.in
-    DEPENDS Fooyin::Gui Qt6::Concurrent bandcamp_core
+    DEPENDS Fooyin::Gui Qt6::Concurrent bandcamp_core bandcamp_fooyin
     SOURCES src/bandcampplugin.cpp
             src/bandcampplugin.h
             src/bandcampresultsdialog.cpp

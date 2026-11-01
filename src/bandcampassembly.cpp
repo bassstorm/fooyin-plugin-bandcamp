@@ -33,110 +33,34 @@ std::optional<ResolutionFailure> validateRequired(const CandidateField<T>& field
     return std::nullopt;
 }
 
-template <typename T>
-void markInvalid(CandidateField<T>& field)
-{
-    field.state = FieldState::Invalid;
-}
-
-void normalizeTrackOptionals(TrackCandidate& track)
-{
-    if(track.title.isUsable() && track.title.value.trimmed().isEmpty()) {
-        markInvalid(track.title);
-    }
-    if(track.artist.isUsable() && track.artist.value.trimmed().isEmpty()) {
-        markInvalid(track.artist);
-    }
-    if(track.trackNumber.isUsable() && (track.trackNumber.value <= 0 || track.trackNumber.value > MaxTrackNumber)) {
-        markInvalid(track.trackNumber);
-    }
-    if(track.durationMs.isUsable() && (track.durationMs.value < 0 || track.durationMs.value > MaxDurationMs)) {
-        markInvalid(track.durationMs);
-    }
-    if(track.releaseDate.isUsable() && !track.releaseDate.value.isValid()) {
-        markInvalid(track.releaseDate);
-    }
-    if(track.artId.isUsable() && track.artId.value <= 0) {
-        markInvalid(track.artId);
-    }
-}
-
-bool normalizeAlbumOptionals(AlbumCandidate& album, const std::atomic_bool* stop)
-{
-    if(album.artist.isUsable() && album.artist.value.trimmed().isEmpty()) {
-        markInvalid(album.artist);
-    }
-    if(album.releaseDate.isUsable() && !album.releaseDate.value.isValid()) {
-        markInvalid(album.releaseDate);
-    }
-    if(album.artId.isUsable() && album.artId.value <= 0) {
-        markInvalid(album.artId);
-    }
-    for(TrackCandidate& track : album.tracks) {
-        if(stop && stop->load(std::memory_order_relaxed)) {
-            return false;
-        }
-        normalizeTrackOptionals(track);
-    }
-    return !stop || !stop->load(std::memory_order_relaxed);
-}
-
-void normalizeTrackPageOptionals(TrackPageCandidate& page)
-{
-    normalizeTrackOptionals(page.track);
-    if(page.fallbackArtist.isUsable() && page.fallbackArtist.value.trimmed().isEmpty()) {
-        markInvalid(page.fallbackArtist);
-    }
-    if(page.fallbackArtId.isUsable() && page.fallbackArtId.value <= 0) {
-        markInvalid(page.fallbackArtId);
-    }
-}
-
-QUrl candidateUrl(const CandidateField<QUrl>& field, const CorrelationContext& context)
-{
-    return field.isUsable() ? field.value : context.resourceUrl;
-}
-
 std::optional<QUrl> canonicalUrl(const CandidateField<QUrl>& field, BandcampPageKind expected, const QString& name,
                                  const CorrelationContext& context, std::optional<ResolutionFailure>& error,
                                  bool allowDecoration = false)
 {
-    if(auto invalid = validateRequired(field, name, candidateUrl(field, context))) {
+    if(auto invalid = validateRequired(field, name, field.isUsable() ? field.value : context.resourceUrl)) {
         error = std::move(invalid);
         return std::nullopt;
     }
 
     const QUrl& supplied = field.value;
-    if(!supplied.isValid() || supplied.host().isEmpty() || !supplied.userInfo().isEmpty()
-       || (supplied.scheme() != QStringLiteral("https") && supplied.scheme() != QStringLiteral("http"))
-       || (!allowDecoration && (supplied.hasQuery() || supplied.hasFragment()))) {
+    if(!allowDecoration && (supplied.hasQuery() || supplied.hasFragment())) {
         error = failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, supplied, 0, name,
                         QStringLiteral("source URL is not canonical"));
         return std::nullopt;
     }
 
     const auto parsed = parseBandcampPageUrl(supplied.toString(QUrl::FullyEncoded));
-    if(!parsed.isValid() || parsed.kind != expected) {
+    if(!parsed.isValid()) {
+        error = failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, supplied, 0, name,
+                        QStringLiteral("source URL is invalid"));
+        return std::nullopt;
+    }
+    if(parsed.kind != expected) {
         error = failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, supplied, 0, name,
                         QStringLiteral("source URL has the wrong release kind"));
         return std::nullopt;
     }
     return QUrl(parsed.url, QUrl::StrictMode);
-}
-
-std::optional<ResolutionFailure> validateStream(const CandidateField<QString>& field, const QUrl& url, qint64 trackId)
-{
-    if(auto error = validateRequired(field, QStringLiteral("track.streamUrl"), url, trackId)) {
-        return error;
-    }
-    const QUrl parsed(field.value, QUrl::StrictMode);
-    if(!parsed.isValid() || parsed.scheme() != QStringLiteral("https") || parsed.host().isEmpty()
-       || !parsed.userInfo().isEmpty() || parsed.hasFragment()) {
-        return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, url, trackId,
-                       QStringLiteral("track.streamUrl"),
-                       QStringLiteral("stream URL is not a supported HTTPS locator"));
-    }
-    return std::nullopt;
 }
 
 std::optional<ResolutionFailure> validateTrackRequired(const TrackCandidate& source, const QUrl& url, qint64 trackId,
@@ -149,28 +73,10 @@ std::optional<ResolutionFailure> validateTrackRequired(const TrackCandidate& sou
     if(auto error = validateRequired(source.id, QStringLiteral("track.id"), url, trackId)) {
         return error;
     }
-    if(source.id.value <= 0) {
-        return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, url, trackId,
-                       QStringLiteral("track.id"), QStringLiteral("track ID must be positive"));
-    }
     if(requireTitle) {
         if(auto error = validateRequired(source.title, QStringLiteral("track.title"), url, source.id.value)) {
             return error;
         }
-        if(source.title.value.trimmed().isEmpty()) {
-            return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, url, source.id.value,
-                           QStringLiteral("track.title"), QStringLiteral("track title is blank"));
-        }
-    }
-    return std::nullopt;
-}
-
-std::optional<ResolutionFailure> validateTrackCandidate(const TrackCandidate& source, const QUrl& url,
-                                                        qint64 fallbackId)
-{
-    const qint64 id = source.id.isUsable() ? source.id.value : fallbackId;
-    if(auto error = validateTrackRequired(source, url, id)) {
-        return error;
     }
     return std::nullopt;
 }
@@ -183,7 +89,6 @@ BandcampAlbumMetadata makeAlbumMetadata(const AlbumCandidate& source, const QUrl
     metadata.artist      = source.artist.isUsable() ? source.artist.value : QString{};
     metadata.sourceUrl   = sourceUrl.toString(QUrl::FullyEncoded);
     metadata.releaseDate = source.releaseDate.isUsable() ? source.releaseDate.value : QDate{};
-    metadata.artId       = source.artId.isUsable() ? source.artId.value : 0;
     metadata.trackTotal  = static_cast<int>(source.tracks.size());
     return metadata;
 }
@@ -212,14 +117,13 @@ void logAlbumComposition(const CorrelationContext& context, const QUrl& supplied
 
 AlbumMetadataProvenance albumProvenance(const AlbumCandidate& source)
 {
-    return {source.title.provenance, source.artist.provenance, source.releaseDate.provenance, source.artId.provenance};
+    return {source.title.provenance, source.artist.provenance, source.releaseDate.provenance};
 }
 
 TrackMetadataProvenance trackProvenance(const TrackCandidate& source)
 {
     return {source.title.provenance,      source.artist.provenance,      source.trackNumber.provenance,
-            source.durationMs.provenance, source.releaseDate.provenance, source.artId.provenance,
-            source.streamUrl.provenance};
+            source.durationMs.provenance, source.releaseDate.provenance, source.streamUrl.provenance};
 }
 
 BandcampTrack makeTrack(const TrackCandidate& source, const QString& sourceUrl)
@@ -231,7 +135,6 @@ BandcampTrack makeTrack(const TrackCandidate& source, const QString& sourceUrl)
     track.sourceUrl   = sourceUrl;
     track.streamUrl   = source.streamUrl.value;
     track.releaseDate = source.releaseDate.isUsable() ? source.releaseDate.value : QDate{};
-    track.artId       = source.artId.isUsable() ? source.artId.value : 0;
     track.trackNumber = source.trackNumber.isUsable() ? static_cast<int>(source.trackNumber.value) : 0;
     track.durationMs  = source.durationMs.isUsable() ? source.durationMs.value : 0;
     return track;
@@ -358,24 +261,11 @@ TrackAdmission makeTrackAdmission(const TrackPageCandidate& page, const TrackCan
     admission.result.track       = makeTrack(assembled, source);
     admission.trackProvenance    = trackProvenance(assembled);
     admission.fallbackArtist     = page.fallbackArtist;
-    admission.fallbackArtId      = page.fallbackArtId;
     admission.siblings           = siblings;
     admission.completeSiblingSet = completeSiblingSet;
     admission.siblingIndex       = siblingIndex;
     admission.correlation        = context.withTrack(admission.result.track.id);
     return admission;
-}
-
-std::optional<ResolutionFailure> validateTrackPage(const TrackPageCandidate& page, const CorrelationContext& context)
-{
-    if(auto error = validateRequired(page.track.id, QStringLiteral("track.id"), context.resourceUrl)) {
-        return error;
-    }
-    if(page.track.id.value <= 0) {
-        return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, context.resourceUrl,
-                       page.track.id.value, QStringLiteral("track.id"), QStringLiteral("track ID must be positive"));
-    }
-    return std::nullopt;
 }
 
 std::variant<BandcampAlbumMetadata, ResolutionFailure> admitParentMetadata(const AlbumCandidate& parent,
@@ -394,16 +284,8 @@ std::variant<BandcampAlbumMetadata, ResolutionFailure> admitParentMetadata(const
         }
         return *error;
     }
-    if(parent.tracks.size() > MaxDeclaredTracks) {
-        return failure(ResolutionErrorCode::ResourceLimitExceeded, ResolutionStage::Admit, declaredUrl, 0,
-                       QStringLiteral("members"), QStringLiteral("declared child limit exceeded"));
-    }
     if(auto missing = validateRequired(parent.id, QStringLiteral("album.id"), declaredUrl)) {
         return *missing;
-    }
-    if(parent.id.value <= 0) {
-        return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, declaredUrl, 0,
-                       QStringLiteral("album.id"), QStringLiteral("album ID must be positive"));
     }
     if(declaredId && parent.id.value != *declaredId) {
         return failure(ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Assemble, declaredUrl, 0,
@@ -412,10 +294,6 @@ std::variant<BandcampAlbumMetadata, ResolutionFailure> admitParentMetadata(const
     }
     if(auto missing = validateRequired(parent.title, QStringLiteral("album.title"), declaredUrl)) {
         return *missing;
-    }
-    if(parent.title.value.trimmed().isEmpty()) {
-        return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, declaredUrl, 0,
-                       QStringLiteral("album.title"), QStringLiteral("album title is blank"));
     }
     const BandcampAlbumMetadata metadata = makeAlbumMetadata(parent, *canonical);
     logAlbumComposition(parentContext, parent.sourceUrl.value, *canonical, parent.tracks.size());
@@ -439,7 +317,6 @@ TrackCandidate selectedTrack(const TrackCandidate& parentChild, const TrackPageC
     logAssemblyChoice(context, QStringLiteral("track.durationMs"), parentChild.durationMs, page.track.durationMs,
                       result.durationMs);
     result.releaseDate = page.track.releaseDate;
-    result.artId       = page.track.artId;
     if(result.releaseDate.isUsable() && BANDCAMP_TRACE_RESOLVE().isDebugEnabled()) {
         qCDebug(BANDCAMP_TRACE_RESOLVE).noquote() << formatTraceEvent(
             context, QStringLiteral("assembly_field"),
@@ -449,16 +326,6 @@ TrackCandidate selectedTrack(const TrackCandidate& parentChild, const TrackPageC
              DiagnosticField::text(QStringLiteral("provenance"), provenanceName(result.releaseDate.provenance)),
              DiagnosticField::text(QStringLiteral("source"), QStringLiteral("track-owned current data")),
              DiagnosticField::text(QStringLiteral("reason"), QStringLiteral("track date remains track-owned"))});
-    }
-    if(result.artId.isUsable() && BANDCAMP_TRACE_RESOLVE().isDebugEnabled()) {
-        qCDebug(BANDCAMP_TRACE_RESOLVE).noquote() << formatTraceEvent(
-            context, QStringLiteral("assembly_field"),
-            {DiagnosticField::text(QStringLiteral("field"), QStringLiteral("track.artId")),
-             DiagnosticField::text(QStringLiteral("old"), QStringLiteral("<unset>")),
-             DiagnosticField::text(QStringLiteral("new"), QString::number(result.artId.value)),
-             DiagnosticField::text(QStringLiteral("provenance"), provenanceName(result.artId.provenance)),
-             DiagnosticField::text(QStringLiteral("source"), QStringLiteral("track-owned current data")),
-             DiagnosticField::text(QStringLiteral("reason"), QStringLiteral("track artwork remains track-owned"))});
     }
     result.id          = parentChild.id;
     result.recordState = parentChild.recordState;
@@ -495,7 +362,7 @@ ParentRequirement classifyParentEvidence(const TrackPageCandidate& candidate, Co
 
     switch(candidate.parent.declaration) {
         case ParentDeclaration::NoParent:
-            if(candidate.parent.albumId.isUsable() && candidate.parent.albumId.value > 0) {
+            if(candidate.parent.albumId.isUsable()) {
                 return failure(ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Assemble, resource,
                                candidate.track.id.isUsable() ? candidate.track.id.value : 0,
                                QStringLiteral("parent.albumId"),
@@ -509,7 +376,7 @@ ParentRequirement classifyParentEvidence(const TrackPageCandidate& candidate, Co
             }
             return StandaloneParentEvidence{};
         case ParentDeclaration::AlbumBacked:
-            if(!candidate.parent.albumId.isUsable() || candidate.parent.albumId.value <= 0) {
+            if(!candidate.parent.albumId.isUsable()) {
                 return failure(ResolutionErrorCode::ParentUnavailable, ResolutionStage::Acquire, resource,
                                candidate.track.id.isUsable() ? candidate.track.id.value : 0,
                                QStringLiteral("parent.albumId"), QStringLiteral("declared album ID is unusable"));
@@ -540,54 +407,37 @@ ResolutionOutcome<AlbumAdmission> admitAlbum(const AlbumCandidate& candidate, Co
     if(stop && stop->load(std::memory_order_relaxed)) {
         return ResolutionCancelled{};
     }
-    AlbumCandidate normalized = candidate;
-    if(!normalizeAlbumOptionals(normalized, stop)) {
-        return ResolutionCancelled{};
-    }
-    context.resourceUrl = context.resourceUrl.isValid() ? context.resourceUrl : normalized.sourceUrl.value;
+    context.resourceUrl = context.resourceUrl.isValid() ? context.resourceUrl : candidate.sourceUrl.value;
     std::optional<ResolutionFailure> urlError;
-    const auto sourceUrl = canonicalUrl(normalized.sourceUrl, BandcampPageKind::Album,
+    const auto sourceUrl = canonicalUrl(candidate.sourceUrl, BandcampPageKind::Album,
                                         QStringLiteral("album.sourceUrl"), context, urlError);
     if(!sourceUrl) {
         return *urlError;
     }
-    if(auto error = validateRequired(normalized.id, QStringLiteral("album.id"), *sourceUrl)) {
+    if(auto error = validateRequired(candidate.id, QStringLiteral("album.id"), *sourceUrl)) {
         return *error;
     }
-    if(normalized.id.value <= 0) {
-        return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, *sourceUrl, 0,
-                       QStringLiteral("album.id"), QStringLiteral("album ID must be positive"));
-    }
-    if(auto error = validateRequired(normalized.title, QStringLiteral("album.title"), *sourceUrl)) {
+    if(auto error = validateRequired(candidate.title, QStringLiteral("album.title"), *sourceUrl)) {
         return *error;
     }
-    if(normalized.title.value.trimmed().isEmpty()) {
-        return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, *sourceUrl, 0,
-                       QStringLiteral("album.title"), QStringLiteral("album title is blank"));
-    }
-    if(normalized.tracks.isEmpty()) {
+    if(candidate.tracks.isEmpty()) {
         return failure(ResolutionErrorCode::NoResolvableTracks, ResolutionStage::Admit, *sourceUrl, 0,
                        QStringLiteral("members"), QStringLiteral("album declares no tracks"));
     }
-    if(normalized.tracks.size() > MaxDeclaredTracks) {
-        return failure(ResolutionErrorCode::ResourceLimitExceeded, ResolutionStage::Admit, *sourceUrl, 0,
-                       QStringLiteral("members"), QStringLiteral("declared child limit exceeded"));
-    }
-
     AlbumAdmission admission;
-    admission.album.metadata     = makeAlbumMetadata(normalized, *sourceUrl);
+    admission.album.metadata     = makeAlbumMetadata(candidate, *sourceUrl);
     admission.correlation        = context;
-    admission.metadataProvenance = albumProvenance(normalized);
-    admission.album.tracks.reserve(normalized.tracks.size());
-    admission.trackProvenance.reserve(normalized.tracks.size());
+    admission.metadataProvenance = albumProvenance(candidate);
+    admission.album.tracks.reserve(candidate.tracks.size());
+    admission.trackProvenance.reserve(candidate.tracks.size());
 
     QSet<qint64> trackIds;
-    for(const TrackCandidate& child : normalized.tracks) {
+    for(const TrackCandidate& child : candidate.tracks) {
         if(stop && stop->load(std::memory_order_relaxed)) {
             return ResolutionCancelled{};
         }
         const qint64 id = child.id.isUsable() ? child.id.value : 0;
-        if(auto error = validateTrackCandidate(child, *sourceUrl, id)) {
+        if(auto error = validateTrackRequired(child, *sourceUrl, id)) {
             return *error;
         }
         if(trackIds.contains(id)) {
@@ -596,13 +446,14 @@ ResolutionOutcome<AlbumAdmission> admitAlbum(const AlbumCandidate& candidate, Co
                            QStringLiteral("duplicate child ID in declared album membership"));
         }
         trackIds.insert(id);
-        if(auto error = validateStream(child.streamUrl, *sourceUrl, child.id.value)) {
+        if(auto error = validateRequired(child.streamUrl, QStringLiteral("track.streamUrl"), *sourceUrl,
+                                         child.id.value)) {
             return *error;
         }
         admission.album.tracks.append(makeTrack(child, admission.album.metadata.sourceUrl));
         admission.trackProvenance.append(trackProvenance(child));
     }
-    logAlbumComposition(context, normalized.sourceUrl.value, *sourceUrl, normalized.tracks.size());
+    logAlbumComposition(context, candidate.sourceUrl.value, *sourceUrl, candidate.tracks.size());
     return ResolutionSuccess<AlbumAdmission>{std::move(admission)};
 }
 
@@ -622,33 +473,34 @@ ResolutionOutcome<TrackAdmission> admitStandaloneTrack(const TrackPageCandidate&
                        candidate.track.id.isUsable() ? candidate.track.id.value : 0, QStringLiteral("parent"),
                        QStringLiteral("album-backed track cannot be admitted without its parent"));
     }
-    TrackPageCandidate normalized = candidate;
-    normalizeTrackPageOptionals(normalized);
-    if(auto error = validateTrackPage(normalized, context)) {
+    if(auto error = validateTrackRequired(candidate.track, context.resourceUrl,
+                                          candidate.track.id.isUsable() ? candidate.track.id.value : 0, false)) {
         return *error;
     }
     std::optional<ResolutionFailure> urlError;
-    const auto sourceUrl = canonicalUrl(normalized.sourceUrl, BandcampPageKind::Track,
+    const auto sourceUrl = canonicalUrl(candidate.sourceUrl, BandcampPageKind::Track,
                                         QStringLiteral("track.sourceUrl"), context, urlError);
     if(!sourceUrl) {
-        urlError->error.trackId = normalized.track.id.value;
+        urlError->error.trackId = candidate.track.id.value;
         return *urlError;
     }
-    if(!normalized.matchingRecord.isUsable()) {
+    if(!candidate.matchingRecord.isUsable()) {
         return failure(ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Admit, *sourceUrl,
-                       normalized.track.id.value, QStringLiteral("track.streamUrl"),
+                       candidate.track.id.value, QStringLiteral("track.streamUrl"),
                        QStringLiteral("standalone track has no unique matching source record"));
     }
-    if(auto error = validateTrackCandidate(normalized.track, *sourceUrl, normalized.track.id.value)) {
+    if(auto error = validateRequired(candidate.track.title, QStringLiteral("track.title"), *sourceUrl,
+                                     candidate.track.id.value)) {
         return *error;
     }
-    if(auto error = validateStream(normalized.track.streamUrl, *sourceUrl, normalized.track.id.value)) {
+    if(auto error = validateRequired(candidate.track.streamUrl, QStringLiteral("track.streamUrl"), *sourceUrl,
+                                     candidate.track.id.value)) {
         return *error;
     }
 
-    return ResolutionSuccess<TrackAdmission>{makeTrackAdmission(normalized, normalized.track, std::nullopt,
+    return ResolutionSuccess<TrackAdmission>{makeTrackAdmission(candidate, candidate.track, std::nullopt,
                                                                 sourceUrl->toString(QUrl::FullyEncoded), {}, {}, false,
-                                                                -1, context.withTrack(normalized.track.id.value))};
+                                                                -1, context.withTrack(candidate.track.id.value))};
 }
 
 ResolutionOutcome<TrackAdmission> admitAlbumTrack(const TrackPageCandidate& trackPage, const AlbumCandidate& album,
@@ -668,59 +520,54 @@ ResolutionOutcome<TrackAdmission> admitAlbumTrack(const TrackPageCandidate& trac
                        QStringLiteral("standalone declaration cannot use an album parent"));
     }
     const auto requiredParent         = std::get<RequiredAlbumParent>(requirement);
-    TrackPageCandidate normalizedPage = trackPage;
-    normalizeTrackPageOptionals(normalizedPage);
-    AlbumCandidate normalizedAlbum = album;
-    if(!normalizeAlbumOptionals(normalizedAlbum, stop)) {
-        return ResolutionCancelled{};
-    }
     const CorrelationContext trackContext
-        = context.withTrack(normalizedPage.track.id.isUsable() ? normalizedPage.track.id.value : 0);
-    if(auto error = validateTrackPage(normalizedPage, context)) {
+        = context.withTrack(trackPage.track.id.isUsable() ? trackPage.track.id.value : 0);
+    if(auto error = validateRequired(trackPage.track.id, QStringLiteral("track.id"), context.resourceUrl)) {
         return *error;
     }
     const auto parentOutcome
-        = admitParentMetadata(normalizedAlbum, requiredParent.url, requiredParent.albumId, trackContext);
+        = admitParentMetadata(album, requiredParent.url, requiredParent.albumId, trackContext);
     if(const auto* parentError = std::get_if<ResolutionFailure>(&parentOutcome)) {
         ResolutionFailure failure = *parentError;
-        failure.error.trackId     = normalizedPage.track.id.value;
+        failure.error.trackId     = trackPage.track.id.value;
         return failure;
     }
     BandcampAlbumMetadata parentMetadata = std::get<BandcampAlbumMetadata>(parentOutcome);
 
     qsizetype matchingIndex = -1;
     int matchingCount       = 0;
-    for(qsizetype i = 0; i < normalizedAlbum.tracks.size(); ++i) {
+    for(qsizetype i = 0; i < album.tracks.size(); ++i) {
         if(stop && stop->load(std::memory_order_relaxed)) {
             return ResolutionCancelled{};
         }
-        const auto& child = normalizedAlbum.tracks.at(i);
-        if(child.id.isUsable() && child.id.value == normalizedPage.track.id.value) {
+        const auto& child = album.tracks.at(i);
+        if(child.id.isUsable() && child.id.value == trackPage.track.id.value) {
             matchingIndex = i;
             ++matchingCount;
         }
     }
     if(matchingCount != 1) {
         return failure(ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Assemble, requiredParent.url,
-                       normalizedPage.track.id.value, QStringLiteral("parent.membership"),
+                       trackPage.track.id.value, QStringLiteral("parent.membership"),
                        matchingCount == 0 ? QStringLiteral("selected track is not a declared album child")
                                           : QStringLiteral("selected child ID is not unique in the album"));
     }
 
-    const TrackCandidate& child = normalizedAlbum.tracks.at(matchingIndex);
-    if(auto error = validateTrackRequired(child, requiredParent.url, normalizedPage.track.id.value, false)) {
+    const TrackCandidate& child = album.tracks.at(matchingIndex);
+    if(auto error = validateTrackRequired(child, requiredParent.url, trackPage.track.id.value, false)) {
         return *error;
     }
-    if(auto error = validateStream(child.streamUrl, requiredParent.url, normalizedPage.track.id.value)) {
+    if(auto error = validateRequired(child.streamUrl, QStringLiteral("track.streamUrl"), requiredParent.url,
+                                     trackPage.track.id.value)) {
         return *error;
     }
 
-    TrackCandidate selected = selectedTrack(child, normalizedPage, trackContext);
+    TrackCandidate selected = selectedTrack(child, trackPage, trackContext);
     if(BANDCAMP_TRACE_RESOLVE().isDebugEnabled()) {
         qCDebug(BANDCAMP_TRACE_RESOLVE).noquote() << formatTraceEvent(
             trackContext, QStringLiteral("assembly_field"),
             {DiagnosticField::text(QStringLiteral("field"), QStringLiteral("track.streamUrl")),
-             DiagnosticField::text(QStringLiteral("old"), normalizedPage.track.streamUrl.isUsable()
+             DiagnosticField::text(QStringLiteral("old"), trackPage.track.streamUrl.isUsable()
                                                               ? QStringLiteral("<signed locator omitted>")
                                                               : QStringLiteral("<unset>")),
              DiagnosticField::text(QStringLiteral("new"), QStringLiteral("<signed locator omitted>")),
@@ -728,41 +575,37 @@ ResolutionOutcome<TrackAdmission> admitAlbumTrack(const TrackPageCandidate& trac
              DiagnosticField::text(QStringLiteral("source"), QStringLiteral("album_child")),
              DiagnosticField::text(QStringLiteral("reason"), QStringLiteral("album child stream is authoritative"))});
     }
-    if(child.streamUrl.isUsable() && normalizedPage.track.streamUrl.isUsable()
-       && child.streamUrl.value != normalizedPage.track.streamUrl.value) {
+    if(child.streamUrl.isUsable() && trackPage.track.streamUrl.isUsable()
+       && child.streamUrl.value != trackPage.track.streamUrl.value) {
         logConflict(trackContext, QStringLiteral("track.streamUrl"), valueText(child.streamUrl),
-                    valueText(normalizedPage.track.streamUrl), QStringLiteral("album_child"),
+                    valueText(trackPage.track.streamUrl), QStringLiteral("album_child"),
                     child.streamUrl.provenance, QStringLiteral("album child stream is authoritative"));
     }
     if(selected.title.state == FieldState::Invalid) {
         return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, requiredParent.url,
-                       normalizedPage.track.id.value, QStringLiteral("track.title"),
+                       trackPage.track.id.value, QStringLiteral("track.title"),
                        QStringLiteral("selected track title is invalid on both pages"));
     }
     if(!selected.title.isUsable()) {
         return failure(ResolutionErrorCode::RequiredFieldMissing, ResolutionStage::Admit, requiredParent.url,
-                       normalizedPage.track.id.value, QStringLiteral("track.title"),
+                       trackPage.track.id.value, QStringLiteral("track.title"),
                        QStringLiteral("selected track has no usable title on either page"));
     }
-    if(selected.title.value.trimmed().isEmpty()) {
-        return failure(ResolutionErrorCode::InvalidField, ResolutionStage::Admit, requiredParent.url,
-                       normalizedPage.track.id.value, QStringLiteral("track.title"),
-                       QStringLiteral("selected track title is blank"));
-    }
-
     QList<BandcampTrack> siblings;
     bool complete = true;
     QSet<qint64> siblingIds;
-    for(qsizetype i = 0; i < normalizedAlbum.tracks.size(); ++i) {
+    for(qsizetype i = 0; i < album.tracks.size(); ++i) {
         if(stop && stop->load(std::memory_order_relaxed)) {
             return ResolutionCancelled{};
         }
-        const TrackCandidate& member = normalizedAlbum.tracks.at(i);
+        const TrackCandidate& member = album.tracks.at(i);
         TrackCandidate resolved      = i == matchingIndex ? selected : member;
         const qint64 siblingId       = resolved.id.isUsable() ? resolved.id.value : 0;
-        if(siblingId <= 0 || siblingIds.contains(siblingId)
-           || validateTrackCandidate(resolved, requiredParent.url, siblingId)
-           || validateStream(resolved.streamUrl, requiredParent.url, siblingId)) {
+        if(siblingIds.contains(siblingId)
+           || (i != matchingIndex
+               && (validateTrackRequired(resolved, requiredParent.url, siblingId)
+                   || validateRequired(resolved.streamUrl, QStringLiteral("track.streamUrl"), requiredParent.url,
+                                        siblingId)))) {
             complete = false;
             break;
         }
@@ -773,9 +616,9 @@ ResolutionOutcome<TrackAdmission> admitAlbumTrack(const TrackPageCandidate& trac
         siblings.clear();
     }
 
-    TrackAdmission admission
-        = makeTrackAdmission(normalizedPage, selected, parentMetadata, parentMetadata.sourceUrl,
-                             albumProvenance(normalizedAlbum), siblings, complete, matchingIndex, trackContext);
+    TrackAdmission admission = makeTrackAdmission(trackPage, selected, parentMetadata, parentMetadata.sourceUrl,
+                                                  albumProvenance(album), siblings, complete, matchingIndex,
+                                                  trackContext);
     return ResolutionSuccess<TrackAdmission>{std::move(admission)};
 }
 } // namespace Fooyin::Bandcamp
