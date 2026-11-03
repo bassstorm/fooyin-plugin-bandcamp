@@ -7,21 +7,6 @@ using namespace Qt::StringLiterals;
 
 namespace Fooyin::Bandcamp {
 namespace {
-QString provenanceName(FieldProvenance provenance)
-{
-    switch(provenance) {
-        case FieldProvenance::Explicit:
-            return QStringLiteral("explicit");
-        case FieldProvenance::Fallback:
-            return QStringLiteral("fallback");
-        case FieldProvenance::Inherited:
-            return QStringLiteral("inherited");
-        case FieldProvenance::Derived:
-            return QStringLiteral("derived");
-    }
-    return QStringLiteral("unknown");
-}
-
 void logAlbumChange(const QString& processor, const QString& field, const QString& oldValue, const QString& newValue,
                     const QString& reason, FieldProvenance provenance, const CorrelationContext& correlation)
 {

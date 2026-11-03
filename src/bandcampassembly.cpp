@@ -140,21 +140,6 @@ BandcampTrack makeTrack(const TrackCandidate& source, const QString& sourceUrl)
     return track;
 }
 
-QString provenanceName(FieldProvenance provenance)
-{
-    switch(provenance) {
-        case FieldProvenance::Explicit:
-            return QStringLiteral("explicit");
-        case FieldProvenance::Fallback:
-            return QStringLiteral("fallback");
-        case FieldProvenance::Inherited:
-            return QStringLiteral("inherited");
-        case FieldProvenance::Derived:
-            return QStringLiteral("derived");
-    }
-    return QStringLiteral("unknown");
-}
-
 void logConflict(const CorrelationContext& context, const QString& field, const QString& albumChildValue,
                  const QString& selectedPageValue, const QString& decision, FieldProvenance chosen,
                  const QString& reason)

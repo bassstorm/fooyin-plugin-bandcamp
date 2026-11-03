@@ -105,18 +105,18 @@ void ParserTests::cleanup()
 
 void ParserTests::kindAndIdentityAliases()
 {
-    const auto result = parse(R"({"item_type":"a","id":"9223372036854775807","url":"not an identity","trackinfo":[]})");
+    const auto result = parse(R"({"item_type":"a","id":3493169048,"url":"not an identity","trackinfo":[]})");
     const auto* album = value<AlbumCandidate>(result);
     QVERIFY(album);
-    QCOMPARE(album->id.value, std::numeric_limits<qint64>::max());
+    QCOMPARE(album->id.value, qint64{3493169048});
     QCOMPARE(album->id.provenance, FieldProvenance::Explicit);
     QCOMPARE(album->sourceUrl.value.toString(), u"https://artist.bandcamp.com/track/viewed"_s);
     QCOMPARE(album->title.state, FieldState::Missing);
 
     const auto equal = parse(
-        R"({"current":{"type":"album","id":9007199254740993},"item_type":"a","id":"9007199254740993","trackinfo":[]})");
+        R"({"current":{"type":"album","id":3493169048},"item_type":"a","id":3493169048,"trackinfo":[]})");
     QVERIFY(value<AlbumCandidate>(equal));
-    QCOMPARE(value<AlbumCandidate>(equal)->id.value, qint64{9007199254740993});
+    QCOMPARE(value<AlbumCandidate>(equal)->id.value, qint64{3493169048});
 
     const auto fallback = parse(R"({"current":{"type":8,"id":false},"item_type":"t","id":9,"trackinfo":[]})");
     QVERIFY(value<TrackPageCandidate>(fallback));
@@ -163,18 +163,11 @@ void ParserTests::exactIdentityAndNumericValidation_data()
     QTest::addColumn<QByteArray>("number");
     QTest::addColumn<bool>("usable");
     QTest::addColumn<qint64>("expected");
-    QTest::newRow("above-double-precision") << QByteArray("9007199254740993") << true << qint64{9007199254740993};
-    QTest::newRow("max-integer") << QByteArray("9223372036854775807") << true << std::numeric_limits<qint64>::max();
-    QTest::newRow("max-string") << QByteArray("\"9223372036854775807\"") << true << std::numeric_limits<qint64>::max();
-    QTest::newRow("exact-large-decimal") << QByteArray("9007199254740993.0") << true << qint64{9007199254740993};
-    QTest::newRow("exact-large-exponent") << QByteArray("90071992547409930e-1") << true << qint64{9007199254740993};
-    QTest::newRow("overflow-integer") << QByteArray("9223372036854775808") << false << qint64{0};
-    QTest::newRow("overflow-string") << QByteArray("\"9223372036854775808\"") << false << qint64{0};
+    QTest::newRow("positive-id") << QByteArray("3493169048") << true << qint64{3493169048};
+    QTest::newRow("exact-boundary") << QByteArray("9007199254740991") << true << qint64{9007199254740991};
+    QTest::newRow("double-precision-limit") << QByteArray("9007199254740992") << false << qint64{0};
     QTest::newRow("fraction") << QByteArray("1.5") << false << qint64{0};
-    QTest::newRow("large-fraction") << QByteArray("9007199254740993.1") << false << qint64{0};
-    QTest::newRow("tiny-fraction") << QByteArray("1.00000000000000001") << false << qint64{0};
-    QTest::newRow("fraction-text") << QByteArray("\"1.5\"") << false << qint64{0};
-    QTest::newRow("nonfinite-text") << QByteArray("\"nan\"") << false << qint64{0};
+    QTest::newRow("string-id") << QByteArray("\"42\"") << false << qint64{0};
     QTest::newRow("zero") << QByteArray("0") << false << qint64{0};
     QTest::newRow("negative") << QByteArray("-1") << false << qint64{0};
     QTest::newRow("boolean") << QByteArray("true") << false << qint64{0};
@@ -228,10 +221,10 @@ void ParserTests::viewedTrackUsesStableIdAndOwnFields()
     const auto result = parse(R"({
             "current":{"type":"track","id":22,"title":"Current","artist":"Track artist","track_number":7,
                        "release_date":"2020-01-02","art_id":8,"album_id":11},
-            "id":"22","item_type":"t","artist":"Album artist","art_id":99,"album_release_date":"2025-01-01",
+            "id":22,"item_type":"t","artist":"Album artist","art_id":99,"album_release_date":"2025-01-01",
             "album_url":"../album/parent?from=track",
             "trackinfo":[{"id":1,"title":"Wrong","duration":1},
-                         {"track_id":"22","title":"Row","artist":"Row artist","track_num":2,"duration":"183.429",
+                         {"track_id":22,"title":"Row","artist":"Row artist","track_num":2,"duration":183.429,
                           "file":{"mp3-128":"https:\/\/cdn.example.com/a.mp3?token=abc%2f%41def&expires=123"}}]})");
     const auto* page  = value<TrackPageCandidate>(result);
     QVERIFY(page);
@@ -303,11 +296,11 @@ void ParserTests::parentEvidence_data()
     QTest::newRow("known-id-no-location")
         << QByteArray(",\"album_id\":12") << QByteArray() << ParentDeclaration::AlbumBacked << FieldState::Missing;
     QTest::newRow("known-id-bad-location")
-        << QByteArray(",\"album_id\":\"12\"") << QByteArray(",\"album_url\":\"ftp://a/x\"")
+        << QByteArray(",\"album_id\":12") << QByteArray(",\"album_url\":\"ftp://a/x\"")
         << ParentDeclaration::AlbumBacked << FieldState::Invalid;
     QTest::newRow("bad-id") << QByteArray(",\"album_id\":false") << QByteArray() << ParentDeclaration::Invalid
                             << FieldState::Missing;
-    QTest::newRow("fractional-id") << QByteArray(",\"album_id\":1.00000000000000001") << QByteArray()
+    QTest::newRow("fractional-id") << QByteArray(",\"album_id\":1.5") << QByteArray()
                                    << ParentDeclaration::Invalid << FieldState::Missing;
     QTest::newRow("no-parent-conflicting-location")
         << QByteArray(",\"album_id\":0") << QByteArray(",\"album_url\":\"/album/parent\"")
@@ -381,15 +374,12 @@ void ParserTests::optionalNumericAndStreamValidation()
 void ParserTests::retainsSupportedDurationAndDateFormats()
 {
     const auto result = parse(R"({"current":{"type":"album","release_date":"2024-05-06T12:34:56Z"},
-        "trackinfo":[{"id":1,"duration":"3:03.429"},{"id":2,"duration":"1:02:03.5"},
-                     {"id":3,"duration":"1:60"},{"id":4,"duration":"1.5:00"}]})");
+        "trackinfo":[{"id":1,"duration":183.429},{"id":2,"duration":"3:03.429"}]})");
     const auto* album = value<AlbumCandidate>(result);
     QVERIFY(album);
     QCOMPARE(album->releaseDate.value, QDate(2024, 5, 6));
     QCOMPARE(album->tracks.at(0).durationMs.value, qint64{183429});
-    QCOMPARE(album->tracks.at(1).durationMs.value, qint64{3723500});
-    QCOMPARE(album->tracks.at(2).durationMs.state, FieldState::Invalid);
-    QCOMPARE(album->tracks.at(3).durationMs.state, FieldState::Invalid);
+    QCOMPARE(album->tracks.at(1).durationMs.state, FieldState::Invalid);
 }
 
 void ParserTests::limitsAreExplicitFailures()

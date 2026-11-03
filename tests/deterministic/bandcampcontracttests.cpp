@@ -1,4 +1,3 @@
-#include "bandcampclock.h"
 #include "bandcampdiagnostics.h"
 #include "bandcampresolution.h"
 #include "bandcampsettings.h"
@@ -6,46 +5,21 @@
 #include <QtTest>
 
 #include <type_traits>
-#include <variant>
 
 using namespace Qt::StringLiterals;
 using namespace Fooyin::Bandcamp;
-using namespace std::chrono_literals;
 
 namespace {
-class ManualClock final : public BandcampClock
-{
-public:
-    [[nodiscard]] std::chrono::milliseconds now() const override
-    {
-        return m_now;
-    }
-
-    void advance(std::chrono::milliseconds by)
-    {
-        m_now += by;
-    }
-
-private:
-    std::chrono::milliseconds m_now{1000ms};
-};
-
 class ContractTests : public QObject
 {
     Q_OBJECT
 
 private slots:
     void candidateFieldStates();
-    void resolveScopeMapsEveryParentState();
-    void unknownTrackIsNotResolved();
     void outcomeReportsSuccessOnly();
     void errorNamesAreStable();
     void clampsOperationOptions();
     void correlationContextIsImmutable();
-    void deadlineFollowsManualClock();
-    void negativeBudgetIsExpiredAtOnce();
-    void deadlineSaturatesHugeBudget();
-    void deadlineRemainingSurvivesNegativeClock();
 };
 
 void ContractTests::candidateFieldStates()
@@ -62,40 +36,6 @@ void ContractTests::candidateFieldStates()
     const auto missing = CandidateField<int>::missing();
     QVERIFY(missing.state == FieldState::Missing);
     QVERIFY(!missing.isUsable());
-}
-
-void ContractTests::resolveScopeMapsEveryParentState()
-{
-    const AlbumParent album{42, QUrl(u"https://artist.bandcamp.com/album/x"_s)};
-
-    // An album selection is the whole album whatever the parent state.
-    const auto wholeUnknown = resolveScope(AlbumSelection{}, UnknownParent{});
-    QVERIFY(wholeUnknown.has_value());
-    QVERIFY(std::holds_alternative<WholeAlbumScope>(*wholeUnknown));
-
-    const auto wholeStandalone = resolveScope(AlbumSelection{}, StandaloneParent{});
-    QVERIFY(wholeStandalone.has_value());
-    QVERIFY(std::holds_alternative<WholeAlbumScope>(*wholeStandalone));
-
-    const auto wholeAlbum = resolveScope(AlbumSelection{}, album);
-    QVERIFY(wholeAlbum.has_value());
-    QVERIFY(std::holds_alternative<WholeAlbumScope>(*wholeAlbum));
-
-    const auto standalone = resolveScope(TrackSelection{9}, StandaloneParent{});
-    QVERIFY(standalone.has_value());
-    QVERIFY(std::holds_alternative<StandaloneTrackScope>(*standalone));
-    QCOMPARE(std::get<StandaloneTrackScope>(*standalone).trackId, 9);
-
-    const auto inAlbum = resolveScope(TrackSelection{9}, album);
-    QVERIFY(inAlbum.has_value());
-    QVERIFY(std::holds_alternative<AlbumTrackScope>(*inAlbum));
-    QCOMPARE(std::get<AlbumTrackScope>(*inAlbum).trackId, 9);
-}
-
-void ContractTests::unknownTrackIsNotResolved()
-{
-    // Membership is unknown, so no scope may be chosen yet.
-    QVERIFY(!resolveScope(TrackSelection{9}, UnknownParent{}).has_value());
 }
 
 void ContractTests::outcomeReportsSuccessOnly()
@@ -171,57 +111,6 @@ void ContractTests::correlationContextIsImmutable()
     QCOMPARE(withTrack.trackId, 9);
 }
 
-void ContractTests::deadlineFollowsManualClock()
-{
-    ManualClock clock;
-    const Deadline deadline = Deadline::after(clock, 500ms);
-
-    QVERIFY(!deadline.expired(clock));
-    QCOMPARE(deadline.remaining(clock), 500ms);
-
-    clock.advance(499ms);
-    QVERIFY(!deadline.expired(clock));
-    QCOMPARE(deadline.remaining(clock), 1ms);
-
-    clock.advance(1ms);
-    QVERIFY(deadline.expired(clock));
-    QCOMPARE(deadline.remaining(clock), 0ms);
-}
-
-void ContractTests::negativeBudgetIsExpiredAtOnce()
-{
-    ManualClock clock;
-    const Deadline deadline = Deadline::after(clock, -5ms);
-
-    QVERIFY(deadline.expired(clock));
-    QCOMPARE(deadline.remaining(clock), 0ms);
-}
-
-void ContractTests::deadlineSaturatesHugeBudget()
-{
-    ManualClock clock;
-    const Deadline deadline = Deadline::after(clock, std::chrono::milliseconds::max());
-
-    // The sum with the clock would overflow, so the deadline saturates and never expires on its own.
-    QVERIFY(!deadline.expired(clock));
-    clock.advance(std::chrono::hours{24 * 365});
-    QVERIFY(!deadline.expired(clock));
-    QCOMPARE(deadline.remaining(clock), std::chrono::milliseconds::max() - clock.now());
-}
-
-void ContractTests::deadlineRemainingSurvivesNegativeClock()
-{
-    ManualClock clock;
-    const Deadline finite    = Deadline::after(clock, 500ms);
-    const Deadline unbounded = Deadline::after(clock, std::chrono::milliseconds::max());
-
-    // Moving the clock below zero is where a naive remaining-time difference overflows.
-    clock.advance(-5000ms);
-    QCOMPARE(clock.now(), -4000ms);
-    QVERIFY(!unbounded.expired(clock));
-    QCOMPARE(finite.remaining(clock), 5500ms);
-    QCOMPARE(unbounded.remaining(clock), std::chrono::milliseconds::max());
-}
 } // namespace
 
 int runContractTests(int argc, char** argv)

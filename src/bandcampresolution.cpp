@@ -5,21 +5,19 @@
 #include <algorithm>
 
 namespace Fooyin::Bandcamp {
-std::optional<ResolvedScope> resolveScope(const RequestedScope& requested, const ParentState& parent)
+QString provenanceName(FieldProvenance provenance)
 {
-    if(std::holds_alternative<AlbumSelection>(requested)) {
-        return WholeAlbumScope{};
+    switch(provenance) {
+        case FieldProvenance::Explicit:
+            return QStringLiteral("explicit");
+        case FieldProvenance::Fallback:
+            return QStringLiteral("fallback");
+        case FieldProvenance::Inherited:
+            return QStringLiteral("inherited");
+        case FieldProvenance::Derived:
+            return QStringLiteral("derived");
     }
-
-    const qint64 trackId = std::get<TrackSelection>(requested).trackId;
-
-    if(std::holds_alternative<UnknownParent>(parent)) {
-        return std::nullopt;
-    }
-    if(std::holds_alternative<StandaloneParent>(parent)) {
-        return StandaloneTrackScope{trackId};
-    }
-    return AlbumTrackScope{trackId};
+    return QStringLiteral("unknown");
 }
 
 QString resolutionErrorCodeName(ResolutionErrorCode code)

@@ -6,7 +6,7 @@ namespace Fooyin::Bandcamp {
 DirtyTitle splitDirtyTitle(const QString& text)
 {
     // Same shape as Gravifon's DirtyTitle.
-    const QRegularExpression pattern(QStringLiteral(R"re(\A(.+?)\s[-_:.]\s(.+)\z)re"));
+    static const QRegularExpression pattern(QStringLiteral(R"re(\A(.+?)\s[-_:.]\s(.+)\z)re"));
     const QRegularExpressionMatch match = pattern.match(text);
     if(!match.hasMatch()) {
         return {};

@@ -19,6 +19,8 @@ enum class FieldProvenance : quint8
     Derived
 };
 
+QString provenanceName(FieldProvenance provenance);
+
 // Invalid is kept apart from Missing so a rejected source value is not mistaken
 // for an absent one.
 enum class FieldState : quint8
@@ -56,53 +58,6 @@ struct CandidateField
         return CandidateField{};
     }
 };
-
-// Membership is unknown until the parent has been checked. Standalone is an
-// established fact, never a default.
-struct UnknownParent
-{ };
-
-struct StandaloneParent
-{ };
-
-struct AlbumParent
-{
-    qint64 albumId{0};
-    QUrl albumUrl;
-};
-
-using ParentState = std::variant<UnknownParent, StandaloneParent, AlbumParent>;
-
-// What the caller asked for.
-struct AlbumSelection
-{ };
-
-struct TrackSelection
-{
-    qint64 trackId{0};
-};
-
-using RequestedScope = std::variant<AlbumSelection, TrackSelection>;
-
-// What the request resolves to once the parent state is known.
-struct WholeAlbumScope
-{ };
-
-struct AlbumTrackScope
-{
-    qint64 trackId{0};
-};
-
-struct StandaloneTrackScope
-{
-    qint64 trackId{0};
-};
-
-using ResolvedScope = std::variant<WholeAlbumScope, AlbumTrackScope, StandaloneTrackScope>;
-
-// Returns nullopt while a track's membership is still unknown, so no scope can
-// be chosen yet.
-std::optional<ResolvedScope> resolveScope(const RequestedScope& requested, const ParentState& parent);
 
 enum class ResolutionStage : quint8
 {
