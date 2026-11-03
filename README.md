@@ -82,48 +82,17 @@ cmake --build --preset release-bundle
 
 ## Test
 
-The suite has three CTest entries:
+| Test preset      | Configure preset | Use it for |
+| ---------------- | ---------------- | ---------- |
+| `tests`          | `tests`          | Full local check. Live tests need network access. |
+| `tests-sanitize` | `tests-sanitize` | Same as `tests`, built with ASan and UBSan. Slower, but catches memory and undefined-behavior bugs. |
+| `tests-ci`       | `tests-sanitize` | Deterministic tests only, offline. This is what CI runs. |
+| `tests-live`     | `tests`          | Bandcamp compatibility only. A failure can mean Bandcamp changed or is unreachable, not that the plugin regressed. |
 
-- `bandcamp.deterministic` uses synthetic inputs and controlled dependencies.
-  It covers isolated unit, component-composition, and robustness tests without
-  live service access. Its source is under
-  [`tests/deterministic/`](tests/deterministic/) and its target is
-  `bandcamp_deterministic_tests`.
-- `bandcamp.live` (label `live`) resolves real Bandcamp pages through
-  integration-scope smoke tests. Its source is under [`tests/live/`](tests/live/)
-  and its target is `bandcamp_live_tests`. It needs network access, and it fails
-  visibly if Bandcamp is unreachable or its pages change incompatibly.
-- `bandcamp.plugin-input` loads the production plugin module and verifies
-  Fooyin selects its decoder for the Bandcamp track scheme.
-
-Run the complete suite locally:
+To run the full local check:
 
 ```sh
 cmake --preset tests
 cmake --build --preset tests
 ctest --preset tests
-```
-
-Run the complete suite under AddressSanitizer and UndefinedBehaviorSanitizer:
-
-```sh
-cmake --preset tests-sanitize
-cmake --build --preset tests-sanitize
-ctest --preset tests-sanitize
-```
-
-Run only the deterministic tests, offline and sanitized (this is what CI runs):
-
-```sh
-cmake --preset tests-sanitize
-cmake --build --preset tests-sanitize
-ctest --preset tests-ci
-```
-
-Run only the live tests, against Bandcamp:
-
-```sh
-cmake --preset tests
-cmake --build --preset tests
-ctest --preset tests-live
 ```
