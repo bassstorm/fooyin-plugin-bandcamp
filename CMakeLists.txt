@@ -9,8 +9,10 @@ project(
 
 set(CMAKE_AUTOMOC ON)
 
-option(BANDCAMP_BUILD_TESTS "Build the Bandcamp deterministic and live tests" OFF)
-option(BANDCAMP_SANITIZE "Instrument test targets with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(BANDCAMP_PLUGIN_BUILD_TESTS "Build the Bandcamp deterministic and live tests" OFF)
+option(BANDCAMP_PLUGIN_SANITIZE "Instrument test targets with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+set(BANDCAMP_PLUGIN_VERSION_SUFFIX "" CACHE STRING "Suffix appended to the project version in the plugin manifest and bundle name, e.g. -snapshot")
+set(BANDCAMP_PLUGIN_VERSION "${PROJECT_VERSION}${BANDCAMP_PLUGIN_VERSION_SUFFIX}")
 
 find_package(Fooyin REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Network)
@@ -18,7 +20,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Network)
 # Sanitizer flags are an interface target so every consumer of the core
 # library is instrumented and linked against the sanitizer runtime.
 add_library(bandcamp_sanitize INTERFACE)
-if(BANDCAMP_SANITIZE AND NOT MSVC)
+if(BANDCAMP_PLUGIN_SANITIZE AND NOT MSVC)
     # Recoverable UBSan reports would otherwise print and let the run pass.
     set(_bandcamp_sanitize_flags -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g)
     target_compile_options(bandcamp_sanitize INTERFACE ${_bandcamp_sanitize_flags})
@@ -107,7 +109,7 @@ if(NOT _bandcamp_host_platform IN_LIST _bandcamp_platforms)
 endif()
 
 set(_bandcamp_stage "${CMAKE_CURRENT_BINARY_DIR}/bundle")
-set(_bandcamp_bundle "${CMAKE_CURRENT_BINARY_DIR}/fooyin-bandcamp-${PROJECT_VERSION}.fyplugin")
+set(_bandcamp_bundle "${CMAKE_CURRENT_BINARY_DIR}/fooyin-bandcamp-${BANDCAMP_PLUGIN_VERSION}.fyplugin")
 
 # Each platform stages into its own directory. Only the host platform gets the
 # built module; other platforms are no-op stubs that leave an empty directory.
@@ -145,7 +147,7 @@ add_custom_target(
 )
 add_dependencies(bandcamp_bundle ${_bandcamp_stage_targets})
 
-if(BANDCAMP_BUILD_TESTS)
+if(BANDCAMP_PLUGIN_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests/deterministic)
     add_subdirectory(tests/live)

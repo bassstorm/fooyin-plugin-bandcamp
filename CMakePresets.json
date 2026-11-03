@@ -16,7 +16,7 @@
       "displayName": "Deterministic and live tests",
       "binaryDir": "${sourceDir}/build-tests",
       "cacheVariables": {
-        "BANDCAMP_BUILD_TESTS": "ON"
+        "BANDCAMP_PLUGIN_BUILD_TESTS": "ON"
       }
     },
     {
@@ -24,7 +24,7 @@
       "displayName": "Deterministic and live tests with AddressSanitizer and UndefinedBehaviorSanitizer",
       "binaryDir": "${sourceDir}/build-sanitize",
       "cacheVariables": {
-        "BANDCAMP_SANITIZE": "ON"
+        "BANDCAMP_PLUGIN_SANITIZE": "ON"
       },
       "inherits": [ "tests" ]
     },
@@ -35,6 +35,15 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "snapshot",
+      "displayName": "Snapshot build",
+      "binaryDir": "${sourceDir}/build-snapshot",
+      "cacheVariables": {
+        "BANDCAMP_PLUGIN_VERSION_SUFFIX": "-snapshot"
+      },
+      "inherits": [ "release" ]
     }
   ],
   "buildPresets": [
@@ -57,8 +66,13 @@
       "configurePreset": "release"
     },
     {
-      "name": "bundle",
+      "name": "release-bundle",
       "configurePreset": "release",
+      "targets": [ "bandcamp_bundle" ]
+    },
+    {
+      "name": "snapshot-bundle",
+      "configurePreset": "snapshot",
       "targets": [ "bandcamp_bundle" ]
     }
   ],

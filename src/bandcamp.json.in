@@ -1,6 +1,6 @@
 {
     "Name": "Bandcamp",
-    "Version": "${PROJECT_VERSION}",
+    "Version": "${BANDCAMP_PLUGIN_VERSION}",
     "Author": "Maksim Liauchuk",
     "Copyright": "Copyright © 2026, Maksim Liauchuk <maksim_liauchuk@fastmail.fm>",
     "License": [

@@ -66,28 +66,19 @@ sessions.
 
 ## Build
 
-Build and install the plugin against the Fooyin development install from
-[Compile time](#compile-time):
+| Build preset      | Configure preset | Purpose |
+| ----------------- | ---------------- | ------- |
+| `dev`             | `dev`            | Local development build. Install it into your Fooyin with `cmake --install build`. |
+| `release`         | `release`        | Optimized module without packaging. |
+| `release-bundle`  | `release`        | Packaged `.fyplugin` for sharing. |
+| `snapshot-bundle` | `snapshot`       | Same bundle with `-snapshot` appended to its version, so it can't be mistaken for a release. |
 
-```sh
-cmake --preset dev
-cmake --build --preset dev
-cmake --install build
-```
-
-The module is installed to `lib/fooyin/plugins` under the Fooyin prefix CMake
-found.
-
-To build a bundle for sharing:
+To build a bundle:
 
 ```sh
 cmake --preset release
-cmake --build --preset bundle
+cmake --build --preset release-bundle
 ```
-
-The bundle is written to `build-release/` as
-`fooyin-bandcamp-<version>.fyplugin`. Only the host platform contains a built
-module; the other platform directories are empty stubs.
 
 ## Test
 
