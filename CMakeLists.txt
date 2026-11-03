@@ -76,8 +76,8 @@ elseif(UNIX)
     set_property(TARGET bandcamp PROPERTY INSTALL_RPATH "$ORIGIN/..")
 endif()
 
-# Fooyin's Install... dialog reads a zip (.zip or .fyplugin) with the module under
-# a platform directory such as linux-x64/. The module is the same Release binary.
+# One .fyplugin bundle covers every platform Fooyin supports; Fooyin installs the
+# entry matching the running host.
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _bandcamp_arch)
 if(_bandcamp_arch MATCHES "^(x86_64|amd64)$")
     set(_bandcamp_arch x64)
@@ -93,21 +93,57 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
 else()
     set(_bandcamp_os linux)
 endif()
-set(_bandcamp_platform "${_bandcamp_os}-${_bandcamp_arch}")
+set(_bandcamp_host_platform "${_bandcamp_os}-${_bandcamp_arch}")
+
+# Platform directories recognised by Fooyin's plugin installer.
+set(_bandcamp_platforms
+    linux-x64 linux-arm64
+    windows-x64 windows-arm64
+    macos-x64 macos-arm64
+    freebsd-x64 freebsd-arm64
+)
+if(NOT _bandcamp_host_platform IN_LIST _bandcamp_platforms)
+    message(WARNING "No Fooyin bundle directory for ${_bandcamp_host_platform}; the bundle will contain no Bandcamp module")
+endif()
+
 set(_bandcamp_stage "${CMAKE_CURRENT_BINARY_DIR}/bundle")
-set(_bandcamp_bundle "${CMAKE_CURRENT_BINARY_DIR}/fooyin-bandcamp-${PROJECT_VERSION}-${_bandcamp_platform}.fyplugin")
+set(_bandcamp_bundle "${CMAKE_CURRENT_BINARY_DIR}/fooyin-bandcamp-${PROJECT_VERSION}.fyplugin")
+
+# Each platform stages into its own directory. Only the host platform gets the
+# built module; other platforms are no-op stubs that leave an empty directory.
+set(_bandcamp_stage_targets)
+foreach(_bandcamp_bundle_platform IN LISTS _bandcamp_platforms)
+    set(_bandcamp_target "bandcamp_bundle_${_bandcamp_bundle_platform}")
+    set(_bandcamp_platform_dir "${_bandcamp_stage}/${_bandcamp_bundle_platform}")
+    if(_bandcamp_bundle_platform STREQUAL _bandcamp_host_platform)
+        add_custom_target(
+            ${_bandcamp_target}
+            COMMAND ${CMAKE_COMMAND} -E rm -rf "${_bandcamp_platform_dir}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${_bandcamp_platform_dir}"
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:bandcamp> "${_bandcamp_platform_dir}/"
+            VERBATIM
+        )
+        add_dependencies(${_bandcamp_target} bandcamp)
+    else()
+        add_custom_target(
+            ${_bandcamp_target}
+            COMMAND ${CMAKE_COMMAND} -E rm -rf "${_bandcamp_platform_dir}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${_bandcamp_platform_dir}"
+            COMMAND ${CMAKE_COMMAND} -E echo "Bandcamp plugin has no ${_bandcamp_bundle_platform} build yet; directory left empty"
+            VERBATIM
+        )
+    endif()
+    list(APPEND _bandcamp_stage_targets ${_bandcamp_target})
+endforeach()
 
 add_custom_target(
     bandcamp_bundle
-    COMMAND ${CMAKE_COMMAND} -E rm -rf "${_bandcamp_stage}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${_bandcamp_stage}/${_bandcamp_platform}"
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:bandcamp> "${_bandcamp_stage}/${_bandcamp_platform}/"
     COMMAND ${CMAKE_COMMAND} -E chdir "${_bandcamp_stage}"
-            ${CMAKE_COMMAND} -E tar cf "${_bandcamp_bundle}" --format=zip "${_bandcamp_platform}"
-    DEPENDS bandcamp
+            ${CMAKE_COMMAND} -E tar cf "${_bandcamp_bundle}" --format=zip ${_bandcamp_platforms}
     VERBATIM
     COMMENT "Creating Fooyin plugin bundle ${_bandcamp_bundle}"
 )
+add_dependencies(bandcamp_bundle ${_bandcamp_stage_targets})
 
 if(BANDCAMP_BUILD_TESTS)
     enable_testing()

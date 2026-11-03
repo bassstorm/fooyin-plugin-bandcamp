@@ -18,11 +18,12 @@ network stream to try another decoder.
 
 ## Installation
 
-Download the `.fyplugin` bundle for your platform from a release, then install it
-in Fooyin via **Settings → Plugins → Install…** and select the file.
+Download the `.fyplugin` bundle from a release, then install it in Fooyin via
+**Settings → Plugins → Install…** and select the file.
 
-Each bundle targets one operating system, one CPU architecture, and one Fooyin
-version. Choose the bundle that matches your system and Fooyin.
+> [NOTE]
+> Currently only `linux-x64` is officially supported. It is the only platform
+> that is actively used and tested.
 
 ## Requirements
 
@@ -84,8 +85,9 @@ cmake --preset release
 cmake --build --preset bundle
 ```
 
-The bundle is written to `build-release/`, for example
-`fooyin-bandcamp-<version>-<platform>.fyplugin`.
+The bundle is written to `build-release/` as
+`fooyin-bandcamp-<version>.fyplugin`. Only the host platform contains a built
+module; the other platform directories are empty stubs.
 
 ## Test
 
