@@ -10,6 +10,7 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-26.04
+    container: mcr.microsoft.com/devcontainers/cpp:2-bookworm
     timeout-minutes: 45
 
     steps:
