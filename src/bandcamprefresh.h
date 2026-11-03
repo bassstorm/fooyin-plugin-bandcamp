@@ -76,6 +76,8 @@ public:
 
 signals:
     void progressChanged(const Fooyin::Bandcamp::BandcampOperationProgress& progress);
+    void transportPrepared(qint64 trackId, const QString& sourceUrl, const QString& streamUrl,
+                           qint64 expiresAtMs, bool refreshed);
     void consumerFinished(qint64 trackId, const Fooyin::Bandcamp::BandcampRefreshOutcome& outcome);
     void finished(const Fooyin::Bandcamp::BandcampRefreshSummary& summary);
 

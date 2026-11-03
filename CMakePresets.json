@@ -45,12 +45,12 @@
     {
       "name": "tests",
       "configurePreset": "tests",
-      "targets": [ "bandcamp_deterministic_tests", "bandcamp_live_tests" ]
+      "targets": [ "bandcamp_deterministic_tests", "bandcamp_live_tests", "bandcamp_plugin_input_tests" ]
     },
     {
       "name": "tests-sanitize",
       "configurePreset": "tests-sanitize",
-      "targets": [ "bandcamp_deterministic_tests", "bandcamp_live_tests" ]
+      "targets": [ "bandcamp_deterministic_tests", "bandcamp_live_tests", "bandcamp_plugin_input_tests" ]
     },
     {
       "name": "release",

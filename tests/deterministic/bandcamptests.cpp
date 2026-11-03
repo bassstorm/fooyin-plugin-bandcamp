@@ -319,6 +319,7 @@ int runOrchestratorTests(int argc, char** argv);
 int runParserTests(int argc, char** argv);
 int runFooyinTrackTests(int argc, char** argv);
 int runRefreshTests(int argc, char** argv);
+int runPlaybackTests(int argc, char** argv);
 
 int main(int argc, char** argv)
 {
@@ -347,6 +348,9 @@ int main(int argc, char** argv)
         if(qstrcmp(argv[1], "--refresh-tests") == 0) {
             return runRefreshTests(argc - 1, argv + 1);
         }
+        if(qstrcmp(argv[1], "--playback-tests") == 0) {
+            return runPlaybackTests(argc - 1, argv + 1);
+        }
     }
 
     int status = 0;
@@ -365,6 +369,7 @@ int main(int argc, char** argv)
     status |= runServiceTests(argc, argv);
     status |= runFooyinTrackTests(argc, argv);
     status |= runRefreshTests(argc, argv);
+    status |= runPlaybackTests(argc, argv);
     return status;
 }
 

@@ -168,6 +168,9 @@ database ID, or hash when the Bandcamp track ID is unavailable.
   user-edited metadata before a transport-only write. The plugin does not
   serialize simultaneous external edits with that write. Refreshing streams
   never changes `filepath` or user-edited tags in the snapshot.
+- A playback decoder's temporary source track and unsigned HTTPS diagnostic
+  locator are private to that attempt. Runtime decoder metadata never replaces
+  or updates the original virtual URI or the user's track metadata.
 - A submission-scoped gateway takes the snapshot when each queued commit starts,
   writes only distinct resident targets through the public host API, and uses
   that request's `WriteResult` as its persistence outcome. It does not read back,
@@ -404,6 +407,7 @@ titles, credits, and legitimate differences between album and track metadata.
 | Album processors | Semantic refinement of admitted album-owned metadata. | Track mutation, resource rejection, raw source access, or network requests. |
 | Track processors | Semantic refinement of one admitted track with validated parent context when present. | Album mutation, resource rejection, raw source access, or network requests. |
 | Fooyin track construction | Serialization of domain identity into the virtual URI and direct projection of resolved metadata/locators into Fooyin tracks. | Inventing identity, source interpretation, metadata normalization/inheritance, or network resolution. |
+| Playback adapter | Prepare one track's transport, own the host remote device and selected host decoder, and forward playback lifecycle/options. | Codec implementation, replacement network buffering, signed-URL diagnostics, or publishing decoder metadata to the original track. |
 
 ### Trust and validation ownership
 

@@ -6,10 +6,15 @@ Adds Bandcamp as an audio source to [Fooyin](https://www.fooyin.org/).
 
 - Import Bandcamp albums, tracks, and discographies into an existing or new
   Fooyin playlist as regular playlist entries with editable track properties.
+- Play imported tracks from available Bandcamp MP3 streams; playback refreshes
+  expiring streams using the configured refresh window.
 - Manually refresh streams for selected Bandcamp tracks from the track context
   menu, using the configured stream refresh window.
 
-Playlist import and manual stream refresh are supported; playback is not implemented yet.
+Playback depends on an available Bandcamp stream and Fooyin MP3 decoder.
+Sequential Bandcamp streams are reported as non-seekable. If a decoder probe
+consumes a sequential stream before failing, the plugin does not reopen the
+network stream to try another decoder.
 
 ## Installation
 
@@ -84,7 +89,7 @@ The bundle is written to `build-release/`, for example
 
 ## Test
 
-The suite has two CTest entries:
+The suite has three CTest entries:
 
 - `bandcamp.deterministic` uses synthetic inputs and controlled dependencies.
   It covers isolated unit, component-composition, and robustness tests without
@@ -95,6 +100,8 @@ The suite has two CTest entries:
   integration-scope smoke tests. Its source is under [`tests/live/`](tests/live/)
   and its target is `bandcamp_live_tests`. It needs network access, and it fails
   visibly if Bandcamp is unreachable or its pages change incompatibly.
+- `bandcamp.plugin-input` loads the production plugin module and verifies
+  Fooyin selects its decoder for the Bandcamp track scheme.
 
 Run the complete suite locally:
 

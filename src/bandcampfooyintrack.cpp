@@ -134,6 +134,7 @@ Fooyin::Track makeFooyinTrack(const BandcampResolvedTrack& resolved,
     if(source.durationMs != 0) {
         track.setDuration(static_cast<uint64_t>(source.durationMs));
     }
+    track.setCodec(u"MP3"_s);
 
     track.setMetadataWasRead(true);
     setTransport(track, source);

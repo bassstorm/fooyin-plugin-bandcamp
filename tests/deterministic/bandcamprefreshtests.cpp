@@ -131,6 +131,8 @@ class RefreshTests : public QObject
 private slots:
     void freshnessMeasuredBoundary();
     void selectionAndOptionsSnapshot();
+    void transportAcquisitionPrecedesPersistenceAndMatchesTrackId();
+    void transportObserverCancellationDoesNotOrphanConsumers();
     void groupedAlbumAndStandalonePreserveResidents();
     void atomicReleaseFailureAndMissingId();
     void persistedBoundaryFailuresAndUntrustedExpiry();
@@ -207,6 +209,98 @@ void RefreshTests::selectionAndOptionsSnapshot()
     zero.start(now);
     QCOMPARE(zeroResult.summary.unchanged, 1);
     QCOMPARE(network.requested.size(), 1);
+}
+
+void RefreshTests::transportAcquisitionPrecedesPersistenceAndMatchesTrackId()
+{
+    FakeNetworkManager network;
+    BandcampService service{&network};
+    LibraryBoundary host;
+    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    const qint64 firstExpiry = now + 7'200'000;
+    const qint64 selectedExpiry = now + 10'800'000;
+    auto selected = resident(8, AlbumUrl, now - 1000);
+    host.library = {selected};
+    host.failWrite = true;
+    network.setResponder([firstExpiry, selectedExpiry](const auto&) {
+        return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
+                                              {row(7, firstExpiry), row(8, selectedExpiry)})};
+    });
+
+    BandcampRefreshOperation operation{&service, {selected}, {}, host.api};
+    Capture result{operation};
+    int preparedCount{0};
+    QObject::connect(&operation, &BandcampRefreshOperation::transportPrepared, &operation,
+                     [&](qint64 id, const QString& sourceUrl, const QString& streamUrl, qint64 expiresAtMs,
+                         bool refreshed) {
+        ++preparedCount;
+        QCOMPARE(id, qint64{8});
+        QCOMPARE(sourceUrl, AlbumUrl);
+        QCOMPARE(streamUrl, stream(selectedExpiry));
+        QCOMPARE(expiresAtMs, selectedExpiry);
+        QVERIFY(refreshed);
+        QVERIFY(host.writes.empty());
+    });
+    operation.start(now);
+    QTRY_COMPARE_WITH_TIMEOUT(result.finishes, 1, 3000);
+    QCOMPARE(preparedCount, 1);
+    QCOMPARE(result.summary.failed, 1);
+    QCOMPARE(result.summary.updated, 0);
+    QCOMPARE(host.writes.size(), std::size_t{1});
+    QCOMPARE(network.requested.size(), 1);
+}
+
+void RefreshTests::transportObserverCancellationDoesNotOrphanConsumers()
+{
+    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    {
+        FakeNetworkManager network;
+        BandcampService service{&network};
+        LibraryBoundary host;
+        auto selected = resident(8, AlbumUrl, now - 1000);
+        host.library = {selected};
+        network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
+
+        BandcampRefreshOperation operation{&service, {selected}, {}, host.api};
+        Capture result{operation};
+        int prepared{0};
+        QObject::connect(&operation, &BandcampRefreshOperation::transportPrepared, &operation,
+                         [&](qint64, const QString&, const QString&, qint64, bool) {
+            ++prepared;
+            operation.cancel();
+        });
+        operation.start(now);
+        QTRY_COMPARE_WITH_TIMEOUT(result.finishes, 1, 3000);
+        QCOMPARE(prepared, 1);
+        QCOMPARE(result.summary.cancelled, 1);
+        QCOMPARE(result.summary.updated, 0);
+        QCOMPARE(result.summary.failed, 0);
+        QVERIFY(host.writes.empty());
+    }
+
+    {
+        FakeNetworkManager network;
+        BandcampService service{&network};
+        LibraryBoundary host;
+        const Fooyin::Track first = resident(7, AlbumUrl, now + 7'200'000);
+        const Fooyin::Track second = resident(8, AlbumUrl, now + 7'200'000);
+        BandcampRefreshOperation operation{&service, {first, second}, {}, host.api};
+        Capture result{operation};
+        int prepared{0};
+        QObject::connect(&operation, &BandcampRefreshOperation::transportPrepared, &operation,
+                         [&](qint64, const QString&, const QString&, qint64, bool) {
+            ++prepared;
+            operation.cancel();
+        });
+        operation.start(now);
+        QCOMPARE(result.finishes, 1);
+        QCOMPARE(prepared, 1);
+        QCOMPARE(result.summary.cancelled, 2);
+        QCOMPARE(result.summary.updated, 0);
+        QCOMPARE(result.summary.failed, 0);
+        QVERIFY(network.requested.empty());
+        QVERIFY(host.writes.empty());
+    }
 }
 
 void RefreshTests::groupedAlbumAndStandalonePreserveResidents()

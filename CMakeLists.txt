@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 project(
     bandcamp
-    VERSION 0.1.6
+    VERSION 0.1.7
     DESCRIPTION "Bandcamp plugin for fooyin"
     LANGUAGES CXX
 )
@@ -38,6 +38,8 @@ target_link_libraries(bandcamp_core
 )
 
 add_library(bandcamp_fooyin STATIC
+    src/bandcampplayback.cpp
+    src/bandcampplayback.h
     src/bandcampfooyintrack.cpp
     src/bandcampfooyintrack.h
     src/bandcampimportcontroller.cpp

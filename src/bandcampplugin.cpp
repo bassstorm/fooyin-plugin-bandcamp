@@ -9,6 +9,7 @@
 #include "bandcampurldialog.h"
 
 #include <core/coresettings.h>
+#include <core/network/remoteioservice.h>
 #include <core/network/networkaccessmanager.h>
 #include <core/playlist/playlisthandler.h>
 #include <core/playlist/playlist.h>
@@ -49,6 +50,27 @@ void BandcampPlugin::initialise(const CorePluginContext& context)
 {
     m_network = context.networkAccess;
     m_service = new BandcampService(m_network.get(), this);
+    m_remoteIo = new Fooyin::RemoteIoService(context.networkAccess, context.settingsManager, this);
+    m_playbackBridge = std::make_shared<BandcampPlaybackBridge>(
+        m_service, context.audioLoader, m_remoteIo, context.settingsManager,
+        fooyinLibraryApi(context.library, context.playlistHandler));
+}
+
+BandcampPlugin::~BandcampPlugin()
+{
+    if(m_playbackBridge) {
+        m_playbackBridge->shutdown();
+    }
+}
+
+QString BandcampPlugin::inputName() const
+{
+    return tr("Bandcamp");
+}
+
+InputCreator BandcampPlugin::inputCreator() const
+{
+    return bandcampInputCreator(m_playbackBridge);
 }
 
 std::unique_ptr<PluginSettingsProvider> BandcampPlugin::settingsProvider() const

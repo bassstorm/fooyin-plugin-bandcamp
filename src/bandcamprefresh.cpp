@@ -22,6 +22,7 @@ bool isBandcamp(const Fooyin::Track& track)
 struct PersistedTransport
 {
     BandcampPageUrl source;
+    QString streamUrl;
     BandcampStreamExpiry expiry;
 };
 
@@ -61,7 +62,7 @@ PersistedResult readPersistedTransport(const Fooyin::Track& track, qint64 id)
             expiry.state = BandcampExpiryState::Invalid;
         }
     }
-    return PersistedTransport{source, expiry};
+    return PersistedTransport{source, streamText, expiry};
 }
 
 CorrelationContext correlation(BandcampOperationId id)
@@ -145,6 +146,14 @@ void BandcampRefreshOperation::start(qint64 nowMs)
     const QPointer<BandcampRefreshOperation> guard{this};
     QList<BandcampPageUrl> pages;
     QList<QPair<qint64, BandcampRefreshOutcome>> immediate;
+    struct PreparedTransport
+    {
+        qint64 id;
+        QString sourceUrl;
+        QString streamUrl;
+        qint64 expiresAtMs;
+    };
+    QList<PreparedTransport> reusableTransports;
     try {
         QSet<QString> identities;
         auto selection = std::move(m_selected);
@@ -171,6 +180,8 @@ void BandcampRefreshOperation::start(qint64 nowMs)
             else {
                 const auto& state = std::get<PersistedTransport>(input);
                 if(!bandcampRefreshNeeded(state.expiry, nowMs, m_options.prePlaybackRefreshWindowMs)) {
+                    reusableTransports.append(
+                        {id, state.source.url, state.streamUrl, state.expiry.milliseconds});
                     immediate.append({id, BandcampRefreshSuccess::Unchanged});
                 }
                 else {
@@ -188,6 +199,25 @@ void BandcampRefreshOperation::start(qint64 nowMs)
                              QStringLiteral("Preparing selected refresh consumers failed.")});
         }
         return;
+    }
+    for(const auto& transport : reusableTransports) {
+        try {
+            emit transportPrepared(transport.id, transport.sourceUrl, transport.streamUrl,
+                                   transport.expiresAtMs, false);
+        }
+        catch(...) {
+            if(guard) {
+                stopWithFailure({BandcampRefreshError::OperationFailed,
+                                 QStringLiteral("Publishing reusable transport failed.")});
+            }
+            return;
+        }
+        if(!guard) {
+            return;
+        }
+        if(m_stopping || m_finished) {
+            break;
+        }
     }
     for(const auto& [id, outcome] : immediate) {
         settle(id, m_stopping ? BandcampRefreshOutcome{BandcampRefreshCancelled{}} : outcome);
@@ -288,6 +318,17 @@ void BandcampRefreshOperation::acceptScope(const BandcampScopeResult& result)
                                                           QStringLiteral("The refreshed stream has no usable future expiry.")});
                     }
                     else {
+                        emit transportPrepared(id, (*matched)->sourceUrl, (*matched)->streamUrl, *expiry, true);
+                        if(!guard) {
+                            return;
+                        }
+                        if(m_stopping || m_finished) {
+                            settle(id, BandcampRefreshCancelled{});
+                            if(!guard) {
+                                return;
+                            }
+                            continue;
+                        }
                         m_pendingWrites.enqueue({**matched, parent ? std::optional{*parent} : std::nullopt});
                     }
                 }

@@ -566,7 +566,10 @@ threshold boundary; changing settings affects only subsequent submissions.
 - Open a bounded remote device and delegate MP3 decoding to the existing host
   decoder. Preserve device/inner-decoder ownership, timeout and cancellation
   propagation, playback hints, starvation versus EOF, and truthful seekability.
-  Do not download entire audio files or implement a codec.
+  Use the host's ordered decoder candidates; advance to another candidate only
+  when the failed probe leaves the same device reusable. Do not reopen a
+  consumed sequential stream for another candidate, download the whole audio
+  file, or implement a codec.
 - On the first stream-open failure, allow one bounded delayed reopen of the
   same URL. Do not refresh again, parse HTTP codes from error strings, retry
   malformed identity/backend errors, or retry after cancellation/deadline expiry.
@@ -574,10 +577,13 @@ threshold boundary; changing settings affects only subsequent submissions.
   cycle during stop/shutdown. Queue transport persistence to the host thread.
   Keep signed URLs out of plugin and delegated diagnostic paths.
 
-**Complete when:** deterministic tests verify freshness boundaries, zero/default
-window, unknown expiry, one refresh at most, one same-URL reopen at most,
-cancellation, decoder starvation, and terminal failures. Fooyin plays an imported
-track to completion, including after restart with an expired stored stream.
+**Complete when:** plugin-boundary tests verify freshness boundaries,
+zero/default window, unknown expiry, one refresh at most, one same-URL reopen at
+most, cancellation, identity/transport association, and terminal failures. The
+production InputPlugin is registered through Fooyin's public decoder selection,
+and the prepared signed URL/device are handed to the host decoder. Audio
+consumption, backend buffering/codec/seek behavior, and restart playback remain
+the Fooyin user's application-level acceptance gate, not plugin-owned tests.
 
 ### Increment 11 - End-to-end acceptance and documentation
 

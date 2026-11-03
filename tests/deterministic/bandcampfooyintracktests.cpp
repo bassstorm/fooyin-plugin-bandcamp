@@ -454,6 +454,7 @@ void FooyinTrackTests::projectsTrustedAlbumMetadataWithoutInference()
     QCOMPARE(track.trackNumber(), u"4"_s);
     QCOMPARE(track.trackTotal(), u"8"_s);
     QCOMPARE(track.duration(), uint64_t{12345});
+    QCOMPARE(track.codec(), u"MP3"_s);
     QVERIFY(track.extraTag(u"COVERART"_s).isEmpty());
     QVERIFY(track.metadataWasRead());
     QVERIFY(!track.hash().isEmpty());
