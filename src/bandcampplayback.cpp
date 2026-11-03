@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -871,18 +873,17 @@ private:
             remote.remoteDevice->setReadCancellationToken(abortToken());
             bool ready = false;
             if(remote.device->isOpen() || remote.device->open(QIODevice::ReadOnly)) {
-                remote.remoteDevice->setNonBlockingReadsEnabled(true);
-                while(!abortToken().stop_requested() && std::chrono::steady_clock::now() < deadline) {
-                    if(!remote.device->peek(1).isEmpty()) {
-                        ready = true;
-                        break;
-                    }
-                    if(!remote.remoteDevice->readWouldBlock()) {
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+                // Wait for response data before the first read. Qt caches isSequential() on the first
+                // read or peek, so an early read leaves seeks failing on range-capable streams.
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now());
+                if(remaining > std::chrono::milliseconds{0}
+                   && remote.device->waitForReadyRead(static_cast<int>(
+                       std::clamp<std::int64_t>(remaining.count(), 1, std::numeric_limits<int>::max())))) {
+                    remote.remoteDevice->setNonBlockingReadsEnabled(true);
+                    ready = !remote.device->peek(1).isEmpty();
+                    remote.remoteDevice->setNonBlockingReadsEnabled(false);
                 }
-                remote.remoteDevice->setNonBlockingReadsEnabled(false);
             }
             if(ready) {
                 const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(

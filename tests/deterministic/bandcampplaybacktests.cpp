@@ -56,7 +56,8 @@ struct RemoteState
     QList<QUrl> urls;
     std::atomic_int created{0};
     std::atomic_int openCalls{0};
-    std::atomic_int readinessReadCalls{0};
+    std::atomic_int readinessWaitCalls{0};
+    std::atomic_int readsBeforeReadiness{0};
     std::atomic_int reconnectDisabled{0};
     std::atomic_bool nonBlockingEnabled{false};
     int succeedsOn{1};
@@ -77,7 +78,7 @@ public:
 
     [[nodiscard]] bool readWouldBlock() const override
     {
-        return m_wouldBlock;
+        return false;
     }
 
     [[nodiscard]] qsizetype bufferedByteCount() const override
@@ -105,21 +106,24 @@ public:
         return QIODevice::open(mode);
     }
 
+    bool waitForReadyRead(int) override
+    {
+        ++m_state->readinessWaitCalls;
+        m_readinessWaited = true;
+        return m_attempt >= m_state->succeedsOn;
+    }
+
 protected:
     qint64 readData(char* data, qint64 maxSize) override
     {
-        ++m_state->readinessReadCalls;
-        ++m_readCalls;
-        if(m_readCalls <= 2 || m_attempt < m_state->succeedsOn) {
-            m_wouldBlock = m_readCalls <= 2;
-            return -1;
+        if(!m_readinessWaited) {
+            ++m_state->readsBeforeReadiness;
         }
-        m_wouldBlock = false;
-        if(maxSize > 0) {
-            data[0] = 'x';
-            return 1;
+        if(maxSize <= 0) {
+            return 0;
         }
-        return 0;
+        data[0] = 'x';
+        return 1;
     }
 
     qint64 writeData(const char*, qint64) override
@@ -130,8 +134,7 @@ protected:
 private:
     std::shared_ptr<RemoteState> m_state;
     int m_attempt{0};
-    int m_readCalls{0};
-    bool m_wouldBlock{false};
+    bool m_readinessWaited{false};
 };
 
 class FixtureRemoteIo final : public Fooyin::RemoteIoService
@@ -391,7 +394,8 @@ void PlaybackTests::hostSchemeSelectionAndBoundedSameUrlReopen()
     QCOMPARE(fixture.remoteState->created.load(), 2);
     QCOMPARE(fixture.remoteState->openCalls.load(), 2);
     QVERIFY(fixture.remoteState->reconnectDisabled.load() >= 2);
-    QVERIFY(fixture.remoteState->readinessReadCalls.load() >= 4);
+    QCOMPARE(fixture.remoteState->readinessWaitCalls.load(), 2);
+    QCOMPARE(fixture.remoteState->readsBeforeReadiness.load(), 0);
     QVERIFY(!fixture.remoteState->nonBlockingEnabled.load(std::memory_order_acquire));
     {
         const std::scoped_lock lock{fixture.remoteState->mutex};
