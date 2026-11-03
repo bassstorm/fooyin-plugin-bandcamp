@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Clones Fooyin at the requested ref, installs the build dependencies that the same
-# ref's CI script declares, then builds with the README options and installs to
-# /usr/local, where CMake's find_package(Fooyin) finds it without Fooyin_ROOT.
-# Dependencies follow the ref, so no package list is maintained here.
+# Installs Fooyin at the requested ref to /usr/local, where find_package(Fooyin) finds it
+# without Fooyin_ROOT. Build dependencies come from that ref's ci/ubuntu-depends.sh, so no
+# package list is kept here. The source clone stays at SRC_DIR to read Fooyin code.
 set -eu
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -12,6 +11,7 @@ fi
 
 REQUESTED="${VERSION:-latest}"
 REPO_URL="https://github.com/fooyin/fooyin.git"
+SRC_DIR="/usr/local/src/fooyin"
 
 if [ "$REQUESTED" = "latest" ]; then
     REF="$(curl -fsSL https://api.github.com/repos/fooyin/fooyin/releases/latest \
@@ -26,16 +26,19 @@ fi
 
 echo "Building Fooyin ${REF}"
 
-WORK_DIR="$(mktemp -d)"
-trap 'rm -rf "$WORK_DIR"' EXIT
+BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR"' EXIT
 
 export GIT_TERMINAL_PROMPT=0
+rm -rf "$SRC_DIR"
+mkdir -p "$(dirname "$SRC_DIR")"
 git clone --depth 1 --branch "$REF" --recurse-submodules --shallow-submodules \
-    "$REPO_URL" "$WORK_DIR/fooyin"
+    "$REPO_URL" "$SRC_DIR"
+chmod -R a+rX "$SRC_DIR"
 
-(cd "$WORK_DIR/fooyin" && bash ci/ubuntu-depends.sh)
+(cd "$SRC_DIR" && bash ci/ubuntu-depends.sh)
 
-cmake -S "$WORK_DIR/fooyin" -B "$WORK_DIR/build" -G Ninja \
+cmake -S "$SRC_DIR" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DINSTALL_HEADERS=ON \
@@ -44,9 +47,9 @@ cmake -S "$WORK_DIR/fooyin" -B "$WORK_DIR/build" -G Ninja \
     -DBUILD_ALSA=OFF \
     -DBUILD_TESTING=OFF
 
-cmake --build "$WORK_DIR/build" --parallel "$(nproc)"
-cmake --install "$WORK_DIR/build"
+cmake --build "$BUILD_DIR" --parallel "$(nproc)"
+cmake --install "$BUILD_DIR"
 ldconfig
 rm -rf /var/lib/apt/lists/*
 
-echo "Installed Fooyin ${REF} to /usr/local"
+echo "Installed Fooyin ${REF} to /usr/local (source kept in ${SRC_DIR})"

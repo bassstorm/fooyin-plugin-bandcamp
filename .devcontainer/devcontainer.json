@@ -1,13 +1,13 @@
 {
     "name": "fooyin-plugin-bandcamp",
-    "image": "mcr.microsoft.com/devcontainers/cpp:2-trixie",
+    "image": "mcr.microsoft.com/devcontainers/cpp:2-bookworm",
 
     "remoteUser": "vscode",
     "updateRemoteUserUID": true,
 
     "features": {
         "./features/fooyin": {
-            "version": "latest"
+            "version": "v0.14.1"
         }
     },
 

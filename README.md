@@ -56,7 +56,7 @@ export Fooyin_ROOT="$HOME/.local/fooyin-dev"
 
 The [.devcontainer/](.devcontainer/) config provides the compile-time requirements
 above as a ready-made environment, including Fooyin built from source by the
-`fooyin` feature. Its `version` option selects the release tag (default `latest`).
+`fooyin` feature. The feature keeps the Fooyin source at `/usr/local/src/fooyin`.
 
 `SSH_AUTH_SOCK` must be set on the host before the container starts. Its socket is
 bind-mounted to `/ssh-agent`, and `remoteEnv` points `SSH_AUTH_SOCK` at that path.
