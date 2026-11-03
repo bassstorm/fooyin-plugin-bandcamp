@@ -82,6 +82,7 @@ struct BandcampPlaybackBridge::State
     std::stop_source shutdownSource;
     std::mutex waitersMutex;
     std::vector<std::weak_ptr<PlaybackWaiter>> waiters;
+    std::mutex operationsMutex;
     std::vector<QPointer<BandcampRefreshOperation>> operations;
 
     void removeWaiter(const std::shared_ptr<PlaybackWaiter>& waiter)
@@ -95,6 +96,7 @@ struct BandcampPlaybackBridge::State
 
     void removeOperation(BandcampRefreshOperation* operation)
     {
+        const std::scoped_lock lock{operationsMutex};
         std::erase_if(operations, [operation](const auto& current) { return current.isNull() || current == operation; });
     }
 };
@@ -131,19 +133,45 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
         options.discographyOrder = loaded.discographyOrder;
         options.prePlaybackRefreshWindowMs
             = refreshWindowMilliseconds(loaded.prePlaybackRefreshWindowMinutes);
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds{options.itemTimeoutMs};
         {
             const std::scoped_lock lock{waiter->mutex};
-            waiter->deadline = std::chrono::steady_clock::now()
-                + std::chrono::milliseconds{options.itemTimeoutMs};
+            if(state->shuttingDown.load(std::memory_order_acquire)) {
+                waiter->completed = true;
+                waiter->failure = QStringLiteral("Playback preparation was withdrawn.");
+                waiter->changed.notify_all();
+                return;
+            }
+            if(waiter->cancelled || waiter->completed) {
+                waiter->completed = true;
+                waiter->failure = QStringLiteral("Playback preparation was cancelled.");
+                waiter->changed.notify_all();
+                return;
+            }
+            waiter->deadline = deadline;
         }
         waiter->changed.notify_all();
 
         auto* operation = new BandcampRefreshOperation{state->service, {track}, options, state->libraryApi,
                                                        state->service};
-        waiter->operation = operation;
-        state->operations.emplace_back(operation);
+        {
+            const std::scoped_lock lock{state->operationsMutex, waiter->mutex};
+            if(state->shuttingDown.load(std::memory_order_acquire) || waiter->cancelled || waiter->completed) {
+                delete operation;
+                if(!waiter->completed) {
+                    waiter->completed = true;
+                    waiter->failure = state->shuttingDown.load(std::memory_order_acquire)
+                        ? QStringLiteral("Playback preparation was withdrawn.")
+                        : QStringLiteral("Playback preparation was cancelled.");
+                }
+                waiter->changed.notify_all();
+                return;
+            }
+            waiter->operation = operation;
+            state->operations.emplace_back(operation);
+        }
         const std::weak_ptr weakState{state};
-        const auto deadline = waiter->deadline;
         QObject::connect(operation, &BandcampRefreshOperation::transportPrepared, operation,
                          [waiter, deadline](qint64, const QString&, const QString& streamUrl, qint64, bool) {
             {
@@ -165,7 +193,13 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
             }
         });
         QObject::connect(operation, &BandcampRefreshOperation::finished, operation,
-                         [weakState, operation](const BandcampRefreshSummary&) {
+                         [weakState, waiter, operation](const BandcampRefreshSummary&) {
+            {
+                const std::scoped_lock lock{waiter->mutex};
+                if(waiter->operation == operation) {
+                    waiter->operation.clear();
+                }
+            }
             if(const auto locked = weakState.lock()) {
                 locked->removeOperation(operation);
             }
@@ -187,9 +221,14 @@ void cancelPreparation(const std::weak_ptr<BandcampPlaybackBridge::State>& weakS
     }
     QMetaObject::invokeMethod(application, [weakState, waiter]() {
         if(const auto state = weakState.lock()) {
-            if(waiter->operation) {
+            QPointer<BandcampRefreshOperation> operation;
+            {
+                const std::scoped_lock lock{waiter->mutex};
+                operation = waiter->operation;
+            }
+            if(operation) {
                 try {
-                    waiter->operation->cancel();
+                    operation->cancel();
                 }
                 catch(...) {
                     completeWaiter(waiter, QStringLiteral("Playback operation withdrawal failed."));
@@ -247,6 +286,9 @@ BandcampPlaybackBridge::Preparation BandcampPlaybackBridge::prepare(const Fooyin
     const auto application = QCoreApplication::instance();
     if(!application || QThread::currentThread() == application->thread()) {
         return Failure{QStringLiteral("Playback preparation requires a worker thread.")};
+    }
+    if(cancellation.stop_requested()) {
+        return Failure{QStringLiteral("Playback preparation was cancelled.")};
     }
 
     auto waiter = std::make_shared<PlaybackWaiter>();
@@ -341,19 +383,31 @@ void BandcampPlaybackBridge::shutdown()
         const std::scoped_lock lock{state->remoteIoMutex};
         state->remoteIo.clear();
     }
-    const auto operations = state->operations;
-    for(const QPointer<BandcampRefreshOperation>& operation : operations) {
-        if(operation) {
-            try {
-                operation->cancel();
-            }
-            catch(...) {
-                playbackDiagnostic(0, QStringLiteral("playback.shutdown.withdraw.failed"),
-                                   QStringLiteral("Withdrawing an operation during shutdown failed."));
+    auto cancelOperations = [state]() {
+        std::vector<QPointer<BandcampRefreshOperation>> operations;
+        {
+            const std::scoped_lock lock{state->operationsMutex};
+            operations = std::exchange(state->operations, {});
+        }
+        for(const QPointer<BandcampRefreshOperation>& operation : operations) {
+            if(operation) {
+                try {
+                    operation->cancel();
+                }
+                catch(...) {
+                    playbackDiagnostic(0, QStringLiteral("playback.shutdown.withdraw.failed"),
+                                       QStringLiteral("Withdrawing an operation during shutdown failed."));
+                }
             }
         }
+    };
+    if(const auto application = QCoreApplication::instance();
+       application && QThread::currentThread() != application->thread()) {
+        QMetaObject::invokeMethod(application, std::move(cancelOperations), Qt::QueuedConnection);
     }
-    state->operations.clear();
+    else {
+        cancelOperations();
+    }
 }
 
 namespace {

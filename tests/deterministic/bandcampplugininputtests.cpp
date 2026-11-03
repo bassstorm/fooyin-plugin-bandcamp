@@ -5,6 +5,7 @@
 #include <core/engine/inputplugin.h>
 #include <core/plugins/coreplugin.h>
 #include <core/plugins/coreplugincontext.h>
+#include <core/plugins/plugin.h>
 #include <core/track.h>
 #include <utils/settings/settingsmanager.h>
 
@@ -30,6 +31,11 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    auto* plugin = qobject_cast<Fooyin::Plugin*>(root);
+    if(!plugin) {
+        std::cerr << "The production plugin does not expose Fooyin::Plugin.\n";
+        return 1;
+    }
     auto* inputPlugin = qobject_cast<Fooyin::InputPlugin*>(root);
     if(!inputPlugin) {
         std::cerr << "The production plugin does not expose Fooyin::InputPlugin.\n";
@@ -68,6 +74,7 @@ int main(int argc, char** argv)
                     std::cerr << "Fooyin did not select the production decoder for a Bandcamp track URI.\n";
                     return 1;
                 }
+                plugin->shutdown();
             }
             audioLoader.reset();
             if(!pluginLoader.unload()) {

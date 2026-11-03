@@ -31,6 +31,7 @@
 #include <QDateTime>
 
 #include <stdexcept>
+#include <utility>
 
 using namespace Qt::StringLiterals;
 
@@ -58,9 +59,46 @@ void BandcampPlugin::initialise(const CorePluginContext& context)
 
 BandcampPlugin::~BandcampPlugin()
 {
+    shutdown();
+}
+
+void BandcampPlugin::shutdown()
+{
+    const auto dialogs = std::exchange(m_dialogs, {});
+    for(const QPointer<QDialog>& dialog : dialogs) {
+        delete dialog.data();
+    }
+
+    const auto imports = std::exchange(m_imports, {});
+    for(const QPointer<BandcampImportController>& controller : imports) {
+        if(controller) {
+            controller->cancel();
+            delete controller.data();
+        }
+    }
+
+    const auto refreshes = std::exchange(m_refreshes, {});
+    for(const QPointer<BandcampRefreshOperation>& operation : refreshes) {
+        if(operation) {
+            operation->cancel();
+            delete operation.data();
+        }
+    }
+
     if(m_playbackBridge) {
         m_playbackBridge->shutdown();
     }
+
+    delete m_remoteIo.data();
+    delete std::exchange(m_service, nullptr);
+}
+
+void BandcampPlugin::trackDialog(QDialog* dialog)
+{
+    m_dialogs.append(dialog);
+    QObject::connect(dialog, &QObject::destroyed, this, [this, dialog]() {
+        m_dialogs.removeAll(dialog);
+    });
 }
 
 QString BandcampPlugin::inputName() const
@@ -113,7 +151,7 @@ void BandcampPlugin::initialise(const GuiPluginContext& context)
 
 void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
 {
-    if(!hasSelectedBandcampTracks(tracks)) {
+    if(!m_service || !hasSelectedBandcampTracks(tracks)) {
         return;
     }
     try {
@@ -130,8 +168,13 @@ void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
             m_service, tracks, options,
             fooyinLibraryApi(interactor ? interactor->library() : nullptr,
                             interactor ? interactor->handler() : nullptr), this};
+        m_refreshes.append(operation);
+        QObject::connect(operation, &QObject::destroyed, this, [this, operation]() {
+            m_refreshes.removeAll(operation);
+        });
         auto* dialog = new BandcampResultsDialog(Utils::getMainWindow(), true);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        trackDialog(dialog);
         connect(operation, &BandcampRefreshOperation::progressChanged, dialog,
                 &BandcampResultsDialog::updateProgress);
         connect(operation, &BandcampRefreshOperation::finished, dialog, &BandcampResultsDialog::finishRefresh);
@@ -149,6 +192,7 @@ void BandcampPlugin::showAddUrlDialog()
 {
     auto* dialog = new BandcampUrlDialog(Utils::getMainWindow());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    trackDialog(dialog);
     QObject::connect(dialog, &BandcampUrlDialog::urlsSubmitted, this, &BandcampPlugin::onUrlsSubmitted);
     dialog->open();
 }
@@ -180,6 +224,7 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
         qCWarning(BANDCAMP_UI).noquote() << "Bandcamp request was rejected:" << rejected->error.reason;
         auto* dialog = new BandcampResultsDialog(Utils::getMainWindow());
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        trackDialog(dialog);
         dialog->showRejection(rejected->error);
         dialog->open();
         return;
@@ -230,6 +275,7 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
 
     auto* dialog = new BandcampResultsDialog(Utils::getMainWindow());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    trackDialog(dialog);
     auto* controller = new BandcampImportController{
         id,
         urls,
@@ -244,6 +290,10 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
             }
         },
         this};
+    m_imports.append(controller);
+    QObject::connect(controller, &QObject::destroyed, this, [this, controller]() {
+        m_imports.removeAll(controller);
+    });
 
     QObject::connect(m_service, &BandcampService::scopeResolved, controller,
                      [controller](const BandcampScopeResult& result) { controller->acceptScopeResult(result); });

@@ -17,6 +17,8 @@
 
 #include <memory>
 
+class QDialog;
+
 namespace Fooyin {
 class NetworkAccessManager;
 class RemoteIoService;
@@ -26,7 +28,7 @@ class PlaylistInteractor;
 
 namespace Fooyin::Bandcamp {
 class BandcampImportController;
-class BandcampResultsDialog;
+class BandcampRefreshOperation;
 class BandcampPlugin : public QObject,
                        public Plugin,
                        public CorePlugin,
@@ -45,8 +47,10 @@ public:
     [[nodiscard]] InputCreator inputCreator() const override;
     [[nodiscard]] std::unique_ptr<PluginSettingsProvider> settingsProvider() const override;
     void initialise(const GuiPluginContext& context) override;
+    void shutdown() override;
 
 private:
+    void trackDialog(QDialog* dialog);
     void showAddUrlDialog();
     void onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool forceNewPlaylist);
     void refreshSelectedTracks(const Fooyin::TrackList& tracks);
@@ -59,5 +63,8 @@ private:
     std::shared_ptr<BandcampPlaybackBridge> m_playbackBridge;
     QPointer<Fooyin::CurrentPlaylistController> m_playlistSelection;
     QPointer<Fooyin::PlaylistInteractor> m_playlistInteractor;
+    QList<QPointer<QDialog>> m_dialogs;
+    QList<QPointer<BandcampImportController>> m_imports;
+    QList<QPointer<BandcampRefreshOperation>> m_refreshes;
 };
 } // namespace Fooyin::Bandcamp

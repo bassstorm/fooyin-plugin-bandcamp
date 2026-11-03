@@ -330,6 +330,7 @@ private slots:
     void decoderOpenFailureDoesNotRetry();
     void shutdownWithdrawsPendingPreparation();
     void stopTokenWakesPendingPreparation();
+    void stopBeforeMainThreadPreparationNeverStartsRefresh();
     void abortDuringInnerInitializationIsForwarded();
     void shutdownAbortsInnerInitialization();
     void preparationRejectsMainThreadCall();
@@ -593,6 +594,58 @@ void PlaybackTests::stopTokenWakesPendingPreparation()
     fixture.bridge->shutdown();
     fixture.network->finishAbortedReplies();
     QTRY_COMPARE_WITH_TIMEOUT(fixture.network->liveReplyCount(), qsizetype{0}, 2000);
+}
+
+void PlaybackTests::stopBeforeMainThreadPreparationNeverStartsRefresh()
+{
+    PlaybackFixture fixture{1};
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    fixture.network->setResponder([](const QNetworkRequest&) {
+        const auto responseBody = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
+                                            {streamEntry(R"("id":456,"title":"Selected")")});
+        return FakeResponse{.body = responseBody, .holdDelivery = true, .holdAfterAbort = true};
+    });
+    const Fooyin::Track track = playbackTrack(now - 60'000);
+    auto bridge = fixture.bridge;
+
+    // 1. Pre-cancelled stop_token: prepare() returns before the queued main-thread
+    //    beginPreparation runs, and pumping the main thread afterwards must not start a refresh.
+    {
+        std::stop_source preCancelled;
+        preCancelled.request_stop();
+        auto work = std::async(std::launch::async, [bridge, track, token = preCancelled.get_token()]() {
+            return bridge->prepare(track, token);
+        });
+        QCOMPARE(work.wait_for(std::chrono::milliseconds{1000}), std::future_status::ready);
+        const auto outcome = work.get();
+        QVERIFY(std::holds_alternative<BandcampPlaybackBridge::Failure>(outcome));
+        QCOMPARE(std::get<BandcampPlaybackBridge::Failure>(outcome).reason,
+                 u"Playback preparation was cancelled."_s);
+        QCoreApplication::processEvents();
+        QVERIFY(fixture.network->requested.isEmpty());
+    }
+
+    // 2. Stop requested while beginPreparation is still queued on the main thread.
+    {
+        std::stop_source immediateStop;
+        std::atomic_bool enteredPrepare{false};
+        auto work = std::async(std::launch::async,
+                               [bridge, track, &enteredPrepare, token = immediateStop.get_token()]() {
+                                   enteredPrepare.store(true, std::memory_order_release);
+                                   return bridge->prepare(track, token);
+                               });
+        while(!enteredPrepare.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        immediateStop.request_stop();
+        QCOMPARE(work.wait_for(std::chrono::milliseconds{1000}), std::future_status::ready);
+        const auto outcome = work.get();
+        QVERIFY(std::holds_alternative<BandcampPlaybackBridge::Failure>(outcome));
+        QCOMPARE(std::get<BandcampPlaybackBridge::Failure>(outcome).reason,
+                 u"Playback preparation was cancelled."_s);
+        QCoreApplication::processEvents();
+        QVERIFY(fixture.network->requested.isEmpty());
+    }
 }
 } // namespace
 
