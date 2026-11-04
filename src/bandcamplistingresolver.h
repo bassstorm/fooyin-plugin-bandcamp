@@ -23,9 +23,9 @@ public:
     using OutcomeCallback = std::function<void(BandcampListingParseOutcome)>;
 
     BandcampListingResolver(QNetworkAccessManager* network, BandcampOperationId operationId, QUrl pageUrl,
-                            int timeoutMs, BandcampListingParser parser,
-                            std::shared_ptr<BandcampWorkflowSlots> workflowSlots, OutcomeCallback callback,
-                            QObject* parent = nullptr);
+                            int attemptTimeoutMs, int maxAttempts, int attemptCooldownMs,
+                            BandcampListingParser parser, std::shared_ptr<BandcampWorkflowSlots> workflowSlots,
+                            OutcomeCallback callback, QObject* parent = nullptr);
     ~BandcampListingResolver() override;
 
     void start();

@@ -399,6 +399,7 @@ private slots:
     void shutdownAbortsInnerInitialization();
     void preparationRejectsMainThreadCall();
     void delegateExceptionLatchesPlaybackFailure();
+    void playbackMakesSingleAttemptPerPage();
 };
 
 void PlaybackTests::cachedPreparationDoesNotCreateGateway()
@@ -626,6 +627,19 @@ void PlaybackTests::serviceTeardownFailsPendingPreparation()
     QVERIFY(std::holds_alternative<BandcampPlaybackBridge::Failure>(work.get()));
     fixture.network->finishAbortedReplies();
     QTRY_COMPARE_WITH_TIMEOUT(fixture.network->liveReplyCount(), qsizetype{0}, 2000);
+}
+
+void PlaybackTests::playbackMakesSingleAttemptPerPage()
+{
+    PlaybackFixture fixture{1};
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    fixture.network->setResponder([](const QNetworkRequest&) { return FakeResponse{.status = 503}; });
+    const Fooyin::Track track = playbackTrack(now - 60'000);
+    auto bridge = fixture.bridge;
+    auto work = std::async(std::launch::async, [bridge, track]() { return bridge->prepare(track, {}); });
+    QTRY_VERIFY_WITH_TIMEOUT(work.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready, 5000);
+    QVERIFY(std::holds_alternative<BandcampPlaybackBridge::Failure>(work.get()));
+    QCOMPARE(fixture.network->requested.size(), 1);
 }
 
 void PlaybackTests::hostSchemeSelectionAndBoundedSameUrlReopen()

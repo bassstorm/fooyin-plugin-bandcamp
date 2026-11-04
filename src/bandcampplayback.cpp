@@ -35,8 +35,22 @@ using namespace Qt::StringLiterals;
 
 namespace Fooyin::Bandcamp {
 namespace {
-constexpr auto PlaybackSourceDeadlineLimit = std::chrono::milliseconds{MaxItemTimeoutMs};
-constexpr auto ReopenDelay                 = std::chrono::milliseconds{100};
+// Playback is waiting on a user action, so each page gets a single attempt. The user's attempt timeout still applies,
+// but no retry follows, so cooldowns never run.
+constexpr int PlaybackAttemptsPerPage = 1;
+constexpr auto ReopenDelay            = std::chrono::milliseconds{100};
+// Stream open and decoder init after the stream URL is known.
+constexpr int DecoderInitTimeoutMs = 10'000;
+
+// The track page and its parent album page are fetched at most once each, before the stream URL is known.
+// The library write runs after playback is prepared, so it is not part of this budget.
+constexpr int playbackWaiterBudgetMs(int attemptTimeoutMs)
+{
+    return 2 * attemptTimeoutMs + DecoderInitTimeoutMs;
+}
+
+// Covers the window before the host thread arms the waiter with the user-derived deadline.
+constexpr auto PreArmWaiterBudget = std::chrono::milliseconds{playbackWaiterBudgetMs(MaxAttemptTimeoutMs)};
 
 struct PlaybackWaiter
 {
@@ -47,7 +61,8 @@ struct PlaybackWaiter
     std::optional<BandcampPlaybackBridge::PreparedTransport> transport;
     QString failure;
     std::chrono::steady_clock::time_point deadline
-        = std::chrono::steady_clock::now() + PlaybackSourceDeadlineLimit;
+        = std::chrono::steady_clock::now() + PreArmWaiterBudget;
+
     QPointer<BandcampPlaybackPreparation> operation;
 };
 
@@ -128,14 +143,10 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
 
     FySettings settings;
     const auto loaded = loadBandcampSettings(settings);
-    OperationOptions options;
-    options.parallelism = loaded.parallelism;
-    options.itemTimeoutMs = loaded.itemTimeoutMs;
-    options.discographyOrder = loaded.discographyOrder;
-    options.prePlaybackRefreshWindowMs
-        = refreshWindowMilliseconds(loaded.prePlaybackRefreshWindowMinutes);
+    OperationOptions options = makeOperationOptions(loaded);
+    options.maxAttempts      = PlaybackAttemptsPerPage;
     const auto deadline = std::chrono::steady_clock::now()
-        + std::chrono::milliseconds{options.itemTimeoutMs};
+        + std::chrono::milliseconds{playbackWaiterBudgetMs(options.attemptTimeoutMs)};
     {
         const std::scoped_lock lock{waiter->mutex};
         if(state->shuttingDown.load(std::memory_order_acquire)) {

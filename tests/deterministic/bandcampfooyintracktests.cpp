@@ -289,7 +289,7 @@ void connectImportCompletion(BandcampImportController& controller, bool& finishe
 void submit(BandcampLibraryGateway& gateway, QList<BandcampResolvedTrack> incoming, QObject* context,
             BandcampLibraryGateway::Completion completion, int timeoutMs = 1000, CorrelationContext correlation = {})
 {
-    gateway.commit(std::move(incoming), timeoutMs, context, std::move(correlation), std::move(completion));
+    gateway.commit(std::move(incoming), context, std::move(correlation), std::move(completion), timeoutMs);
 }
 
 struct CapturedMessage
@@ -1021,7 +1021,6 @@ void FooyinTrackTests::importsIntoCapturedUiPlaylist()
                                         {{BandcampPageKind::Album, AlbumSource, {}}},
                                         false,
                                         selectedPlaylist,
-                                        1000,
                                         library.api,
                                         playlists.api,
                                         {}};
@@ -1057,7 +1056,6 @@ void FooyinTrackTests::importsPlaylistOnlyResidentMetadata()
                                         {{BandcampPageKind::Album, AlbumSource, {}}},
                                         false,
                                         selected,
-                                        1000,
                                         library.api,
                                         playlists.api,
                                         {}};
@@ -1101,7 +1099,6 @@ void FooyinTrackTests::createsNewForForcedAndInitiallyUnsuitableDestinations()
                                             {{BandcampPageKind::Album, AlbumSource, {}}},
                                             false,
                                             selected,
-                                            1000,
                                             library.api,
                                             playlists.api,
                                             {}};
@@ -1128,7 +1125,6 @@ void FooyinTrackTests::createsNewForForcedAndInitiallyUnsuitableDestinations()
                                     {{BandcampPageKind::Track, TrackSource, {}}},
                                     true,
                                     selected,
-                                    1000,
                                     library.api,
                                     playlists.api,
                                     {}};
@@ -1151,7 +1147,6 @@ void FooyinTrackTests::createsNewForForcedAndInitiallyUnsuitableDestinations()
                                         {{BandcampPageKind::Track, TrackSource, {}}},
                                         true,
                                         {},
-                                        1000,
                                         standaloneLibrary.api,
                                         standalonePlaylists.api,
                                         {}};
@@ -1177,7 +1172,6 @@ void FooyinTrackTests::preservesOrderedAlbumBlocksAndRepeatedScopes()
                                          {BandcampPageKind::Track, TrackSource, {}}},
                                         true,
                                         {},
-                                        1000,
                                         library.api,
                                         playlists.api,
                                         {}};
@@ -1217,7 +1211,6 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
                                             {{BandcampPageKind::Album, AlbumSource, {}}},
                                             true,
                                             {},
-                                            1000,
                                             library.api,
                                             playlists.api,
                                             {}};
@@ -1244,7 +1237,6 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
                                              {BandcampPageKind::Track, TrackSource, {}}},
                                             false,
                                             selected,
-                                            1000,
                                             library.api,
                                             playlists.api,
                                             {}};
@@ -1278,7 +1270,6 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
                                              {BandcampPageKind::Track, TrackSource, {}}},
                                             true,
                                             {},
-                                            1000,
                                             library.api,
                                             playlists.api,
                                             {}};
@@ -1316,7 +1307,6 @@ void FooyinTrackTests::stopsWhenDestinationChangesDuringPreparation()
                                         {{BandcampPageKind::Album, AlbumSource, {}}},
                                         false,
                                         selected,
-                                        1000,
                                         library.api,
                                         playlists.api,
                                         [&cancelledOperation](BandcampOperationId id) {
@@ -1344,7 +1334,6 @@ void FooyinTrackTests::stopsWhenDestinationChangesDuringPreparation()
                                                    {{BandcampPageKind::Track, TrackSource, {}}},
                                                    true,
                                                    {},
-                                                   1000,
                                                    library.api,
                                                    unavailable.api,
                                                    [&cancelledOperation](BandcampOperationId id) {
@@ -1374,7 +1363,6 @@ void FooyinTrackTests::waitsForGatewayBeforeFinishingResolutionImport()
                                         {{BandcampPageKind::Track, TrackSource, {}}},
                                         false,
                                         selected,
-                                        1000,
                                         library.api,
                                         playlists.api,
                                         {}};
@@ -1413,7 +1401,6 @@ void FooyinTrackTests::cancellationWithdrawsPendingGatewayHandoff()
                                         {{BandcampPageKind::Track, TrackSource, {}}},
                                         false,
                                         selected,
-                                        1000,
                                         library.api,
                                         playlists.api,
                                         [&cancelledOperation](BandcampOperationId id) {
@@ -1458,7 +1445,6 @@ void FooyinTrackTests::deletingControllerFromPlaylistCallbackWithdrawsResolution
                                                {BandcampPageKind::Track, TrackSource, {}}},
                                               true,
                                               {},
-                                              1000,
                                               library.api,
                                               playlists.api,
                                               [&cancelledOperation](BandcampOperationId id) {
@@ -1496,7 +1482,6 @@ void FooyinTrackTests::cancellationDuringPlaylistCreationDoesNotInsert()
                                         {{BandcampPageKind::Album, AlbumSource, {}}},
                                         true,
                                         {},
-                                        1000,
                                         library.api,
                                         playlists.api,
                                         [&controllerPointer, &cancelledOperation](BandcampOperationId id) {
@@ -1535,7 +1520,6 @@ void FooyinTrackTests::cancellationDuringInsertionDefersSummaryAndCountsAccepted
                                         {{BandcampPageKind::Track, TrackSource, {}}},
                                         true,
                                         {},
-                                        1000,
                                         library.api,
                                         playlists.api,
                                         [&controllerPointer, &cancelledOperation](BandcampOperationId id) {
@@ -1577,7 +1561,6 @@ void FooyinTrackTests::deletingControllerFromIntegrationErrorWithdrawsResolution
                                               {{BandcampPageKind::Album, AlbumSource, {}}},
                                               true,
                                               {},
-                                              1000,
                                               library.api,
                                               playlists.api,
                                               [&cancelledOperation](BandcampOperationId id) {

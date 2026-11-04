@@ -5,6 +5,7 @@ add_executable(bandcamp_deterministic_tests
     bandcampparsertests.cpp
     bandcamppostprocessortests.cpp
     bandcampcontracttests.cpp
+    bandcampattemptsupervisortests.cpp
     bandcampdiagnosticstests.cpp
     bandcampclienttests.cpp
     bandcamporchestratortests.cpp

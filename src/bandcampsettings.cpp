@@ -34,23 +34,30 @@ BandcampSettings loadBandcampSettings(const QSettings& settings)
 {
     BandcampSettings values;
     values.parallelism = readClamped(settings, ParallelismKey, DefaultParallelism, MinParallelism, MaxParallelism);
-    values.itemTimeoutMs
-        = readClamped(settings, ItemTimeoutKey, DefaultItemTimeoutMs, MinItemTimeoutMs, MaxItemTimeoutMs);
+    values.attemptTimeoutMs = readClamped(settings, AttemptTimeoutKey, DefaultAttemptTimeoutMs, MinAttemptTimeoutMs,
+                                          MaxAttemptTimeoutMs);
     values.discographyOrder = static_cast<BandcampDiscographyOrder>(readClamped(
         settings, DiscographyOrderKey, static_cast<int>(BandcampDiscographyOrder::Default),
         static_cast<int>(BandcampDiscographyOrder::Default), static_cast<int>(BandcampDiscographyOrder::Descending)));
     values.prePlaybackRefreshWindowMinutes
         = readClamped(settings, PrePlaybackRefreshWindowKey, DefaultRefreshWindowMinutes, MinRefreshWindowMinutes,
                       MaxRefreshWindowMinutes);
+    values.maxAttempts
+        = readClamped(settings, MaxAttemptsKey, DefaultAttemptsPerPage, MinAttemptsPerPage, MaxAttemptsPerPage);
+    values.attemptCooldownMs
+        = readClamped(settings, AttemptCooldownKey, DefaultAttemptCooldownMs, MinAttemptCooldownMs,
+                      MaxAttemptCooldownMs);
     return values;
 }
 
 void saveBandcampSettings(QSettings& settings, const BandcampSettings& values)
 {
     settings.setValue(ParallelismKey, values.parallelism);
-    settings.setValue(ItemTimeoutKey, values.itemTimeoutMs);
+    settings.setValue(AttemptTimeoutKey, values.attemptTimeoutMs);
     settings.setValue(DiscographyOrderKey, static_cast<int>(values.discographyOrder));
     settings.setValue(PrePlaybackRefreshWindowKey, values.prePlaybackRefreshWindowMinutes);
+    settings.setValue(MaxAttemptsKey, values.maxAttempts);
+    settings.setValue(AttemptCooldownKey, values.attemptCooldownMs);
 }
 
 qint64 refreshWindowMilliseconds(int minutes)
@@ -68,11 +75,25 @@ qint64 refreshWindowMilliseconds(int minutes)
     return checkedMinutes * RefreshWindowMsPerMinute;
 }
 
+OperationOptions makeOperationOptions(const BandcampSettings& settings)
+{
+    OperationOptions options;
+    options.parallelism                = settings.parallelism;
+    options.attemptTimeoutMs           = settings.attemptTimeoutMs;
+    options.discographyOrder           = settings.discographyOrder;
+    options.prePlaybackRefreshWindowMs = refreshWindowMilliseconds(settings.prePlaybackRefreshWindowMinutes);
+    options.maxAttempts                = settings.maxAttempts;
+    options.attemptCooldownMs          = settings.attemptCooldownMs;
+    return options;
+}
+
 OperationOptions clampOperationOptions(OperationOptions options)
 {
-    options.parallelism   = std::clamp(options.parallelism, MinParallelism, MaxParallelism);
-    options.itemTimeoutMs = std::clamp(options.itemTimeoutMs, MinItemTimeoutMs, MaxItemTimeoutMs);
-    const int order       = static_cast<int>(options.discographyOrder);
+    options.parallelism       = std::clamp(options.parallelism, MinParallelism, MaxParallelism);
+    options.attemptTimeoutMs  = std::clamp(options.attemptTimeoutMs, MinAttemptTimeoutMs, MaxAttemptTimeoutMs);
+    options.maxAttempts       = std::clamp(options.maxAttempts, MinAttemptsPerPage, MaxAttemptsPerPage);
+    options.attemptCooldownMs = std::clamp(options.attemptCooldownMs, MinAttemptCooldownMs, MaxAttemptCooldownMs);
+    const int order           = static_cast<int>(options.discographyOrder);
     if(order < static_cast<int>(BandcampDiscographyOrder::Default)
        || order > static_cast<int>(BandcampDiscographyOrder::Descending)) {
         qCWarning(BANDCAMP_SETTINGS) << "discography order" << order << "is invalid, using Default";

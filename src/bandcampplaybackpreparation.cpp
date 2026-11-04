@@ -149,7 +149,7 @@ void BandcampPlaybackPreparation::acceptScope(const BandcampScopeResult& result)
     m_writePending = true;
     m_gateway = new BandcampLibraryGateway{std::move(m_libraryApi), this};
     const CorrelationContext context{.jobId = static_cast<qint64>(m_operationId), .trackId = m_trackId};
-    m_gateway->refreshTransport(std::move(*selected), m_options.itemTimeoutMs, this, context,
+    m_gateway->refreshTransport(std::move(*selected), this, context,
                                 [this](FooyinTrackCommitOutcome) {
                                     m_writePending = false;
                                     finishIfReady();

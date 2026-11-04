@@ -2,6 +2,8 @@
 set(BANDCAMP_CORE_SOURCES
     ${BANDCAMP_SRC_DIR}/bandcampclient.cpp
     ${BANDCAMP_SRC_DIR}/bandcampclient.h
+    ${BANDCAMP_SRC_DIR}/bandcampattemptsupervisor.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampattemptsupervisor.h
     ${BANDCAMP_SRC_DIR}/bandcampdiagnostics.cpp
     ${BANDCAMP_SRC_DIR}/bandcampdiagnostics.h
     ${BANDCAMP_SRC_DIR}/bandcamplogging.cpp

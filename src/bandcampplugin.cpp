@@ -155,15 +155,9 @@ void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
     }
     FySettings fySettings;
     const auto settings = loadBandcampSettings(fySettings);
-    OperationOptions options;
-    options.parallelism = settings.parallelism;
-    options.itemTimeoutMs = settings.itemTimeoutMs;
-    options.discographyOrder = settings.discographyOrder;
-    options.prePlaybackRefreshWindowMs
-        = refreshWindowMilliseconds(settings.prePlaybackRefreshWindowMinutes);
     const QPointer<Fooyin::PlaylistInteractor> interactor{m_playlistInteractor};
     auto* operation = new BandcampRefreshController{
-        m_service, tracks, options,
+        m_service, tracks, makeOperationOptions(settings),
         fooyinLibraryApi(interactor ? interactor->library() : nullptr,
                         interactor ? interactor->handler() : nullptr), this};
     m_refreshes.append(operation);
@@ -201,19 +195,16 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
 
     FySettings fySettings;
     const BandcampSettings settings = loadBandcampSettings(fySettings);
-    qCInfo(BANDCAMP_SETTINGS) << "parallelism" << settings.parallelism << "item timeout"
-                              << settings.itemTimeoutMs / 1000.0 << "s"
+    qCInfo(BANDCAMP_SETTINGS) << "parallelism" << settings.parallelism << "attempt timeout"
+                              << settings.attemptTimeoutMs / 1000.0 << "s"
+                              << "max attempts" << settings.maxAttempts << "cooldown"
+                              << settings.attemptCooldownMs / 1000.0 << "s"
                               << "discography order" << static_cast<int>(settings.discographyOrder)
                               << "pre-playback refresh window" << settings.prePlaybackRefreshWindowMinutes << "min";
 
-    OperationOptions options;
-    options.parallelism                = settings.parallelism;
-    options.itemTimeoutMs              = settings.itemTimeoutMs;
-    options.discographyOrder           = settings.discographyOrder;
-    options.prePlaybackRefreshWindowMs = refreshWindowMilliseconds(settings.prePlaybackRefreshWindowMinutes);
     const Fooyin::UId selectedPlaylistId
         = m_playlistSelection ? m_playlistSelection->currentPlaylistId() : Fooyin::UId{};
-    const auto submission = m_service->submit(urls, options);
+    const auto submission = m_service->submit(urls, makeOperationOptions(settings));
     if(const auto* rejected = std::get_if<BandcampSubmissionRejected>(&submission)) {
         qCWarning(BANDCAMP_UI).noquote() << "Bandcamp request was rejected:" << rejected->error.reason;
         auto* dialog = new BandcampProgressDialog(BandcampDialogMode::Import, Utils::getMainWindow());
@@ -274,7 +265,6 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
         urls,
         forceNewPlaylist,
         selectedPlaylistId,
-        settings.itemTimeoutMs,
         fooyinLibraryApi(interactor ? interactor->library() : nullptr, handler),
         std::move(playlistApi),
         [service = QPointer<BandcampResolutionService>{m_service}](BandcampOperationId operationId) {

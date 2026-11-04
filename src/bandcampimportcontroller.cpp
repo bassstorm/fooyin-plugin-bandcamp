@@ -17,14 +17,13 @@ CorrelationContext importCorrelation(BandcampOperationId operationId)
 BandcampImportController::BandcampImportController(BandcampOperationId operationId,
                                                    QList<BandcampPageUrl> submittedPages,
                                                    bool forceNewPlaylist, Fooyin::UId selectedPlaylistId,
-                                                   int activeTimeoutMs, FooyinLibraryApi libraryApi,
+                                                   FooyinLibraryApi libraryApi,
                                                    BandcampPlaylistApi playlistApi, CancelOperation cancelOperation,
                                                    QObject* parent)
     : QObject{parent}
     , m_operationId{operationId}
     , m_submittedPages{std::move(submittedPages)}
     , m_destinationId{std::move(selectedPlaylistId)}
-    , m_activeTimeoutMs{activeTimeoutMs}
     , m_libraryOwner{libraryApi.owner}
     , m_playlistApi{std::move(playlistApi)}
     , m_cancelOperation{std::move(cancelOperation)}
@@ -205,7 +204,7 @@ void BandcampImportController::pump()
         guard->m_handoffPhase = HandoffPhase::Gateway;
         const CorrelationContext correlation{.jobId = static_cast<qint64>(m_operationId),
                                              .resourceUrl = QUrl(scope.page.url)};
-        guard->m_gateway->commit(std::move(tracks), guard->m_activeTimeoutMs, guard, correlation,
+        guard->m_gateway->commit(std::move(tracks), guard, correlation,
                                  [guard, scope](FooyinTrackCommitOutcome outcome) mutable {
                                      if(guard) {
                                          guard->onCommit(scope, std::move(outcome));

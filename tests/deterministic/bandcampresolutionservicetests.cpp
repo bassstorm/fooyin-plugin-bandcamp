@@ -12,6 +12,7 @@
 #include <QtTest>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 
 using namespace Qt::StringLiterals;
@@ -195,7 +196,7 @@ private slots:
         const auto* failure = std::get_if<ResolutionFailure>(&run.results.first().outcome);
         QVERIFY(failure);
         QCOMPARE(failure->error.code, ResolutionErrorCode::FetchFailed);
-        QCOMPARE(network.requested.size(), 1);
+        QCOMPARE(network.requested.size(), 2);
         QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
             return log.category == u"fy.trace.bandcamp.resolve"_s
                 && log.message.contains(u"job=\"1\""_s)
@@ -216,6 +217,388 @@ private slots:
                 && log.message.contains(u"field=\"httpStatus\""_s)
                 && log.message.contains(u"reason=\"HTTP 503\""_s);
         }));
+    }
+
+    void transportFailureIsRetriedWithinBudget()
+    {
+        FakeNetworkManager network;
+        int albumCalls{0};
+        network.setResponder([&albumCalls](const QNetworkRequest&) {
+            ++albumCalls;
+            if(albumCalls == 1) {
+                return FakeResponse{.status = 0, .error = QNetworkReply::RemoteHostClosedError};
+            }
+            return FakeResponse{.body = AlbumDocument};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(network.requested.size(), 2);
+        QCOMPARE(run.summary.succeeded, 1);
+        QCOMPARE(run.summary.failed, 0);
+    }
+
+    void transportFailureStopsAfterConfiguredRetries()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.status = 0, .error = QNetworkReply::RemoteHostClosedError};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.maxAttempts       = 3;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(network.requested.size(), 3);
+        QCOMPARE(run.summary.failed, 1);
+        QCOMPARE(run.results.size(), 1);
+        const auto* failure = std::get_if<ResolutionFailure>(&run.results.first().outcome);
+        QVERIFY(failure);
+        QCOMPARE(failure->error.code, ResolutionErrorCode::FetchFailed);
+    }
+
+    void zeroRetriesFailOnFirstTransportError()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.status = 0, .error = QNetworkReply::RemoteHostClosedError};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.maxAttempts = 1;
+
+        const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(network.requested.size(), 1);
+        QCOMPARE(run.summary.failed, 1);
+    }
+
+    void nonRetriableHttpStatusesFailOnFirstAttempt()
+    {
+        const std::array statuses{400, 401, 403, 404, 405, 410, 414, 451};
+        for(const int status : statuses) {
+            FakeNetworkManager network;
+            network.setResponder([status](const QNetworkRequest&) { return FakeResponse{.status = status}; });
+            BandcampResolutionService service{&network};
+            OperationOptions options;
+            options.maxAttempts       = 3;
+            options.attemptCooldownMs = 0;
+
+            const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+            QVERIFY(run.finished);
+            QCOMPARE(network.requested.size(), 1);
+            QCOMPARE(run.summary.failed, 1);
+        }
+    }
+
+    void notFoundWithQtErrorCodeFailsOnFirstAttempt()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.status = 404, .error = QNetworkReply::ContentNotFoundError};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.maxAttempts       = 3;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(network.requested.size(), 1);
+        QCOMPARE(run.summary.failed, 1);
+    }
+
+    void transientHttpStatusesAreRetried()
+    {
+        const std::array statuses{408, 429, 503};
+        for(const int status : statuses) {
+            FakeNetworkManager network;
+            network.setResponder([status](const QNetworkRequest&) { return FakeResponse{.status = status}; });
+            BandcampResolutionService service{&network};
+            OperationOptions options;
+            options.maxAttempts       = 2;
+            options.attemptCooldownMs = 0;
+
+            const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+            QVERIFY(run.finished);
+            QCOMPARE(network.requested.size(), 2);
+            QCOMPARE(run.summary.failed, 1);
+        }
+    }
+
+    void deterministicFetchFailuresAreNotRetried()
+    {
+        FakeNetworkManager redirectNetwork;
+        redirectNetwork.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.status = 302, .redirectTarget = QUrl(u"http://artist.bandcamp.com/plain"_s)};
+        });
+        BandcampResolutionService redirectService{&redirectNetwork};
+        OperationOptions options;
+        options.maxAttempts       = 3;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun redirectRun = resolve(redirectService, {page(AlbumUrl)}, options);
+
+        QVERIFY(redirectRun.finished);
+        QCOMPARE(redirectNetwork.requested.size(), 1);
+        QCOMPARE(redirectRun.summary.failed, 1);
+
+        FakeNetworkManager oversizedNetwork;
+        oversizedNetwork.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.status = 200, .body = QByteArray(MaxPageBytes + 1, 'x')};
+        });
+        BandcampResolutionService oversizedService{&oversizedNetwork};
+
+        const ServiceRun oversizedRun = resolve(oversizedService, {page(AlbumUrl)}, options);
+
+        QVERIFY(oversizedRun.finished);
+        QCOMPARE(oversizedNetwork.requested.size(), 1);
+        QCOMPARE(oversizedRun.summary.failed, 1);
+    }
+
+    void notFoundListingIsNotRetried()
+    {
+        FakeNetworkManager network;
+        int listingCalls{0};
+        network.setResponder([&listingCalls](const QNetworkRequest& request) {
+            if(request.url().path() == u"/music"_s) {
+                ++listingCalls;
+                return FakeResponse{.status = 404};
+            }
+            return FakeResponse{.status = 404};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(u"https://artist.bandcamp.com"_s)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(listingCalls, 1);
+    }
+
+    void transientDiscographyFailureIsRetried()
+    {
+        const QByteArray listing
+            = discographyPage(R"(<li data-item-id="album-40"><a href="/album/parent"></a></li>)");
+        FakeNetworkManager network;
+        int listingCalls{0};
+        network.setResponder([&listingCalls, &listing](const QNetworkRequest& request) {
+            if(request.url().path() == u"/music"_s) {
+                ++listingCalls;
+                if(listingCalls == 1) {
+                    return FakeResponse{.status = 0, .error = QNetworkReply::RemoteHostClosedError};
+                }
+                return FakeResponse{.body = listing};
+            }
+            if(request.url().path() == u"/album/parent"_s) {
+                return FakeResponse{.body = AlbumDocument};
+            }
+            return FakeResponse{.status = 404};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(u"https://artist.bandcamp.com"_s)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(listingCalls, 2);
+        QCOMPARE(run.summary.succeeded, 1);
+        QCOMPARE(run.summary.failed, 0);
+    }
+
+    void hungAttemptIsRetriedWithinBudget()
+    {
+        FakeNetworkManager network;
+        int albumCalls{0};
+        network.setResponder([&albumCalls](const QNetworkRequest&) {
+            ++albumCalls;
+            if(albumCalls == 1) {
+                return FakeResponse{.body = AlbumDocument, .holdDelivery = true};
+            }
+            return FakeResponse{.body = AlbumDocument};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.attemptTimeoutMs  = MinAttemptTimeoutMs;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(network.requested.size(), 2);
+        QCOMPARE(run.summary.succeeded, 1);
+        QCOMPARE(run.summary.failed, 0);
+    }
+
+    void hungAttemptsEndInTimeoutAfterRetries()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.body = AlbumDocument, .holdDelivery = true};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.attemptTimeoutMs  = MinAttemptTimeoutMs;
+        options.maxAttempts       = 2;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(network.requested.size(), 2);
+        QCOMPARE(run.summary.failed, 1);
+        QCOMPARE(run.results.size(), 1);
+        const auto* failure = std::get_if<ResolutionFailure>(&run.results.first().outcome);
+        QVERIFY(failure);
+        QCOMPARE(failure->error.code, ResolutionErrorCode::Timeout);
+    }
+
+    void finalTimeoutKeepsAbortedReplyOwnedUntilSettled()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.body = AlbumDocument, .holdDelivery = true, .holdAfterAbort = true};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.attemptTimeoutMs  = 30;
+        options.maxAttempts       = 1;
+        options.attemptCooldownMs = 0;
+        qsizetype liveAtTimeout = -1;
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &service,
+                         [&network, &liveAtTimeout](const BandcampScopeResult& result) {
+                             if(std::holds_alternative<ResolutionFailure>(result.outcome) && liveAtTimeout < 0) {
+                                 liveAtTimeout = network.liveReplyCount();
+                             }
+                         });
+
+        const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(run.summary.failed, 1);
+        QCOMPARE(run.results.size(), 1);
+        const auto* failure = std::get_if<ResolutionFailure>(&run.results.first().outcome);
+        QVERIFY(failure);
+        QCOMPARE(failure->error.code, ResolutionErrorCode::Timeout);
+        QCOMPARE(network.requested.size(), 1);
+        QCOMPARE(liveAtTimeout, 1);
+        QCOMPARE(network.liveReplyCount(), 1);
+        network.finishAbortedReplies();
+        QTRY_COMPARE_WITH_TIMEOUT(network.liveReplyCount(), 0, 2000);
+    }
+
+    void hungRetryAttemptsEndInTimeoutWhileAbortedRepliesRemainOwned()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.body = AlbumDocument, .holdDelivery = true, .holdAfterAbort = true};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.attemptTimeoutMs  = 30;
+        options.maxAttempts       = 2;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(AlbumUrl)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(run.summary.failed, 1);
+        QCOMPARE(run.results.size(), 1);
+        const auto* failure = std::get_if<ResolutionFailure>(&run.results.first().outcome);
+        QVERIFY(failure);
+        QCOMPARE(failure->error.code, ResolutionErrorCode::Timeout);
+        QCOMPARE(network.requested.size(), 2);
+        QCOMPARE(network.liveReplyCount(), 2);
+        network.finishAbortedReplies();
+        QTRY_COMPARE_WITH_TIMEOUT(network.liveReplyCount(), 0, 2000);
+    }
+
+    void hungListingRetryAttemptsEndInTimeoutWhileAbortedRepliesRemainOwned()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.body = discographyPage({}), .holdDelivery = true, .holdAfterAbort = true};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.attemptTimeoutMs  = 30;
+        options.maxAttempts       = 2;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(u"https://artist.bandcamp.com/music"_s)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(run.summary.failed, 1);
+        QCOMPARE(run.results.size(), 1);
+        const auto* failure = std::get_if<ResolutionFailure>(&run.results.first().outcome);
+        QVERIFY(failure);
+        QCOMPARE(failure->error.code, ResolutionErrorCode::Timeout);
+        QCOMPARE(network.requested.size(), 2);
+        QCOMPARE(network.liveReplyCount(), 2);
+        network.finishAbortedReplies();
+        QTRY_COMPARE_WITH_TIMEOUT(network.liveReplyCount(), 0, 2000);
+    }
+
+    void cancellingDuringCooldownKeepsAbortedReplyOwnedUntilSettled()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) {
+            return FakeResponse{.body = AlbumDocument, .holdDelivery = true, .holdAfterAbort = true};
+        });
+        BandcampResolutionService service{&network};
+        QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        timeout.start(7000);
+        QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+        bool finished       = false;
+        qsizetype cancelled = 0;
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop, [&cancelled](const auto& result) {
+            if(std::holds_alternative<ResolutionCancelled>(result.outcome)) {
+                ++cancelled;
+            }
+        });
+        BandcampOperationSummary summary;
+        QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
+                         [&finished, &summary, &loop](const BandcampOperationSummary& value) {
+                             finished = true;
+                             summary  = value;
+                             loop.quit();
+                         });
+        OperationOptions options;
+        options.attemptTimeoutMs  = 30;
+        options.maxAttempts       = 2;
+        options.attemptCooldownMs = 500;
+        const auto submission = service.submit({page(AlbumUrl)}, options);
+        QVERIFY(std::holds_alternative<BandcampOperationAccepted>(submission));
+        const BandcampOperationId id = std::get<BandcampOperationAccepted>(submission).id;
+        // Lands after the first attempt's 30 ms timeout and before the 500 ms cooldown ends.
+        QTimer::singleShot(100, &service, [&service, id]() { service.cancel(id); });
+        loop.exec();
+
+        QVERIFY(finished);
+        QCOMPARE(summary.cancelled, 1);
+        QCOMPARE(cancelled, 1);
+        QCOMPARE(network.requested.size(), 1);
+        QCOMPARE(network.liveReplyCount(), 1);
+        QTest::qWait(600);
+        QCOMPARE(network.requested.size(), 1);
+        QCOMPARE(network.liveReplyCount(), 1);
+        network.finishAbortedReplies();
+        QTRY_COMPARE_WITH_TIMEOUT(network.liveReplyCount(), 0, 2000);
     }
 
     void cancellingFromResultDoesNotFinishBeforeOrderedResults()
@@ -295,9 +678,11 @@ private slots:
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.status = 503}; });
 
+        OperationOptions options{1, 10000};
+        options.attemptCooldownMs = 0;
         const ResolverRun run
             = resolveRequests(network, {{u"first-failure"_s, page(AlbumUrl)}, {u"second-failure"_s, page(AlbumUrl)}},
-                              OperationOptions{1, 10000});
+                              options);
 
         QVERIFY(run.finished);
         QCOMPARE(run.outcomes.size(), 2);
@@ -307,7 +692,7 @@ private slots:
         QVERIFY(second != run.outcomes.cend());
         QVERIFY(std::holds_alternative<ResolutionFailure>(first.value()));
         QVERIFY(std::holds_alternative<ResolutionFailure>(second.value()));
-        QCOMPARE(network.requested.size(), 2);
+        QCOMPARE(network.requested.size(), 4);
     }
 
     void resolverCompletesAfterReentrantOutcomeCancellation()
@@ -404,7 +789,9 @@ private slots:
         });
         BandcampResolutionService service{&network};
 
-        const ServiceRun run = resolve(service, {page(AlbumUrl), page(SecondAlbumUrl)}, OperationOptions{1, 1000});
+        OperationOptions options{1, 1000};
+        options.maxAttempts = 1;
+        const ServiceRun run = resolve(service, {page(AlbumUrl), page(SecondAlbumUrl)}, options);
 
         QVERIFY(run.finished);
         QCOMPARE(run.summary.requested, 2);
@@ -427,10 +814,9 @@ private slots:
             pages.append(page(QStringLiteral("https://artist-%1.bandcamp.com/album/failure-%1").arg(i)));
         }
 
-        const ServiceRun run = resolve(service, pages, OperationOptions{8, 10000});
-
-        QVERIFY(run.finished);
-        QCOMPARE(run.summary.requested, 300);
+        OperationOptions options{8, 10000};
+        options.maxAttempts = 1;
+        const ServiceRun run = resolve(service, pages, options);
         QCOMPARE(run.summary.failed, 300);
         QCOMPARE(run.results.size(), 300);
         QCOMPARE(network.requested.size(), 300);
@@ -876,7 +1262,7 @@ private slots:
         QVERIFY(std::holds_alternative<ResolutionFailure>(run.results.at(0).outcome));
         QCOMPARE(run.results.at(1).page.url, AlbumUrl);
         QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(run.results.at(1).outcome));
-        QCOMPARE(network.requested.size(), 3);
+        QCOMPARE(network.requested.size(), 4);
         QCOMPARE(network.requested.last().path(), u"/album/parent"_s);
         QVERIFY(std::none_of(network.requested.cbegin(), network.requested.cend(), [](const QUrl& url) {
             return url.path() == u"/album/second"_s;

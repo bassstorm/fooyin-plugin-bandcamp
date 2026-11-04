@@ -1,7 +1,6 @@
 #include "bandcampclient.h"
 
 #include "bandcamplogging.h"
-#include "bandcampparser.h"
 
 #include <QMetaObject>
 #include <QNetworkAccessManager>
@@ -36,6 +35,7 @@ ResolutionError clientError(ResolutionErrorCode code, const QUrl& url, const QSt
 {
     return {code, ResolutionStage::Fetch, url, 0, field, reason};
 }
+
 } // namespace
 
 BandcampClient::BandcampClient(QNetworkAccessManager* network, QObject* parent)
@@ -146,7 +146,7 @@ void BandcampClient::startHop(RequestId id, const QUrl& url)
     QNetworkRequest request{url};
     request.setMaximumRedirectsAllowed(0);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
-    request.setTransferTimeout(30'000);
+    request.setTransferTimeout(ClientTransferTimeoutMs);
 
     try {
         QNetworkReply* reply = m_network->get(request);
@@ -273,26 +273,28 @@ void BandcampClient::onFinished(RequestId id, quint64 generation)
                                                     QStringLiteral("no HTTP response received"))});
         return;
     }
+    // Qt also sets networkError for HTTP error statuses (for example 404), so classify those by status first.
+    if(status < 200 || status > 299) {
+        settle(id, BandcampFetchFailure{clientError(ResolutionErrorCode::FetchFailed, effectiveUrl,
+                                                    QStringLiteral("httpStatus"), QStringLiteral("HTTP %1").arg(status)),
+                                        status});
+        return;
+    }
     if(networkError != QNetworkReply::NoError) {
         settle(id,
                BandcampFetchFailure{clientError(ResolutionErrorCode::FetchFailed, effectiveUrl,
-                                                QStringLiteral("request"), QStringLiteral("network request failed"))});
-        return;
-    }
-    if(status >= 200 && status <= 299) {
-        qCInfo(BANDCAMP_FETCH) << "HTTP" << status << "in" << elapsed << "ms," << body.size() << "bytes";
-        qCDebug(BANDCAMP_TRACE_FETCH).noquote()
-            << formatTraceEvent(context, QStringLiteral("request.finished"),
-                                {DiagnosticField::number(QStringLiteral("status"), status),
-                                 DiagnosticField::number(QStringLiteral("bytes"), body.size()),
-                                 DiagnosticField::number(QStringLiteral("elapsedMs"), elapsed)});
-        settle(id,
-               ResolutionSuccess<BandcampFetchResponse>{BandcampFetchResponse{effectiveUrl, status, std::move(body)}});
+                                                QStringLiteral("request"), QStringLiteral("network request failed")),
+                                    0});
         return;
     }
 
-    settle(id, BandcampFetchFailure{clientError(ResolutionErrorCode::FetchFailed, effectiveUrl,
-                                                QStringLiteral("httpStatus"), QStringLiteral("HTTP %1").arg(status))});
+    qCInfo(BANDCAMP_FETCH) << "HTTP" << status << "in" << elapsed << "ms," << body.size() << "bytes";
+    qCDebug(BANDCAMP_TRACE_FETCH).noquote()
+        << formatTraceEvent(context, QStringLiteral("request.finished"),
+                            {DiagnosticField::number(QStringLiteral("status"), status),
+                             DiagnosticField::number(QStringLiteral("bytes"), body.size()),
+                             DiagnosticField::number(QStringLiteral("elapsedMs"), elapsed)});
+    settle(id, ResolutionSuccess<BandcampFetchResponse>{BandcampFetchResponse{effectiveUrl, status, std::move(body)}});
 }
 
 void BandcampClient::onReplyDestroyed(RequestId id, quint64 generation)

@@ -1,3 +1,4 @@
+#include "bandcampclient.h"
 #include "bandcampdiagnostics.h"
 #include "bandcampoutcome.h"
 #include "bandcampparser.h"
@@ -84,17 +85,30 @@ void ContractTests::errorNamesAreStable()
 
 void ContractTests::clampsOperationOptions()
 {
-    const auto low = clampOperationOptions(OperationOptions{.parallelism = 0, .itemTimeoutMs = 1});
-    QCOMPARE(low.parallelism, MinParallelism);
-    QCOMPARE(low.itemTimeoutMs, MinItemTimeoutMs);
+    // A single attempt must be able to finish before the transport gives up on its own.
+    static_assert(ClientTransferTimeoutMs > MaxAttemptTimeoutMs);
 
-    const auto high = clampOperationOptions(OperationOptions{.parallelism = 999, .itemTimeoutMs = 999999});
+    const auto low = clampOperationOptions(OperationOptions{.parallelism = 0, .attemptTimeoutMs = 1});
+    QCOMPARE(low.parallelism, MinParallelism);
+    QCOMPARE(low.attemptTimeoutMs, MinAttemptTimeoutMs);
+
+    const auto high = clampOperationOptions(OperationOptions{.parallelism = 999, .attemptTimeoutMs = 999999});
     QCOMPARE(high.parallelism, MaxParallelism);
-    QCOMPARE(high.itemTimeoutMs, MaxItemTimeoutMs);
+    QCOMPARE(high.attemptTimeoutMs, MaxAttemptTimeoutMs);
 
     const auto inRange = clampOperationOptions(OperationOptions{});
     QCOMPARE(inRange.parallelism, DefaultParallelism);
-    QCOMPARE(inRange.itemTimeoutMs, DefaultItemTimeoutMs);
+    QCOMPARE(inRange.attemptTimeoutMs, DefaultAttemptTimeoutMs);
+    QCOMPARE(inRange.maxAttempts, DefaultAttemptsPerPage);
+    QCOMPARE(inRange.attemptCooldownMs, DefaultAttemptCooldownMs);
+
+    const auto attemptsLow = clampOperationOptions(OperationOptions{.maxAttempts = 0, .attemptCooldownMs = -1});
+    QCOMPARE(attemptsLow.maxAttempts, MinAttemptsPerPage);
+    QCOMPARE(attemptsLow.attemptCooldownMs, MinAttemptCooldownMs);
+
+    const auto attemptsHigh = clampOperationOptions(OperationOptions{.maxAttempts = 99, .attemptCooldownMs = 999999});
+    QCOMPARE(attemptsHigh.maxAttempts, MaxAttemptsPerPage);
+    QCOMPARE(attemptsHigh.attemptCooldownMs, MaxAttemptCooldownMs);
 }
 
 void ContractTests::correlationContextIsImmutable()

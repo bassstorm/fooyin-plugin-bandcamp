@@ -220,7 +220,7 @@ void BandcampRefreshController::pump()
     if(!m_gateway) {
         m_gateway = new BandcampLibraryGateway{std::move(m_libraryApi), this};
     }
-    m_gateway->refreshTransport(std::move(track), m_options.itemTimeoutMs, this, context,
+    m_gateway->refreshTransport(std::move(track), this, context,
                                  [guard, id](FooyinTrackCommitOutcome outcome) {
         if(!guard) {
             return;

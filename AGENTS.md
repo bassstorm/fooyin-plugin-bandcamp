@@ -14,7 +14,7 @@ Each stage of the pipeline has one clear owner and responsibility:
 | **Parser** (`bandcampparser.*`, `bandcamphtmlreader.*`) | Extracting Bandcamp `data-tralbum` JSON and discography listing structure into typed candidates with provenance. | Network requests, cross-page reconciliation, or final scope validity. |
 | **Assembly & Admission** (`bandcampassembly.*`) | Reconciling track and parent-album candidates, enforcing authority rules, and validating required fields for the requested scope. | Raw HTML/JSON access or heuristic title/number cleanup. |
 | **Post-Processors** (`bandcamppostprocessor.*`) | Ordered semantic refinement of admitted album metadata (first) and track metadata (second). | Rejecting resources, removing tracks, changing identities/streams, or raw source access. |
-| **Resolver & Orchestrator** (`bandcamplistingresolver.*`, `bandcampreleaseresolver.*`, `bandcamporchestrator.*`, `bandcampresolutionservice.*`) | Discography unfolding, request deduplication, parent acquisition, bounded parallelism, operation-scoped domain caching, and input-order preservation. | Source parsing or Fooyin database/playlist mutations. |
+| **Resolver & Orchestrator** (`bandcampattemptsupervisor.*`, `bandcamplistingresolver.*`, `bandcampreleaseresolver.*`, `bandcamporchestrator.*`, `bandcampresolutionservice.*`) | Discography unfolding, request deduplication, parent acquisition, bounded parallelism, operation-scoped domain caching, and input-order preservation. | Source parsing or Fooyin database/playlist mutations. |
 | **Fooyin Integration** (`bandcampfooyintrack.*`, `bandcamplibrarygateway.*`, `bandcampimportcontroller.*`, `bandcamprefreshcontroller.*`, `bandcampplaybackpreparation.*`, `bandcampplayback.*`, `bandcampprogressdialog.*`, `bandcampplugin.*`) | Projecting domain tracks to Fooyin tracks, one-way snapshot transport writes, playlist import, stream refresh, and playback bridging. | Metadata normalization or Bandcamp source interpretation. |
 
 Do not split a single state machine across layers or mix UI batch workflows with single-track audio-thread preparation.
@@ -46,7 +46,7 @@ Do not split a single state machine across layers or mix UI batch workflows with
 ### Internal Reliability & Host Safety
 
 - **Never crash or block Fooyin.** Fooyin process stability takes precedence over completing an operation. No blocking network wait may run on the UI thread.
-- **Bound external resources.** Enforce explicit limits on response bytes, parser nesting/sizes, redirects, in-flight requests, and per-workflow deadlines. Resource-limit violations return structured failures, never silent truncation.
+- **Bound external resources.** Enforce explicit limits on response bytes, parser nesting/sizes, redirects, in-flight requests, per-attempt deadlines, and a bounded retry budget. Resource-limit violations return structured failures, never silent truncation.
 - **Deterministic async lifetimes.** Every async operation must reach **exactly one** terminal state (`Success`, `Failure`, or `Cancelled`). Guard `QObject::connect` lambdas with the true receiver lifetime, synchronize cross-thread state shared with the audio thread, and cancel/clean up child operations and dialogs deterministically on `shutdown()` and destruction.
 - **Explicit outcomes over exceptions.** Use typed result/outcome values (`ResolutionOutcome`) for expected failures. Contain exceptions only at external library or top-level host decoder entry points.
 

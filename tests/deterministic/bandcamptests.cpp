@@ -216,7 +216,9 @@ private slots:
         QSettings settings(m_dir.filePath(u"missing.ini"_s), QSettings::IniFormat);
         const auto values = loadBandcampSettings(settings);
         QCOMPARE(values.parallelism, DefaultParallelism);
-        QCOMPARE(values.itemTimeoutMs, DefaultItemTimeoutMs);
+        QCOMPARE(values.attemptTimeoutMs, DefaultAttemptTimeoutMs);
+        QCOMPARE(values.maxAttempts, DefaultAttemptsPerPage);
+        QCOMPARE(values.attemptCooldownMs, DefaultAttemptCooldownMs);
         QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Default);
         QCOMPARE(values.prePlaybackRefreshWindowMinutes, DefaultRefreshWindowMinutes);
     }
@@ -226,12 +228,15 @@ private slots:
         const auto path = m_dir.filePath(u"roundtrip.ini"_s);
         {
             QSettings settings(path, QSettings::IniFormat);
-            saveBandcampSettings(settings, {5, 45000, BandcampDiscographyOrder::Descending, MinRefreshWindowMinutes});
+            saveBandcampSettings(settings, {5, 25000, BandcampDiscographyOrder::Descending, MinRefreshWindowMinutes,
+                                            7, 1500});
         }
         QSettings settings(path, QSettings::IniFormat);
         const auto values = loadBandcampSettings(settings);
         QCOMPARE(values.parallelism, 5);
-        QCOMPARE(values.itemTimeoutMs, 45000);
+        QCOMPARE(values.attemptTimeoutMs, 25000);
+        QCOMPARE(values.maxAttempts, 7);
+        QCOMPARE(values.attemptCooldownMs, 1500);
         QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Descending);
         QCOMPARE(values.prePlaybackRefreshWindowMinutes, MinRefreshWindowMinutes);
     }
@@ -240,22 +245,30 @@ private slots:
     {
         QSettings settings(m_dir.filePath(u"clamp.ini"_s), QSettings::IniFormat);
         settings.setValue(ParallelismKey, 0);
-        settings.setValue(ItemTimeoutKey, 500);
+        settings.setValue(AttemptTimeoutKey, 500);
+        settings.setValue(MaxAttemptsKey, 0);
+        settings.setValue(AttemptCooldownKey, -1);
         settings.setValue(DiscographyOrderKey, -4);
         settings.setValue(PrePlaybackRefreshWindowKey, -1);
         auto low = loadBandcampSettings(settings);
         QCOMPARE(low.parallelism, MinParallelism);
-        QCOMPARE(low.itemTimeoutMs, MinItemTimeoutMs);
+        QCOMPARE(low.attemptTimeoutMs, MinAttemptTimeoutMs);
+        QCOMPARE(low.maxAttempts, MinAttemptsPerPage);
+        QCOMPARE(low.attemptCooldownMs, MinAttemptCooldownMs);
         QCOMPARE(low.discographyOrder, BandcampDiscographyOrder::Default);
         QCOMPARE(low.prePlaybackRefreshWindowMinutes, MinRefreshWindowMinutes);
 
         settings.setValue(ParallelismKey, 99);
-        settings.setValue(ItemTimeoutKey, 999999999999LL);
+        settings.setValue(AttemptTimeoutKey, 999999999999LL);
+        settings.setValue(MaxAttemptsKey, 99);
+        settings.setValue(AttemptCooldownKey, 999999999999LL);
         settings.setValue(DiscographyOrderKey, 99);
         settings.setValue(PrePlaybackRefreshWindowKey, 999999999999LL);
         auto high = loadBandcampSettings(settings);
         QCOMPARE(high.parallelism, MaxParallelism);
-        QCOMPARE(high.itemTimeoutMs, MaxItemTimeoutMs);
+        QCOMPARE(high.attemptTimeoutMs, MaxAttemptTimeoutMs);
+        QCOMPARE(high.maxAttempts, MaxAttemptsPerPage);
+        QCOMPARE(high.attemptCooldownMs, MaxAttemptCooldownMs);
         QCOMPARE(high.discographyOrder, BandcampDiscographyOrder::Descending);
         QCOMPARE(high.prePlaybackRefreshWindowMinutes, MaxRefreshWindowMinutes);
     }
@@ -264,12 +277,16 @@ private slots:
     {
         QSettings settings(m_dir.filePath(u"junk.ini"_s), QSettings::IniFormat);
         settings.setValue(ParallelismKey, u"many"_s);
-        settings.setValue(ItemTimeoutKey, u""_s);
+        settings.setValue(AttemptTimeoutKey, u""_s);
+        settings.setValue(MaxAttemptsKey, u"few"_s);
+        settings.setValue(AttemptCooldownKey, u"soon"_s);
         settings.setValue(DiscographyOrderKey, u"later"_s);
         settings.setValue(PrePlaybackRefreshWindowKey, u"never"_s);
         const auto values = loadBandcampSettings(settings);
         QCOMPARE(values.parallelism, DefaultParallelism);
-        QCOMPARE(values.itemTimeoutMs, DefaultItemTimeoutMs);
+        QCOMPARE(values.attemptTimeoutMs, DefaultAttemptTimeoutMs);
+        QCOMPARE(values.maxAttempts, DefaultAttemptsPerPage);
+        QCOMPARE(values.attemptCooldownMs, DefaultAttemptCooldownMs);
         QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Default);
         QCOMPARE(values.prePlaybackRefreshWindowMinutes, DefaultRefreshWindowMinutes);
     }
@@ -285,12 +302,16 @@ private slots:
 
         OperationOptions options;
         options.parallelism                = 99;
-        options.itemTimeoutMs              = 1;
+        options.attemptTimeoutMs           = 1;
+        options.maxAttempts                = 0;
+        options.attemptCooldownMs          = -5;
         options.discographyOrder           = static_cast<BandcampDiscographyOrder>(99);
         options.prePlaybackRefreshWindowMs = std::numeric_limits<qint64>::max();
         const OperationOptions snapshot    = clampOperationOptions(options);
         QCOMPARE(snapshot.parallelism, MaxParallelism);
-        QCOMPARE(snapshot.itemTimeoutMs, MinItemTimeoutMs);
+        QCOMPARE(snapshot.attemptTimeoutMs, MinAttemptTimeoutMs);
+        QCOMPARE(snapshot.maxAttempts, MinAttemptsPerPage);
+        QCOMPARE(snapshot.attemptCooldownMs, MinAttemptCooldownMs);
         QCOMPARE(snapshot.discographyOrder, BandcampDiscographyOrder::Default);
         QCOMPARE(snapshot.prePlaybackRefreshWindowMs, MaxRefreshWindowMinutes * RefreshWindowMsPerMinute);
 
@@ -309,6 +330,7 @@ private:
 // Defined in bandcamppostprocessortests.cpp.
 int runPostProcessorTests(int argc, char** argv);
 // Defined in bandcampcontracttests.cpp.
+int runAttemptSupervisorTests(int argc, char** argv);
 int runContractTests(int argc, char** argv);
 // Defined in bandcampdiagnosticstests.cpp.
 int runDiagnosticsTests(int argc, char** argv);
@@ -363,6 +385,7 @@ int main(int argc, char** argv)
     SettingsTests settings;
     status |= QTest::qExec(&settings, argc, argv);
     status |= runContractTests(argc, argv);
+    status |= runAttemptSupervisorTests(argc, argv);
     status |= runDiagnosticsTests(argc, argv);
     status |= runClientTests(argc, argv);
     status |= runOrchestratorTests(argc, argv);

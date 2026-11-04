@@ -22,6 +22,8 @@ class PlaylistHandler;
 }
 
 namespace Fooyin::Bandcamp {
+inline constexpr int LibraryWriteTimeoutMs = 10'000;
+
 struct FooyinLibraryApi
 {
     QPointer<QObject> owner;
@@ -74,19 +76,19 @@ public:
     ~BandcampLibraryGateway() override;
 
     void cancel();
-    void commit(QList<BandcampResolvedTrack> incoming, int activeTimeoutMs, QObject* callbackContext,
-                CorrelationContext correlation, Completion completion);
-    void refreshTransport(BandcampResolvedTrack incoming, int activeTimeoutMs, QObject* callbackContext,
-                          CorrelationContext correlation, Completion completion);
+    void commit(QList<BandcampResolvedTrack> incoming, QObject* callbackContext, CorrelationContext correlation,
+                Completion completion, int timeoutMs = LibraryWriteTimeoutMs);
+    void refreshTransport(BandcampResolvedTrack incoming, QObject* callbackContext, CorrelationContext correlation,
+                          Completion completion, int timeoutMs = LibraryWriteTimeoutMs);
 
 private:
-    void enqueue(QList<BandcampResolvedTrack> incoming, int activeTimeoutMs, QObject* callbackContext,
+    void enqueue(QList<BandcampResolvedTrack> incoming, int timeoutMs, QObject* callbackContext,
                  CorrelationContext correlation, Completion completion, bool refreshOnly);
     struct CommitRequest
     {
         quint64 token{0};
         QList<BandcampResolvedTrack> incoming;
-        int activeTimeoutMs{0};
+        int timeoutMs{0};
         QPointer<QObject> callbackContext;
         CorrelationContext correlation;
         Completion completion;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bandcampclient.h"
 #include "bandcampdiagnostics.h"
 #include "bandcampoutcome.h"
 #include "bandcampurl.h"
@@ -14,7 +15,6 @@
 #include <utility>
 
 namespace Fooyin::Bandcamp {
-constexpr qsizetype MaxPageBytes        = 20 * 1024 * 1024;
 constexpr int MaxJsonDepth              = 64;
 constexpr qsizetype MaxHtmlDepth        = 256;
 constexpr qsizetype MaxSourceFieldChars = 16384;

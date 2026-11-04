@@ -20,7 +20,9 @@ public:
 private:
     FySettings m_settings;
     QSpinBox* m_parallelism;
-    QSpinBox* m_itemTimeout;
+    QSpinBox* m_attemptTimeout;
+    QSpinBox* m_maxAttempts;
+    QSpinBox* m_attemptCooldown;
     QComboBox* m_discographyOrder;
     QSpinBox* m_refreshWindow;
 };

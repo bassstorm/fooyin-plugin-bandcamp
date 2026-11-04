@@ -49,7 +49,7 @@ public:
     using CancelOperation = std::function<void(BandcampOperationId)>;
 
     BandcampImportController(BandcampOperationId operationId, QList<BandcampPageUrl> submittedPages,
-                             bool forceNewPlaylist, Fooyin::UId selectedPlaylistId, int activeTimeoutMs,
+                             bool forceNewPlaylist, Fooyin::UId selectedPlaylistId,
                              FooyinLibraryApi libraryApi, BandcampPlaylistApi playlistApi,
                              CancelOperation cancelOperation, QObject* parent = nullptr);
     ~BandcampImportController() override;
@@ -90,7 +90,6 @@ private:
     BandcampOperationId m_operationId{0};
     QList<BandcampPageUrl> m_submittedPages;
     Fooyin::UId m_destinationId;
-    int m_activeTimeoutMs{0};
     QPointer<QObject> m_libraryOwner;
     BandcampPlaylistApi m_playlistApi;
     CancelOperation m_cancelOperation;

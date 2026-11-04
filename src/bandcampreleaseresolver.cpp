@@ -1,6 +1,7 @@
 #include "bandcampreleaseresolver.h"
 
 #include "bandcampassembly.h"
+#include "bandcampattemptsupervisor.h"
 #include "bandcampclient.h"
 #include "bandcamplogging.h"
 #include "bandcamppostprocessor.h"
@@ -138,34 +139,37 @@ public:
     using SettledCallback = std::function<void(const QString&)>;
 
     BandcampReleaseWorkflow(BandcampClient* client, BandcampOperationId operationId, BandcampReleaseRequest request,
-                            int timeoutMs, BandcampPageParser parser, OutcomeCallback outcomeCallback,
-                            SettledCallback settledCallback, QObject* parent = nullptr)
+                            BandcampAttemptPolicy policy, BandcampPageParser parser,
+                            OutcomeCallback outcomeCallback, SettledCallback settledCallback,
+                            QObject* parent = nullptr)
         : QObject{parent}
         , m_client{client}
         , m_operationId{operationId}
         , m_request{std::move(request)}
-        , m_timeoutMs{timeoutMs}
+        , m_attempts{policy, this}
         , m_parser{std::move(parser)}
         , m_outcomeCallback{std::move(outcomeCallback)}
         , m_settledCallback{std::move(settledCallback)}
     {
         m_context.jobId       = static_cast<qint64>(m_operationId);
         m_context.resourceUrl = QUrl(m_request.page.url);
-        m_deadline.setSingleShot(true);
-        QObject::connect(&m_deadline, &QTimer::timeout, this, [this]() { onDeadline(); });
+        QObject::connect(&m_attempts, &BandcampAttemptSupervisor::attemptTimedOut, this,
+                         [this]() { onAttemptTimedOut(); });
+        QObject::connect(&m_attempts, &BandcampAttemptSupervisor::retryReady, this,
+                         [this]() { issueFetch(m_currentUrl, m_currentParent); });
     }
 
     ~BandcampReleaseWorkflow() override
     {
         m_stop->store(true, std::memory_order_relaxed);
-        if(m_fetchActive && m_client && m_requestId != 0) {
+        m_attempts.stop();
+        if(m_attempts.attemptActive() && m_client && m_requestId != 0) {
             m_client->cancel(m_requestId);
         }
     }
 
     void start()
     {
-        m_deadline.start(m_timeoutMs);
         fetchPage(m_request.page, false);
     }
 
@@ -177,7 +181,7 @@ public:
         m_stop->store(true, std::memory_order_relaxed);
         trace(QStringLiteral("workflow_cancelled"));
         const QPointer<BandcampReleaseWorkflow> guard{this};
-        if(m_fetchActive && m_client && m_requestId != 0) {
+        if(m_attempts.attemptActive() && m_client && m_requestId != 0) {
             m_client->cancel(m_requestId);
         }
         if(!guard) {
@@ -195,28 +199,59 @@ private:
         if(m_reported) {
             return;
         }
-        const QUrl url{page.url};
+        m_attempts.resetBudget();
+        issueFetch(QUrl{page.url}, parent);
+    }
+
+    // Each attempt gets its own deadline, so a hung request is abandoned and retried like any other failure.
+    void issueFetch(const QUrl& url, bool parent)
+    {
         m_currentUrl          = url;
+        m_currentParent       = parent;
         m_context.resourceUrl = url;
         setPhase(parent ? WorkflowPhase::FetchingParent : WorkflowPhase::FetchingPrimary);
-        m_fetchActive = true;
+        const quint64 attempt = m_attempts.issueAttempt();
         const QPointer<BandcampReleaseWorkflow> guard{this};
         m_requestId = m_client->fetch(
             url,
-            [guard, parent](BandcampFetchOutcome outcome) mutable {
+            [guard, attempt](BandcampFetchOutcome outcome) mutable {
                 if(guard) {
-                    guard->onFetch(parent, std::move(outcome));
+                    guard->onFetch(attempt, std::move(outcome));
                 }
             },
             m_context);
-        if(!parent) {
+        if(!m_currentParent) {
             m_primaryRequestId = m_requestId;
         }
     }
 
-    void onFetch(bool parent, BandcampFetchOutcome outcome)
+    // Bumps the attempt id so the callback of the abandoned request is ignored whenever it is delivered.
+    // The request stays outstanding in m_attempts until delivery, so the workflow cannot settle first.
+    void abandonFetch()
     {
-        m_fetchActive                                    = false;
+        const BandcampClient::RequestId hung = m_requestId;
+        m_requestId                          = 0;
+        m_attempts.abandon();
+        if(m_client && hung != 0) {
+            m_client->cancel(hung);
+        }
+    }
+
+    void scheduleRetry()
+    {
+        m_attempts.beginRetry();
+        trace(QStringLiteral("request.retry"),
+              {DiagnosticField::number(QStringLiteral("retriesLeft"), m_attempts.retriesLeft()),
+               DiagnosticField::number(QStringLiteral("delayMs"), m_attempts.cooldownMs())});
+    }
+
+    void onFetch(quint64 attempt, BandcampFetchOutcome outcome)
+    {
+        if(!m_attempts.deliver(attempt)) {
+            settleIfIdle();
+            return;
+        }
+        const bool parent                                = m_currentParent;
         const BandcampClient::RequestId completedRequest = m_requestId;
         m_requestId                                      = 0;
         if(m_reported) {
@@ -230,6 +265,10 @@ private:
             return;
         }
         if(const auto* failure = std::get_if<BandcampFetchFailure>(&outcome)) {
+            if(m_attempts.canRetry() && isRetriableFetchFailure(*failure)) {
+                scheduleRetry();
+                return;
+            }
             if(parent) {
                 const qint64 trackId = primaryTrackId();
                 if(report(ResolutionFailure{
@@ -485,9 +524,14 @@ private:
         return m_context.trackId;
     }
 
-    void onDeadline()
+    void onAttemptTimedOut()
     {
         if(m_reported) {
+            return;
+        }
+        if(m_attempts.attemptActive() && m_attempts.canRetry()) {
+            abandonFetch();
+            scheduleRetry();
             return;
         }
         m_stop->store(true, std::memory_order_relaxed);
@@ -512,15 +556,13 @@ private:
         trace(QStringLiteral("workflow_timeout"),
               {DiagnosticField::text(QStringLiteral("stage"), resolutionStageName(stage))});
         const QPointer<BandcampReleaseWorkflow> guard{this};
-        if(m_fetchActive && m_client && m_requestId != 0) {
-            m_client->cancel(m_requestId);
-        }
+        abandonFetch();
         if(!guard) {
             return;
         }
         if(report(ResolutionFailure{makeResolutionError(
                ResolutionErrorCode::Timeout, stage, m_currentUrl, trackId, QStringLiteral("resource"),
-               QStringLiteral("item deadline expired"))})) {
+               QStringLiteral("page attempt timed out"))})) {
             settleIfIdle();
         }
     }
@@ -531,7 +573,7 @@ private:
             return true;
         }
         m_reported = true;
-        m_deadline.stop();
+        m_attempts.stop();
         CorrelationContext context = m_context;
         QList<DiagnosticField> fields;
         if(std::holds_alternative<ResolutionCancelled>(outcome)) {
@@ -555,7 +597,7 @@ private:
 
     void settleIfIdle()
     {
-        if(m_settled || m_fetchActive || m_workerActive) {
+        if(m_settled || !m_attempts.idle() || m_workerActive) {
             return;
         }
         if(!m_reported) {
@@ -591,20 +633,19 @@ private:
     QPointer<BandcampClient> m_client;
     BandcampOperationId m_operationId{0};
     BandcampReleaseRequest m_request;
-    int m_timeoutMs{0};
+    BandcampAttemptSupervisor m_attempts;
     BandcampPageParser m_parser;
     OutcomeCallback m_outcomeCallback;
     SettledCallback m_settledCallback;
-    QTimer m_deadline;
     std::shared_ptr<std::atomic_bool> m_stop{std::make_shared<std::atomic_bool>(false)};
     CorrelationContext m_context;
     std::optional<ReleaseCandidate> m_primaryCandidate;
     std::optional<ReleaseCandidate> m_parentCandidate;
     QUrl m_currentUrl;
+    bool m_currentParent{false};
     BandcampClient::RequestId m_requestId{0};
     BandcampClient::RequestId m_primaryRequestId{0};
     WorkflowPhase m_phase{WorkflowPhase::Created};
-    bool m_fetchActive{false};
     bool m_workerActive{false};
     bool m_reported{false};
     bool m_settled{false};
@@ -717,7 +758,8 @@ struct BandcampReleaseResolver::Impl
             }
             ++nextRequest;
             auto* workflow = new BandcampReleaseWorkflow(
-                client, operationId, request, options.itemTimeoutMs, parser,
+                client, operationId, request,
+                BandcampAttemptPolicy{options.attemptTimeoutMs, options.maxAttempts, options.attemptCooldownMs}, parser,
                 [this, identity](const QString& key, BandcampResolutionOutcome outcome) {
                     publish(key, std::move(outcome), identity);
                 },

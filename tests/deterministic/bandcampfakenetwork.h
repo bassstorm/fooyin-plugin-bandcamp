@@ -49,6 +49,24 @@ public:
         if(m_response.redirectTarget.isValid()) {
             setAttribute(QNetworkRequest::RedirectionTargetAttribute, m_response.redirectTarget);
         }
+        if(m_response.error == QNetworkReply::NoError && m_response.status >= 400) {
+            // Mirror Qt, which reports HTTP error statuses through the network error as well.
+            switch(m_response.status) {
+            case 401:
+                m_response.error = QNetworkReply::AuthenticationRequiredError;
+                break;
+            case 403:
+                m_response.error = QNetworkReply::ContentAccessDenied;
+                break;
+            case 404:
+                m_response.error = QNetworkReply::ContentNotFoundError;
+                break;
+            default:
+                m_response.error = m_response.status >= 500 ? QNetworkReply::InternalServerError
+                                                            : QNetworkReply::UnknownContentError;
+                break;
+            }
+        }
         if(m_response.error != QNetworkReply::NoError) {
             setError(m_response.error, m_response.errorText);
         }

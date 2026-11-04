@@ -17,6 +17,9 @@ class QNetworkReply;
 
 namespace Fooyin::Bandcamp {
 constexpr qsizetype MaxClientReadChunkBytes = 64 * 1024;
+constexpr qsizetype MaxPageBytes            = 20 * 1024 * 1024;
+// Above the largest attempt timeout, so the resolver deadline decides before the transport gives up.
+constexpr int ClientTransferTimeoutMs = 60'000;
 
 struct BandcampFetchResponse
 {
@@ -28,6 +31,7 @@ struct BandcampFetchResponse
 struct BandcampFetchFailure
 {
     ResolutionError error;
+    int httpStatus{0};
 };
 
 using BandcampFetchOutcome

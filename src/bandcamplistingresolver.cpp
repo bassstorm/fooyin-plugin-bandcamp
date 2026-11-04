@@ -1,11 +1,12 @@
 #include "bandcamplistingresolver.h"
 
+#include "bandcampattemptsupervisor.h"
 #include "bandcampclient.h"
+#include "bandcamplogging.h"
 
 #include <QFutureWatcher>
 #include <QNetworkAccessManager>
 #include <QPointer>
-#include <QTimer>
 #include <QtConcurrentRun>
 
 #include <utility>
@@ -17,37 +18,36 @@ struct BandcampListingResolver::Impl
     BandcampClient* client{nullptr};
     BandcampOperationId operationId{0};
     QUrl pageUrl;
-    int timeoutMs{0};
     BandcampListingParser parser;
     std::shared_ptr<BandcampWorkflowSlots> workflowSlots;
     OutcomeCallback callback;
-    QTimer deadline;
+    BandcampAttemptSupervisor attempts;
     std::shared_ptr<std::atomic_bool> stop{std::make_shared<std::atomic_bool>(false)};
     CorrelationContext context;
     BandcampClient::RequestId requestId{0};
     bool started{false};
     bool slotHeld{false};
-    bool fetchActive{false};
     bool workerActive{false};
     bool reported{false};
     bool settled{false};
 
     Impl(BandcampListingResolver* resolver, QNetworkAccessManager* network, BandcampOperationId id, QUrl url,
-         int timeout, BandcampListingParser pageParser, std::shared_ptr<BandcampWorkflowSlots> capacity,
-         OutcomeCallback outcomeCallback)
+         BandcampAttemptPolicy policy, BandcampListingParser pageParser,
+         std::shared_ptr<BandcampWorkflowSlots> capacity, OutcomeCallback outcomeCallback)
         : owner{resolver}
         , client{new BandcampClient(network, resolver)}
         , operationId{id}
         , pageUrl{std::move(url)}
-        , timeoutMs{timeout}
         , parser{std::move(pageParser)}
         , workflowSlots{std::move(capacity)}
         , callback{std::move(outcomeCallback)}
+        , attempts{policy}
     {
         context.jobId       = static_cast<qint64>(operationId);
         context.resourceUrl = pageUrl;
-        deadline.setSingleShot(true);
-        QObject::connect(&deadline, &QTimer::timeout, owner, [this]() { onDeadline(); });
+        QObject::connect(&attempts, &BandcampAttemptSupervisor::attemptTimedOut, owner,
+                         [this]() { onAttemptTimedOut(); });
+        QObject::connect(&attempts, &BandcampAttemptSupervisor::retryReady, owner, [this]() { issueFetch(); });
         QObject::connect(workflowSlots.get(), &BandcampWorkflowSlots::capacityAvailable, owner,
                          [this]() { tryStart(); });
     }
@@ -70,13 +70,36 @@ struct BandcampListingResolver::Impl
             return;
         }
         slotHeld = true;
-        deadline.start(timeoutMs);
-        fetchActive = true;
-        const QPointer<BandcampListingResolver> guard{owner};
+        attempts.resetBudget();
+        issueFetch();
+    }
+
+    // Each attempt gets its own deadline, so a hung request is abandoned and retried like any other failure.
+    void issueFetch()
+    {
+        const quint64 id = attempts.issueAttempt();
         requestId
-            = client->fetch(pageUrl, [this](BandcampFetchOutcome outcome) { onFetch(std::move(outcome)); }, context);
-        if(!guard) {
-            return;
+            = client->fetch(pageUrl, [this, id](BandcampFetchOutcome outcome) { onFetch(id, std::move(outcome)); },
+                            context);
+    }
+
+    void scheduleRetry()
+    {
+        attempts.beginRetry();
+        qCDebug(BANDCAMP_TRACE_RESOLVE).noquote()
+            << formatTraceEvent(context, QStringLiteral("request.retry"),
+                                {DiagnosticField::number(QStringLiteral("retriesLeft"), attempts.retriesLeft()),
+                                 DiagnosticField::number(QStringLiteral("delayMs"), attempts.cooldownMs())});
+    }
+
+    // Detaches the in-flight attempt: its late callback is stale, and the client cancels the underlying reply.
+    void abandonFetch()
+    {
+        const BandcampClient::RequestId hung = requestId;
+        requestId                            = 0;
+        attempts.abandon();
+        if(hung != 0) {
+            client->cancel(hung);
         }
     }
 
@@ -86,41 +109,46 @@ struct BandcampListingResolver::Impl
             return;
         }
         stop->store(true, std::memory_order_relaxed);
-        deadline.stop();
         const QPointer<BandcampListingResolver> guard{owner};
         report(ResolutionCancelled{});
         if(!guard) {
             return;
         }
-        if(fetchActive && requestId != 0) {
+        if(attempts.attemptActive() && requestId != 0) {
             client->cancel(requestId);
         }
         settleIfIdle();
     }
 
-    void onDeadline()
+    void onAttemptTimedOut()
     {
         if(reported || settled) {
+            return;
+        }
+        if(attempts.attemptActive() && attempts.canRetry()) {
+            abandonFetch();
+            scheduleRetry();
             return;
         }
         stop->store(true, std::memory_order_relaxed);
         const QPointer<BandcampListingResolver> guard{owner};
         report(ResolutionFailure{makeResolutionError(
-            ResolutionErrorCode::Timeout, ResolutionStage::Fetch, pageUrl, 0, QStringLiteral("listing"),
-            QStringLiteral("discography page timed out"))});
+            ResolutionErrorCode::Timeout, workerActive ? ResolutionStage::Parse : ResolutionStage::Fetch, pageUrl, 0,
+            QStringLiteral("listing"), QStringLiteral("discography page timed out"))});
         if(!guard) {
             return;
         }
-        if(fetchActive && requestId != 0) {
-            client->cancel(requestId);
-        }
+        abandonFetch();
         settleIfIdle();
     }
 
-    void onFetch(BandcampFetchOutcome outcome)
+    void onFetch(quint64 id, BandcampFetchOutcome outcome)
     {
-        fetchActive = false;
-        requestId   = 0;
+        if(!attempts.deliver(id)) {
+            settleIfIdle();
+            return;
+        }
+        requestId = 0;
         if(reported) {
             settleIfIdle();
             return;
@@ -134,6 +162,10 @@ struct BandcampListingResolver::Impl
             return;
         }
         if(const auto* failure = std::get_if<BandcampFetchFailure>(&outcome)) {
+            if(attempts.canRetry() && isRetriableFetchFailure(*failure)) {
+                scheduleRetry();
+                return;
+            }
             const QPointer<BandcampListingResolver> guard{owner};
             report(ResolutionFailure{failure->error});
             if(guard) {
@@ -217,7 +249,7 @@ struct BandcampListingResolver::Impl
             return;
         }
         reported = true;
-        deadline.stop();
+        attempts.stop();
         const QPointer<BandcampListingResolver> guard{owner};
         callback(std::move(outcome));
         if(guard) {
@@ -227,7 +259,7 @@ struct BandcampListingResolver::Impl
 
     void settleIfIdle()
     {
-        if(settled || fetchActive || workerActive) {
+        if(settled || !attempts.idle() || workerActive) {
             return;
         }
         if(!reported) {
@@ -250,19 +282,21 @@ struct BandcampListingResolver::Impl
 };
 
 BandcampListingResolver::BandcampListingResolver(QNetworkAccessManager* network, BandcampOperationId operationId,
-                                                 QUrl pageUrl, int timeoutMs, BandcampListingParser parser,
+                                                 QUrl pageUrl, int attemptTimeoutMs, int maxAttempts,
+                                                 int attemptCooldownMs, BandcampListingParser parser,
                                                  std::shared_ptr<BandcampWorkflowSlots> workflowSlots,
                                                  OutcomeCallback callback, QObject* parent)
     : QObject{parent}
-    , m_impl{std::make_unique<Impl>(this, network, operationId, std::move(pageUrl), timeoutMs, std::move(parser),
-                                    std::move(workflowSlots), std::move(callback))}
+    , m_impl{std::make_unique<Impl>(this, network, operationId, std::move(pageUrl),
+                                    BandcampAttemptPolicy{attemptTimeoutMs, maxAttempts, attemptCooldownMs},
+                                    std::move(parser), std::move(workflowSlots), std::move(callback))}
 { }
 
 BandcampListingResolver::~BandcampListingResolver()
 {
     m_impl->stop->store(true, std::memory_order_relaxed);
-    m_impl->deadline.stop();
-    if(m_impl->fetchActive && m_impl->client && m_impl->requestId != 0) {
+    m_impl->attempts.stop();
+    if(m_impl->attempts.attemptActive() && m_impl->client && m_impl->requestId != 0) {
         m_impl->client->cancel(m_impl->requestId);
     }
 }

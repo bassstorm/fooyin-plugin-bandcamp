@@ -174,23 +174,19 @@ void BandcampLibraryGateway::cancel()
     }
 }
 
-void BandcampLibraryGateway::commit(QList<BandcampResolvedTrack> incoming, int activeTimeoutMs,
-                                    QObject* callbackContext,
-                                    CorrelationContext correlation, Completion completion)
+void BandcampLibraryGateway::commit(QList<BandcampResolvedTrack> incoming, QObject* callbackContext,
+                                    CorrelationContext correlation, Completion completion, int timeoutMs)
 {
-    enqueue(std::move(incoming), activeTimeoutMs, callbackContext, std::move(correlation),
-            std::move(completion), false);
+    enqueue(std::move(incoming), timeoutMs, callbackContext, std::move(correlation), std::move(completion), false);
 }
 
-void BandcampLibraryGateway::refreshTransport(BandcampResolvedTrack incoming, int activeTimeoutMs,
-                                             QObject* callbackContext, CorrelationContext correlation,
-                                             Completion completion)
+void BandcampLibraryGateway::refreshTransport(BandcampResolvedTrack incoming, QObject* callbackContext,
+                                             CorrelationContext correlation, Completion completion, int timeoutMs)
 {
-    enqueue({std::move(incoming)}, activeTimeoutMs, callbackContext, std::move(correlation),
-            std::move(completion), true);
+    enqueue({std::move(incoming)}, timeoutMs, callbackContext, std::move(correlation), std::move(completion), true);
 }
 
-void BandcampLibraryGateway::enqueue(QList<BandcampResolvedTrack> incoming, int activeTimeoutMs,
+void BandcampLibraryGateway::enqueue(QList<BandcampResolvedTrack> incoming, int timeoutMs,
                                      QObject* callbackContext, CorrelationContext correlation,
                                      Completion completion, bool refreshOnly)
 {
@@ -220,7 +216,7 @@ void BandcampLibraryGateway::enqueue(QList<BandcampResolvedTrack> incoming, int 
         deliver(callbackContext, std::move(completion), error, correlation);
         return;
     }
-    if(activeTimeoutMs <= 0) {
+    if(timeoutMs <= 0) {
         const auto error = failure(FooyinTrackCommitErrorCode::InvalidTimeout, 0,
                                    QStringLiteral("The active library-write timeout must be positive."));
         logFailure(correlation, error);
@@ -228,7 +224,7 @@ void BandcampLibraryGateway::enqueue(QList<BandcampResolvedTrack> incoming, int 
         return;
     }
 
-    CommitRequest request{m_nextToken++, std::move(incoming), activeTimeoutMs,
+    CommitRequest request{m_nextToken++, std::move(incoming), timeoutMs,
                           callbackContext, std::move(correlation), std::move(completion), {}, refreshOnly};
     const quint64 token = request.token;
     request.receiverDestroyed = QObject::connect(callbackContext, &QObject::destroyed, this,
@@ -282,7 +278,7 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
         return;
     }
     m_active->deadline.start();
-    QTimer::singleShot(request.activeTimeoutMs, this, [this, token]() { onTimeout(token); });
+    QTimer::singleShot(request.timeoutMs, this, [this, token]() { onTimeout(token); });
     if(!m_api.owner || !m_api.playlistOwner || !m_api.tracks || !m_api.playlistTracks
        || !m_api.metadataStore || !m_api.writeTrackMetadata) {
         failActive(failure(FooyinTrackCommitErrorCode::LibraryUnavailable, 0,
@@ -391,7 +387,7 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
     }
     m_active->newIdentityCount = static_cast<qsizetype>(newIdentityIds.size());
 
-    if(m_active->deadline.elapsed() >= request.activeTimeoutMs) {
+    if(m_active->deadline.elapsed() >= request.timeoutMs) {
         onTimeout(token);
         return;
     }
@@ -453,7 +449,7 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
                                 {DiagnosticField::number(QStringLiteral("targets"),
                                                          static_cast<qint64>(m_active->writeTargets.size()))});
     }
-    if(m_active->deadline.elapsed() >= m_active->request.activeTimeoutMs) {
+    if(m_active->deadline.elapsed() >= m_active->request.timeoutMs) {
         onTimeout(token);
     }
 }
@@ -464,7 +460,7 @@ void BandcampLibraryGateway::onWriteFinished(quint64 token)
         return;
     }
     const QPointer<BandcampLibraryGateway> guard{this};
-    if(!m_active->timedOut && m_active->deadline.elapsed() >= m_active->request.activeTimeoutMs) {
+    if(!m_active->timedOut && m_active->deadline.elapsed() >= m_active->request.timeoutMs) {
         onTimeout(token);
     }
     if(!guard || !m_active || m_active->request.token != token) {

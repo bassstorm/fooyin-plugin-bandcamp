@@ -121,7 +121,9 @@ private:
             m_network,
             id,
             url,
-            m_options.itemTimeoutMs,
+            m_options.attemptTimeoutMs,
+            m_options.maxAttempts,
+            m_options.attemptCooldownMs,
             m_listingParser,
             m_workflowSlots,
             [this, input = m_activeDiscoveryInput](BandcampListingParseOutcome outcome) {

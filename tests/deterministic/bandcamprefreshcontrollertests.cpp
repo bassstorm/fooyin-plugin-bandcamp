@@ -385,8 +385,7 @@ void RefreshTests::queuedWriteReadsCurrentResidentAndFailsMissing()
     QObject receiver;
     std::optional<FooyinTrackCommitOutcome> result;
     BandcampTrack model{.id = 7, .title = u"Fresh"_s, .sourceUrl = AlbumUrl, .streamUrl = stream(now + 7'200'000)};
-    gateway.refreshTransport({model, std::nullopt}, 1000, &receiver, {},
-                             [&result](auto value) { result = value; });
+    gateway.refreshTransport({model, std::nullopt}, &receiver, {}, [&result](auto value) { result = value; });
     host.library.front().setTitle(u"Latest library edit"_s);
     QTRY_VERIFY_WITH_TIMEOUT(result.has_value(), 1000);
     QCOMPARE(host.writes.front().front().title(), u"Latest library edit"_s);
@@ -394,14 +393,12 @@ void RefreshTests::queuedWriteReadsCurrentResidentAndFailsMissing()
     host.playlist.front().setTitle(u"First playlist edit"_s);
     host.playlist.push_back(resident(7, AlbumUrl, now - 1000));
     result.reset();
-    gateway.refreshTransport({model, std::nullopt}, 1000, &receiver, {},
-                             [&result](auto value) { result = value; });
+    gateway.refreshTransport({model, std::nullopt}, &receiver, {}, [&result](auto value) { result = value; });
     QTRY_VERIFY_WITH_TIMEOUT(result.has_value(), 1000);
     QCOMPARE(host.writes.back().front().title(), u"First playlist edit"_s);
     host.playlist.clear();
     result.reset();
-    gateway.refreshTransport({model, std::nullopt}, 1000, &receiver, {},
-                             [&result](auto value) { result = value; });
+    gateway.refreshTransport({model, std::nullopt}, &receiver, {}, [&result](auto value) { result = value; });
     QTRY_VERIFY_WITH_TIMEOUT(result.has_value(), 1000);
     QCOMPARE(std::get<FooyinTrackCommitFailure>(*result).code, FooyinTrackCommitErrorCode::MissingResident);
     QCOMPARE(host.writes.size(), std::size_t{2});
