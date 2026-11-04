@@ -30,7 +30,6 @@
 #include <QMenu>
 #include <QDateTime>
 
-#include <stdexcept>
 #include <utility>
 
 using namespace Qt::StringLiterals;
@@ -154,38 +153,33 @@ void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
     if(!m_service || !hasSelectedBandcampTracks(tracks)) {
         return;
     }
-    try {
-        FySettings fySettings;
-        const auto settings = loadBandcampSettings(fySettings);
-        OperationOptions options;
-        options.parallelism = settings.parallelism;
-        options.itemTimeoutMs = settings.itemTimeoutMs;
-        options.discographyOrder = settings.discographyOrder;
-        options.prePlaybackRefreshWindowMs
-            = refreshWindowMilliseconds(settings.prePlaybackRefreshWindowMinutes);
-        const QPointer<Fooyin::PlaylistInteractor> interactor{m_playlistInteractor};
-        auto* operation = new BandcampRefreshOperation{
-            m_service, tracks, options,
-            fooyinLibraryApi(interactor ? interactor->library() : nullptr,
-                            interactor ? interactor->handler() : nullptr), this};
-        m_refreshes.append(operation);
-        QObject::connect(operation, &QObject::destroyed, this, [this, operation]() {
-            m_refreshes.removeAll(operation);
-        });
-        auto* dialog = new BandcampResultsDialog(Utils::getMainWindow(), true);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        trackDialog(dialog);
-        connect(operation, &BandcampRefreshOperation::progressChanged, dialog,
-                &BandcampResultsDialog::updateProgress);
-        connect(operation, &BandcampRefreshOperation::finished, dialog, &BandcampResultsDialog::finishRefresh);
-        connect(operation, &BandcampRefreshOperation::finished, operation, &QObject::deleteLater);
-        connect(dialog, &QDialog::finished, operation, &BandcampRefreshOperation::cancel);
-        dialog->open();
-        operation->start(QDateTime::currentMSecsSinceEpoch());
-    }
-    catch(...) {
-        qCWarning(BANDCAMP_UI) << "Starting the selected Bandcamp stream refresh failed";
-    }
+    FySettings fySettings;
+    const auto settings = loadBandcampSettings(fySettings);
+    OperationOptions options;
+    options.parallelism = settings.parallelism;
+    options.itemTimeoutMs = settings.itemTimeoutMs;
+    options.discographyOrder = settings.discographyOrder;
+    options.prePlaybackRefreshWindowMs
+        = refreshWindowMilliseconds(settings.prePlaybackRefreshWindowMinutes);
+    const QPointer<Fooyin::PlaylistInteractor> interactor{m_playlistInteractor};
+    auto* operation = new BandcampRefreshOperation{
+        m_service, tracks, options,
+        fooyinLibraryApi(interactor ? interactor->library() : nullptr,
+                        interactor ? interactor->handler() : nullptr), this};
+    m_refreshes.append(operation);
+    QObject::connect(operation, &QObject::destroyed, this, [this, operation]() {
+        m_refreshes.removeAll(operation);
+    });
+    auto* dialog = new BandcampResultsDialog(Utils::getMainWindow(), true);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    trackDialog(dialog);
+    connect(operation, &BandcampRefreshOperation::progressChanged, dialog,
+            &BandcampResultsDialog::updateProgress);
+    connect(operation, &BandcampRefreshOperation::finished, dialog, &BandcampResultsDialog::finishRefresh);
+    connect(operation, &BandcampRefreshOperation::finished, operation, &QObject::deleteLater);
+    connect(dialog, &QDialog::finished, operation, &BandcampRefreshOperation::cancel);
+    dialog->open();
+    operation->start(QDateTime::currentMSecsSinceEpoch());
 }
 
 void BandcampPlugin::showAddUrlDialog()
@@ -267,10 +261,9 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
         return playlist->id();
     };
     playlistApi.insert = [interactor](const Fooyin::UId& playlistId, const Fooyin::TrackList& tracks) {
-        if(!interactor) {
-            throw std::runtime_error{"The playlist interactor was destroyed."};
+        if(interactor) {
+            interactor->tracksToPlaylist(tracks, playlistId);
         }
-        interactor->tracksToPlaylist(tracks, playlistId);
     };
 
     auto* dialog = new BandcampResultsDialog(Utils::getMainWindow());

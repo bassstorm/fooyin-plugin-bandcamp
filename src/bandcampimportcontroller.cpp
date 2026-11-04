@@ -12,13 +12,6 @@ CorrelationContext importCorrelation(BandcampOperationId operationId)
 {
     return {.jobId = static_cast<qint64>(operationId)};
 }
-
-void logCancelFailure(BandcampOperationId operationId, QString reason)
-{
-    qCWarning(BANDCAMP_UI).noquote()
-        << formatTraceEvent(importCorrelation(operationId), QStringLiteral("import.cancel_failed"),
-                            {DiagnosticField::text(QStringLiteral("reason"), std::move(reason))});
-}
 } // namespace
 
 BandcampImportController::BandcampImportController(BandcampOperationId operationId,
@@ -46,30 +39,20 @@ BandcampImportController::BandcampImportController(BandcampOperationId operation
     else if(forceNewPlaylist || !m_destinationId.isValid()) {
         m_pendingNewPlaylist = true;
     }
-    else if(m_playlistApi.owner->thread() != thread()) {
-        m_initialFailure = true;
-        m_stopReason = tr("The playlist service is unavailable.");
-    }
     else {
-        try {
-            switch(m_playlistApi.inspect(m_destinationId)) {
-                case BandcampPlaylistAvailability::Writable:
-                    break;
-                case BandcampPlaylistAvailability::OwnerUnavailable:
-                    m_initialFailure = true;
-                    m_stopReason = tr("The playlist service is unavailable.");
-                    break;
-                case BandcampPlaylistAvailability::Missing:
-                case BandcampPlaylistAvailability::Temporary:
-                case BandcampPlaylistAvailability::Automatic:
-                case BandcampPlaylistAvailability::Locked:
-                    m_pendingNewPlaylist = true;
-                    break;
-            }
-        }
-        catch(...) {
-            m_initialFailure = true;
-            m_stopReason = tr("The playlist service is unavailable.");
+        switch(m_playlistApi.inspect(m_destinationId)) {
+            case BandcampPlaylistAvailability::Writable:
+                break;
+            case BandcampPlaylistAvailability::OwnerUnavailable:
+                m_initialFailure = true;
+                m_stopReason = tr("The playlist service is unavailable.");
+                break;
+            case BandcampPlaylistAvailability::Missing:
+            case BandcampPlaylistAvailability::Temporary:
+            case BandcampPlaylistAvailability::Automatic:
+            case BandcampPlaylistAvailability::Locked:
+                m_pendingNewPlaylist = true;
+                break;
         }
     }
 }
@@ -222,20 +205,12 @@ void BandcampImportController::pump()
         guard->m_handoffPhase = HandoffPhase::Gateway;
         const CorrelationContext correlation{.jobId = static_cast<qint64>(m_operationId),
                                              .resourceUrl = QUrl(scope.page.url)};
-        try {
-            guard->m_gateway->commit(std::move(tracks), guard->m_activeTimeoutMs, guard, correlation,
-                              [guard, scope](FooyinTrackCommitOutcome outcome) mutable {
-                                  if(guard) {
-                                      guard->onCommit(scope, std::move(outcome));
-                                  }
-                              });
-        }
-        catch(...) {
-            if(guard) {
-                guard->m_handoffPhase = HandoffPhase::None;
-                guard->failRun(tr("Preparing tracks for the playlist failed."), true);
-            }
-        }
+        guard->m_gateway->commit(std::move(tracks), guard->m_activeTimeoutMs, guard, correlation,
+                                 [guard, scope](FooyinTrackCommitOutcome outcome) mutable {
+                                     if(guard) {
+                                         guard->onCommit(scope, std::move(outcome));
+                                     }
+                                 });
         return;
     }
 
@@ -285,22 +260,7 @@ void BandcampImportController::onCommit(const BandcampScopeResult& scope, Fooyin
 
     const auto insert = guard->m_playlistApi.insert;
     guard->m_handoffPhase = HandoffPhase::Inserting;
-    try {
-        insert(destination, prepared.tracks);
-    }
-    catch(...) {
-        if(guard) {
-            guard->m_handoffPhase = HandoffPhase::None;
-            if(guard->m_stopping) {
-                ++guard->m_failed;
-                guard->finishIfReady();
-            }
-            else {
-                guard->failRun(tr("The prepared tracks could not be added to the playlist."), true);
-            }
-        }
-        return;
-    }
+    insert(destination, prepared.tracks);
     if(!guard) {
         return;
     }
@@ -360,12 +320,7 @@ void BandcampImportController::requestResolutionCancellation()
     if(!cancelOperation) {
         return;
     }
-    try {
-        cancelOperation(operationId);
-    }
-    catch(...) {
-        logCancelFailure(operationId, QStringLiteral("resolution cancellation threw"));
-    }
+    cancelOperation(operationId);
 }
 
 void BandcampImportController::clearPendingAsCancelled()
@@ -391,40 +346,15 @@ void BandcampImportController::finishIfReady()
 
 bool BandcampImportController::playlistOwnersAvailable() const
 {
-    const QPointer<QObject> owner = m_playlistApi.owner;
-    const auto ownersAvailable = m_playlistApi.ownersAvailable;
-    const QThread* controllerThread = thread();
-    if(!owner || owner->thread() != controllerThread || !ownersAvailable) {
-        return false;
-    }
-    const QPointer<BandcampImportController> guard{const_cast<BandcampImportController*>(this)};
-    try {
-        const bool available = ownersAvailable();
-        return guard && owner && owner->thread() == controllerThread && available;
-    }
-    catch(...) {
-        return false;
-    }
+    return m_playlistApi.owner && m_playlistApi.ownersAvailable && m_playlistApi.ownersAvailable();
 }
 
 bool BandcampImportController::destinationWritable(const Fooyin::UId& id) const
 {
-    const QPointer<BandcampImportController> guard{const_cast<BandcampImportController*>(this)};
-    const auto inspect = m_playlistApi.inspect;
-    if(!id.isValid()) {
+    if(!id.isValid() || !m_playlistApi.inspect || !playlistOwnersAvailable()) {
         return false;
     }
-    const bool available = playlistOwnersAvailable();
-    if(!guard || !available || !inspect) {
-        return false;
-    }
-    try {
-        const BandcampPlaylistAvailability state = inspect(id);
-        return guard && state == BandcampPlaylistAvailability::Writable;
-    }
-    catch(...) {
-        return false;
-    }
+    return m_playlistApi.inspect(id) == BandcampPlaylistAvailability::Writable;
 }
 
 bool BandcampImportController::prepareDestination(const BandcampScopeResult& scope, Fooyin::UId& id)
@@ -439,19 +369,10 @@ bool BandcampImportController::prepareDestination(const BandcampScopeResult& sco
         return false;
     }
     if(guard->m_pendingNewPlaylist) {
-        std::optional<Fooyin::UId> created;
         const auto createNew = guard->m_playlistApi.createNew;
         const QString name
             = guard->newPlaylistName(std::get<ResolutionSuccess<BandcampResolvedData>>(scope.outcome).value);
-        try {
-            created = createNew(name);
-        }
-        catch(...) {
-            if(guard) {
-                guard->failRun(tr("A writable playlist could not be created."), true);
-            }
-            return false;
-        }
+        const std::optional<Fooyin::UId> created = createNew(name);
         if(!guard) {
             return false;
         }
@@ -495,7 +416,6 @@ bool BandcampImportController::isFatalGatewayFailure(const FooyinTrackCommitFail
        || failure.code == FooyinTrackCommitErrorCode::WrongThread) {
         return true;
     }
-    return failure.code == FooyinTrackCommitErrorCode::HostOperationFailed
-        && (!m_libraryOwner || m_libraryOwner->thread() != thread());
+    return failure.code == FooyinTrackCommitErrorCode::HostOperationFailed && !m_libraryOwner;
 }
 } // namespace Fooyin::Bandcamp

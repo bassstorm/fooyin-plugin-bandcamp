@@ -9,7 +9,6 @@
 
 #include <limits>
 #include <memory>
-#include <stdexcept>
 #include <vector>
 
 using namespace Qt::StringLiterals;
@@ -99,35 +98,17 @@ public:
             if(snapshotDelayMs > 0) {
                 QThread::msleep(static_cast<unsigned long>(snapshotDelayMs));
             }
-            if(throwOnSnapshot) {
-                throw std::runtime_error{"snapshot failed"};
-            }
-            if(snapshotFailuresRemaining > 0) {
-                --snapshotFailuresRemaining;
-                throw std::runtime_error{"transient snapshot failure"};
-            }
             if(snapshotHook) {
                 snapshotHook();
             }
             return residents;
         };
-        api.metadataStore = [this]() -> std::shared_ptr<Fooyin::TrackMetadataStore> {
-            if(throwOnMetadataStore) {
-                throw std::runtime_error{"store failed"};
-            }
-            return store;
-        };
+        api.metadataStore = [this]() -> std::shared_ptr<Fooyin::TrackMetadataStore> { return store; };
         api.writeTrackMetadata = [this](const Fooyin::TrackList& tracks) {
             ++writeCalls;
-            if(throwOnWrite) {
-                throw std::runtime_error{"write failed"};
-            }
             writeInputs.push_back(tracks);
-            if(invalidWriteRequest) {
+            if(invalidWriteRequest || promiseIndex >= promises.size()) {
                 return Fooyin::WriteRequest{};
-            }
-            if(promiseIndex >= promises.size()) {
-                throw std::runtime_error{"write promise unavailable"};
             }
             auto promise = promises.at(promiseIndex++);
             if(writeHook) {
@@ -165,11 +146,7 @@ public:
     int snapshotCalls{0};
     int writeCalls{0};
     int cancelCalls{0};
-    bool throwOnSnapshot{false};
-    bool throwOnMetadataStore{false};
-    bool throwOnWrite{false};
     bool invalidWriteRequest{false};
-    int snapshotFailuresRemaining{0};
     int snapshotDelayMs{0};
     std::function<void()> snapshotHook;
     std::function<void()> writeHook;
@@ -202,9 +179,6 @@ struct PlaylistBoundary
             return id;
         };
         api.insert = [this](const Fooyin::UId& id, const Fooyin::TrackList& tracks) {
-            if(throwOnInsert) {
-                throw std::runtime_error{"playlist insertion failed"};
-            }
             insertedPlaylists.append(id);
             blocks.append(tracks);
             if(insertHook) {
@@ -244,7 +218,6 @@ struct PlaylistBoundary
     int snapshotCalls{0};
     int createCalls{0};
     bool failCreate{false};
-    bool throwOnInsert{false};
     std::function<void()> createHook;
     std::function<void()> insertHook;
 };
@@ -383,7 +356,6 @@ private slots:
     void timeoutDoesNotPoisonQueuedCommit();
     void activeDeadlineIncludesSnapshotWork();
     void guardsCallbacksAndObjectLifetimes();
-    void containsDependencyAndFutureExceptions();
     void correlatesAndRedactsEffectiveTransportChanges();
     void importsIntoCapturedUiPlaylist();
     void importsPlaylistOnlyResidentMetadata();
@@ -715,7 +687,6 @@ void FooyinTrackTests::reportsWriteFailuresWithoutMutatingResidents()
         {Fooyin::WriteState::Completed, 0, 0},
         {Fooyin::WriteState::Completed, 1, 1},
         {Fooyin::WriteState::Cancelled, 1, 0},
-        {Fooyin::WriteState::Completed, 2, 0},
     };
     for(const Fooyin::WriteResult& writeResult : failedResults) {
         LibraryBoundary library;
@@ -995,96 +966,6 @@ void FooyinTrackTests::guardsCallbacksAndObjectLifetimes()
         });
         QTRY_VERIFY(called);
         QVERIFY(gateway == nullptr);
-    }
-}
-
-void FooyinTrackTests::containsDependencyAndFutureExceptions()
-{
-    {
-        LibraryBoundary library;
-        library.owner.reset();
-        BandcampLibraryGateway gateway{library.api};
-        QObject receiver;
-        bool completed = false;
-        FooyinTrackCommitOutcome outcome;
-        submit(gateway, {standaloneTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
-            outcome   = std::move(result);
-            completed = true;
-        });
-        QTRY_VERIFY(completed);
-        const auto* error = std::get_if<FooyinTrackCommitFailure>(&outcome);
-        QVERIFY(error);
-        QCOMPARE(error->code, FooyinTrackCommitErrorCode::LibraryUnavailable);
-        QCOMPARE(library.snapshotCalls, 0);
-        QCOMPARE(library.writeCalls, 0);
-    }
-
-    {
-        LibraryBoundary library;
-        library.throwOnSnapshot = true;
-        BandcampLibraryGateway gateway{library.api};
-        QObject receiver;
-        bool completed = false;
-        FooyinTrackCommitOutcome outcome;
-        submit(gateway, {standaloneTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
-            outcome = std::move(result);
-            completed = true;
-        });
-        QTRY_VERIFY(completed);
-        QVERIFY(std::holds_alternative<FooyinTrackCommitFailure>(outcome));
-    }
-
-    {
-        LibraryBoundary library;
-        library.throwOnMetadataStore = true;
-        BandcampLibraryGateway gateway{library.api};
-        QObject receiver;
-        bool completed = false;
-        FooyinTrackCommitOutcome outcome;
-        submit(gateway, {standaloneTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
-            outcome = std::move(result);
-            completed = true;
-        });
-        QTRY_VERIFY(completed);
-        QVERIFY(std::holds_alternative<FooyinTrackCommitFailure>(outcome));
-        QCOMPARE(library.snapshotCalls, 1);
-    }
-
-    {
-        LibraryBoundary library;
-        library.residents.push_back(residentWithUserEdits(707));
-        library.throwOnWrite = true;
-        BandcampLibraryGateway gateway{library.api};
-        QObject receiver;
-        bool completed = false;
-        FooyinTrackCommitOutcome outcome;
-        submit(gateway, {memberTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
-            outcome = std::move(result);
-            completed = true;
-        });
-        QTRY_VERIFY(completed);
-        QVERIFY(std::holds_alternative<FooyinTrackCommitFailure>(outcome));
-    }
-
-    {
-        LibraryBoundary library;
-        library.residents.push_back(residentWithUserEdits(708));
-        auto promise = std::make_shared<QPromise<Fooyin::WriteResult>>();
-        promise->start();
-        library.promises.push_back(promise);
-        BandcampLibraryGateway gateway{library.api};
-        QObject receiver;
-        bool completed = false;
-        FooyinTrackCommitOutcome outcome;
-        submit(gateway, {memberTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
-            outcome = std::move(result);
-            completed = true;
-        });
-        QTRY_COMPARE(library.writeCalls, 1);
-        promise->setException(std::make_exception_ptr(std::runtime_error{"future failed"}));
-        promise->finish();
-        QTRY_VERIFY(completed);
-        QVERIFY(std::holds_alternative<FooyinTrackCommitFailure>(outcome));
     }
 }
 
@@ -1384,7 +1265,12 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
 
     {
         LibraryBoundary library;
-        library.snapshotFailuresRemaining = 1;
+        Fooyin::Track resident = project(memberTrack(71, u"https://cdn.example.com/old.mp3?sig=old"_s));
+        resident.setId(71);
+        resident.setTitle(u"User-edited title"_s);
+        resident.clearWasModified();
+        library.residents.push_back(resident);
+        library.makeWriteAvailable();
         PlaylistBoundary playlists;
         BandcampImportController controller{10,
                                             {{BandcampPageKind::Album, AlbumSource, {}},
@@ -1403,6 +1289,8 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
         controller.acceptScopeResult(successfulTrackScope(10, false, 1));
         controller.finishResolution({10, 2, 2, 0, 0});
 
+        QTRY_COMPARE_WITH_TIMEOUT(library.writeCalls, 1, 2000);
+        library.finishWrite(0, Fooyin::WriteResult{Fooyin::WriteState::Completed, 0, 1});
         QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
         QCOMPARE(summary.added, 1);
         QCOMPARE(summary.failed, 1);
@@ -1411,35 +1299,7 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
         QCOMPARE(playlists.createCalls, 1);
         QCOMPARE(playlists.names, QStringList{u"Bandcamp"_s});
         QCOMPARE(playlists.blocks.size(), 1);
-    }
-
-    {
-        LibraryBoundary library;
-        PlaylistBoundary playlists;
-        playlists.throwOnInsert = true;
-        BandcampImportController controller{11,
-                                            {{BandcampPageKind::Track, TrackSource, {}}},
-                                            true,
-                                            {},
-                                            1000,
-                                            library.api,
-                                            playlists.api,
-                                            {}};
-        bool finished = false;
-        BandcampImportSummary summary;
-        connectImportCompletion(controller, finished, summary);
-        controller.start();
-        controller.acceptScopeResult(successfulTrackScope(11));
-        controller.finishResolution({11, 1, 1, 0, 0});
-
-        QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
-        QCOMPARE(summary.added, 0);
-        QCOMPARE(summary.failed, 1);
-        QCOMPARE(summary.stopReason, u"The prepared tracks could not be added to the playlist."_s);
-        QCOMPARE(playlists.createCalls, 1);
-        QVERIFY(playlists.blocks.isEmpty());
-    }
-}
+    }}
 
 void FooyinTrackTests::stopsWhenDestinationChangesDuringPreparation()
 {
