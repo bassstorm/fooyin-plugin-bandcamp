@@ -1,0 +1,88 @@
+name: Build
+
+# Reusable build: runs the sanitized deterministic suite and packages a bundle
+# inside the dev container, so CI matches .devcontainer/ (and its pinned Fooyin).
+on:
+  workflow_call:
+    inputs:
+      preset:
+        description: Bundle flavour, `snapshot` or `release`
+        required: true
+        type: string
+    outputs:
+      version:
+        description: Plugin version as recorded in the bundle manifest
+        value: ${{ jobs.build.outputs.version }}
+      artifact:
+        description: Name of the uploaded bundle artifact
+        value: ${{ jobs.build.outputs.artifact }}
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    # A cold dev container image builds Fooyin from source.
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.bundle.outputs.version }}
+      artifact: ${{ steps.bundle.outputs.artifact }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set version suffix
+        id: suffix
+        env:
+          PRESET: ${{ inputs.preset }}
+        run: |
+          case "$PRESET" in
+            snapshot) echo "value=-snapshot.g${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT" ;;
+            release)  echo "value=" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Unknown preset '$PRESET'"; exit 1 ;;
+          esac
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test and package in dev container
+        uses: devcontainers/ci@v0.3
+        env:
+          # devcontainer.json bind-mounts the host SSH agent socket; runners have none.
+          SSH_AUTH_SOCK: ${{ runner.temp }}
+        with:
+          imageName: ghcr.io/${{ github.repository }}/devcontainer
+          push: filter
+          refFilterForPush: refs/heads/${{ github.event.repository.default_branch }}
+          eventFilterForPush: push
+          runCmd: |
+            set -euo pipefail
+            cmake --preset tests-sanitize
+            cmake --build --preset tests-sanitize
+            ctest --preset tests-ci
+            cmake --preset ${{ inputs.preset }} -DBANDCAMP_PLUGIN_VERSION_SUFFIX=${{ steps.suffix.outputs.value }}
+            cmake --build --preset ${{ inputs.preset }}-bundle
+
+      - name: Locate bundle
+        id: bundle
+        env:
+          BUILD_DIR: build-${{ inputs.preset }}
+        run: |
+          version="$(jq -er .Version "$BUILD_DIR/bandcamp.json")"
+          bundle="$BUILD_DIR/fooyin-bandcamp-${version}.fyplugin"
+          test -f "$bundle"
+          {
+            echo "version=${version}"
+            echo "artifact=fooyin-bandcamp-${version}"
+            echo "path=${bundle}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.bundle.outputs.artifact }}
+          path: ${{ steps.bundle.outputs.path }}
+          if-no-files-found: error

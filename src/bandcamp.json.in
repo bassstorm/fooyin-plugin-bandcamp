@@ -1,7 +1,7 @@
 {
     "Name": "Bandcamp",
     "Version": "${BANDCAMP_PLUGIN_VERSION}",
-    "Author": "Maksim Liauchuk",
+    "Author": "bassstorm",
     "Copyright": "Copyright © 2026, Maksim Liauchuk <maksim_liauchuk@fastmail.fm>",
     "License": [
         "MIT License — Permissive use, modification, and distribution; provided “as is,” without warranty."

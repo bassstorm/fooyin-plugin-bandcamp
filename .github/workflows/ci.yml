@@ -2,38 +2,83 @@ name: CI
 
 on:
   push:
+    branches: ['**']
   pull_request:
+  # Lets the release workflow rebuild the snapshot after its version-bump push,
+  # which does not trigger `push` workflows by itself.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-and-test:
+  build:
+    if: github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      preset: snapshot
+
+  # Only default-branch builds may refresh the cached dev container image.
+  build-default-branch:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      preset: snapshot
+
+  publish-snapshot:
+    name: Publish snapshot
+    needs: build-default-branch
     runs-on: ubuntu-26.04
-    container: mcr.microsoft.com/devcontainers/cpp:2-bookworm
-    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.build-default-branch.outputs.version }}
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Download bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build-default-branch.outputs.artifact }}
+          path: dist
 
-      - name: Install build tools
+      # Updated in place, new bundle first and stale ones last, so an interrupted
+      # run still leaves a downloadable bundle.
+      - name: Update snapshot pre-release
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build
+          bundle="$(echo dist/*.fyplugin)"
+          title="Snapshot ${VERSION}"
+          notes="Development build of ${GITHUB_SHA} from \`${GITHUB_REF_NAME}\`. It is updated on every push; use a versioned release for regular use."
 
-      - name: Install Fooyin
-        run: sudo bash .devcontainer/features/fooyin/install.sh
+          if ! gh release view snapshot >/dev/null 2>&1; then
+            gh release create snapshot "$bundle" --prerelease --latest=false \
+              --target "$GITHUB_SHA" --title "$title" --notes "$notes"
+            exit 0
+          fi
 
-      - name: Build plugin
-        run: |
-          cmake --preset dev
-          cmake --build --preset dev
-
-      - name: Build tests
-        run: |
-          cmake --preset tests-sanitize
-          cmake --build --preset tests-sanitize
-
-      - name: Run tests
-        run: ctest --preset tests-ci
+          gh release upload snapshot "$bundle" --clobber
+          if gh api "repos/${GH_REPO}/git/ref/tags/snapshot" >/dev/null 2>&1; then
+            gh api --method PATCH "repos/${GH_REPO}/git/refs/tags/snapshot" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          else
+            gh api --method POST "repos/${GH_REPO}/git/refs" \
+              -f ref=refs/tags/snapshot -f sha="$GITHUB_SHA" >/dev/null
+          fi
+          gh release edit snapshot --title "$title" --notes "$notes"
+          gh release view snapshot --json assets --jq '.assets[].name' |
+            while IFS= read -r asset; do
+              if [ "$asset" != "$(basename "$bundle")" ]; then
+                gh release delete-asset snapshot "$asset" --yes
+              fi
+            done
