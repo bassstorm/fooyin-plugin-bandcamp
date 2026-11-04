@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bandcampimportcontroller.h"
-#include "bandcamprefresh.h"
+#include "bandcamprefreshcontroller.h"
 
 #include <QDialog>
 
@@ -10,12 +10,18 @@ class QLabel;
 class QProgressBar;
 
 namespace Fooyin::Bandcamp {
-class BandcampResultsDialog : public QDialog
+enum class BandcampDialogMode : quint8
+{
+    Import,
+    Refresh,
+};
+
+class BandcampProgressDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    explicit BandcampResultsDialog(QWidget* parent = nullptr, bool refreshing = false);
+    explicit BandcampProgressDialog(BandcampDialogMode mode, QWidget* parent = nullptr);
 
     void updateProgress(const BandcampOperationProgress& progress);
     void showImporting();
@@ -25,7 +31,7 @@ public:
     void showRejection(const ResolutionError& error);
 
 private:
-    bool m_refreshing{false};
+    BandcampDialogMode m_mode;
     QLabel* m_status{nullptr};
     QProgressBar* m_progress{nullptr};
     QDialogButtonBox* m_buttons{nullptr};

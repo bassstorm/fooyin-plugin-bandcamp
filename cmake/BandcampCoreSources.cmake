@@ -6,11 +6,13 @@ set(BANDCAMP_CORE_SOURCES
     ${BANDCAMP_SRC_DIR}/bandcampdiagnostics.h
     ${BANDCAMP_SRC_DIR}/bandcamplogging.cpp
     ${BANDCAMP_SRC_DIR}/bandcamplogging.h
+    ${BANDCAMP_SRC_DIR}/bandcamplistingresolver.cpp
+    ${BANDCAMP_SRC_DIR}/bandcamplistingresolver.h
     ${BANDCAMP_SRC_DIR}/bandcampmodel.h
     ${BANDCAMP_SRC_DIR}/bandcamporchestrator.cpp
     ${BANDCAMP_SRC_DIR}/bandcamporchestrator.h
-    ${BANDCAMP_SRC_DIR}/bandcampresolver.cpp
-    ${BANDCAMP_SRC_DIR}/bandcampresolver.h
+    ${BANDCAMP_SRC_DIR}/bandcampreleaseresolver.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampreleaseresolver.h
     ${BANDCAMP_SRC_DIR}/bandcampassembly.cpp
     ${BANDCAMP_SRC_DIR}/bandcampassembly.h
     ${BANDCAMP_SRC_DIR}/bandcampparser.cpp
@@ -19,14 +21,12 @@ set(BANDCAMP_CORE_SOURCES
     ${BANDCAMP_SRC_DIR}/bandcamphtmlreader_p.h
     ${BANDCAMP_SRC_DIR}/bandcampdirtytitle.cpp
     ${BANDCAMP_SRC_DIR}/bandcampdirtytitle.h
-    ${BANDCAMP_SRC_DIR}/bandcampresolution.cpp
-    ${BANDCAMP_SRC_DIR}/bandcampresolution.h
+    ${BANDCAMP_SRC_DIR}/bandcampoutcome.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampoutcome.h
     ${BANDCAMP_SRC_DIR}/bandcamppostprocessor.cpp
     ${BANDCAMP_SRC_DIR}/bandcamppostprocessor.h
-    ${BANDCAMP_SRC_DIR}/bandcampprocessors.cpp
-    ${BANDCAMP_SRC_DIR}/bandcampprocessors.h
-    ${BANDCAMP_SRC_DIR}/bandcampservice.cpp
-    ${BANDCAMP_SRC_DIR}/bandcampservice.h
+    ${BANDCAMP_SRC_DIR}/bandcampresolutionservice.cpp
+    ${BANDCAMP_SRC_DIR}/bandcampresolutionservice.h
     ${BANDCAMP_SRC_DIR}/bandcamptrackuri.cpp
     ${BANDCAMP_SRC_DIR}/bandcamptrackuri.h
     ${BANDCAMP_SRC_DIR}/bandcampsettings.cpp

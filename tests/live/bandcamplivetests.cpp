@@ -1,5 +1,5 @@
 #include "bandcampmodel.h"
-#include "bandcampservice.h"
+#include "bandcampresolutionservice.h"
 #include "bandcampurl.h"
 
 #include <QEventLoop>
@@ -43,7 +43,7 @@ QList<BandcampPageUrl> pagesFor(const QString& url)
 LiveRun runOperation(const QList<BandcampPageUrl>& pages, bool stopAfterFirstScope = false)
 {
     QNetworkAccessManager network;
-    BandcampService service(&network);
+    BandcampResolutionService service(&network);
     QEventLoop loop;
     LiveRun run;
     bool cancelRequested{false};
@@ -56,7 +56,7 @@ LiveRun runOperation(const QList<BandcampPageUrl>& pages, bool stopAfterFirstSco
         loop.quit();
     });
 
-    QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+    QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
                      [&run, &service, &cancelRequested, stopAfterFirstScope](const BandcampScopeResult& result) {
                          run.results.append(result);
                          if(!stopAfterFirstScope || cancelRequested) {
@@ -69,7 +69,7 @@ LiveRun runOperation(const QList<BandcampPageUrl>& pages, bool stopAfterFirstSco
                              &service, [&service, id] { service.cancel(id); }, Qt::QueuedConnection);
                      });
 
-    QObject::connect(&service, &BandcampService::operationFinished, &loop,
+    QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                      [&run, &loop](const BandcampOperationSummary& summary) {
                          run.summary = summary;
                          loop.quit();

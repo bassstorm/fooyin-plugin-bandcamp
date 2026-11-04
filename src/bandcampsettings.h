@@ -37,8 +37,17 @@ struct BandcampSettings
     int prePlaybackRefreshWindowMinutes{DefaultRefreshWindowMinutes};
 };
 
+struct OperationOptions
+{
+    int parallelism{DefaultParallelism};
+    int itemTimeoutMs{DefaultItemTimeoutMs};
+    BandcampDiscographyOrder discographyOrder{BandcampDiscographyOrder::Default};
+    qint64 prePlaybackRefreshWindowMs{DefaultRefreshWindowMinutes * RefreshWindowMsPerMinute};
+};
+
 // Missing or non-numeric values fall back to defaults. Out-of-range values are clamped. Both are logged.
 BandcampSettings loadBandcampSettings(const QSettings& settings);
 void saveBandcampSettings(QSettings& settings, const BandcampSettings& values);
 qint64 refreshWindowMilliseconds(int minutes);
+OperationOptions clampOperationOptions(OperationOptions options);
 } // namespace Fooyin::Bandcamp

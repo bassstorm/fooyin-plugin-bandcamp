@@ -1,27 +1,13 @@
 #pragma once
 
-#include "bandcampfooyintrack.h"
-#include "bandcampservice.h"
+#include "bandcamplibrarygateway.h"
+#include "bandcampresolutionservice.h"
 
 #include <QHash>
 #include <QQueue>
 #include <QSet>
 
 namespace Fooyin::Bandcamp {
-enum class BandcampExpiryState : quint8
-{
-    Valid,
-    Unset,
-    Invalid,
-};
-
-struct BandcampStreamExpiry
-{
-    BandcampExpiryState state{BandcampExpiryState::Unset};
-    qint64 milliseconds{0};
-};
-
-[[nodiscard]] bool bandcampRefreshNeeded(BandcampStreamExpiry expiry, qint64 nowMs, qint64 windowMs);
 [[nodiscard]] bool hasSelectedBandcampTracks(const Fooyin::TrackList& selection);
 
 enum class BandcampRefreshError : quint8
@@ -62,22 +48,20 @@ struct BandcampRefreshSummary
     qsizetype cancelled{0};
 };
 
-// One submission owns eligibility, consumer association, resolution and transport handoff.
+// One submission owns batch eligibility, consumer association, resolution and resident writes.
 // Selection/options are copied; no playlist or UI objects are consulted afterwards.
-class BandcampRefreshOperation final : public QObject
+class BandcampRefreshController final : public QObject
 {
     Q_OBJECT
 public:
-    BandcampRefreshOperation(BandcampService* service, Fooyin::TrackList selected, OperationOptions options,
-                             FooyinLibraryApi libraryApi, QObject* parent = nullptr);
-    ~BandcampRefreshOperation() override;
+    BandcampRefreshController(BandcampResolutionService* service, Fooyin::TrackList selected, OperationOptions options,
+                              FooyinLibraryApi libraryApi, QObject* parent = nullptr);
+    ~BandcampRefreshController() override;
     void start(qint64 nowMs);
     void cancel();
 
 signals:
     void progressChanged(const Fooyin::Bandcamp::BandcampOperationProgress& progress);
-    void transportPrepared(qint64 trackId, const QString& sourceUrl, const QString& streamUrl,
-                           qint64 expiresAtMs, bool refreshed);
     void consumerFinished(qint64 trackId, const Fooyin::Bandcamp::BandcampRefreshOutcome& outcome);
     void finished(const Fooyin::Bandcamp::BandcampRefreshSummary& summary);
 
@@ -86,14 +70,15 @@ private:
     void pump();
     void settle(qint64 id, BandcampRefreshOutcome outcome, bool alreadyLogged = false);
     void finishIfReady();
-    [[nodiscard]] bool withdrawSource();
+    void withdrawSource();
     void failPending(BandcampRefreshFailure error);
     void stopWithFailure(BandcampRefreshFailure error);
 
-    QPointer<BandcampService> m_service;
+    QPointer<BandcampResolutionService> m_service;
     Fooyin::TrackList m_selected;
     OperationOptions m_options;
-    BandcampLibraryGateway* m_gateway;
+    FooyinLibraryApi m_libraryApi;
+    BandcampLibraryGateway* m_gateway{nullptr};
     QHash<QString, QList<qint64>> m_consumers;
     QSet<qint64> m_unsettled;
     qsizetype m_anonymousUnsettled{0};

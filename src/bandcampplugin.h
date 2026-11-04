@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bandcampservice.h"
+#include "bandcampresolutionservice.h"
 #include "bandcampplayback.h"
 #include "bandcampurl.h"
 
@@ -28,7 +28,7 @@ class PlaylistInteractor;
 
 namespace Fooyin::Bandcamp {
 class BandcampImportController;
-class BandcampRefreshOperation;
+class BandcampRefreshController;
 class BandcampPlugin : public QObject,
                        public Plugin,
                        public CorePlugin,
@@ -58,13 +58,13 @@ private:
     // Kept alive for as long as the service that uses it.
     std::shared_ptr<NetworkAccessManager> m_network;
     // Owned by this plugin through the QObject parent tree.
-    BandcampService* m_service{nullptr};
+    BandcampResolutionService* m_service{nullptr};
     QPointer<Fooyin::RemoteIoService> m_remoteIo;
     std::shared_ptr<BandcampPlaybackBridge> m_playbackBridge;
     QPointer<Fooyin::CurrentPlaylistController> m_playlistSelection;
     QPointer<Fooyin::PlaylistInteractor> m_playlistInteractor;
     QList<QPointer<QDialog>> m_dialogs;
     QList<QPointer<BandcampImportController>> m_imports;
-    QList<QPointer<BandcampRefreshOperation>> m_refreshes;
+    QList<QPointer<BandcampRefreshController>> m_refreshes;
 };
 } // namespace Fooyin::Bandcamp

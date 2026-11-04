@@ -1,64 +1,12 @@
 #pragma once
 
-#include "bandcampsettings.h"
-
 #include <QString>
 #include <QUrl>
 
-#include <optional>
+#include <utility>
 #include <variant>
 
 namespace Fooyin::Bandcamp {
-// Where a candidate value came from. Explicit values are read from the
-// resource's own data.
-enum class FieldProvenance : quint8
-{
-    Explicit,
-    Fallback,
-    Inherited,
-    Derived
-};
-
-QString provenanceName(FieldProvenance provenance);
-
-// Invalid is kept apart from Missing so a rejected source value is not mistaken
-// for an absent one.
-enum class FieldState : quint8
-{
-    Missing,
-    Invalid,
-    Usable
-};
-
-template <typename T>
-struct CandidateField
-{
-    FieldState state{FieldState::Missing};
-    // Semantic provenance only. Concrete JSONPaths stay in parser diagnostics.
-    FieldProvenance provenance{FieldProvenance::Explicit};
-    T value{};
-
-    [[nodiscard]] bool isUsable() const
-    {
-        return state == FieldState::Usable;
-    }
-
-    static CandidateField usable(T value, FieldProvenance provenance)
-    {
-        return CandidateField{FieldState::Usable, provenance, std::move(value)};
-    }
-
-    static CandidateField invalid()
-    {
-        return CandidateField{FieldState::Invalid, FieldProvenance::Explicit, T{}};
-    }
-
-    static CandidateField missing()
-    {
-        return CandidateField{};
-    }
-};
-
 enum class ResolutionStage : quint8
 {
     Fetch,
@@ -101,6 +49,8 @@ struct ResolutionError
     QString reason;
 };
 
+ResolutionError makeResolutionError(ResolutionErrorCode code, ResolutionStage stage, const QUrl& url, qint64 trackId,
+                                    QString field, QString reason);
 QString resolutionErrorCodeName(ResolutionErrorCode code);
 QString resolutionStageName(ResolutionStage stage);
 
@@ -135,14 +85,4 @@ template <typename T>
     return std::holds_alternative<ResolutionSuccess<T>>(outcome);
 }
 
-struct OperationOptions
-{
-    int parallelism{DefaultParallelism};
-    int itemTimeoutMs{DefaultItemTimeoutMs};
-    BandcampDiscographyOrder discographyOrder{BandcampDiscographyOrder::Default};
-    qint64 prePlaybackRefreshWindowMs{DefaultRefreshWindowMinutes * RefreshWindowMsPerMinute};
-};
-
-// Clamps each value to the user-facing range in bandcampsettings.h.
-OperationOptions clampOperationOptions(OperationOptions options);
 } // namespace Fooyin::Bandcamp

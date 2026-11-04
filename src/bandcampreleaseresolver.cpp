@@ -1,4 +1,4 @@
-#include "bandcampresolver.h"
+#include "bandcampreleaseresolver.h"
 
 #include "bandcampassembly.h"
 #include "bandcampclient.h"
@@ -7,6 +7,7 @@
 #include "bandcamptrackuri.h"
 
 #include <QFutureWatcher>
+#include <QHash>
 #include <QNetworkAccessManager>
 #include <QPointer>
 #include <QSet>
@@ -19,14 +20,6 @@
 
 namespace Fooyin::Bandcamp {
 namespace {
-constexpr int MaxPhysicalWorkflows = MaxParallelism;
-
-ResolutionError makeError(ResolutionErrorCode code, ResolutionStage stage, const QUrl& url, qint64 trackId,
-                          QString field, QString reason)
-{
-    return {code, stage, url, trackId, std::move(field), std::move(reason)};
-}
-
 QString cacheIdentity(const BandcampPageUrl& page)
 {
     return QString::number(static_cast<unsigned int>(page.kind)) + QChar(u':') + page.url;
@@ -35,9 +28,9 @@ QString cacheIdentity(const BandcampPageUrl& page)
 ResolutionError parentFailure(const ResolutionError& cause, const QUrl& parentUrl, qint64 trackId,
                               ResolutionStage stage)
 {
-    return makeError(ResolutionErrorCode::ParentUnavailable, stage, parentUrl, trackId,
-                     cause.field.isEmpty() ? QStringLiteral("parent") : cause.field,
-                     QStringLiteral("required album parent failed: %1").arg(cause.reason));
+    return makeResolutionError(ResolutionErrorCode::ParentUnavailable, stage, parentUrl, trackId,
+                               cause.field.isEmpty() ? QStringLiteral("parent") : cause.field,
+                               QStringLiteral("required album parent failed: %1").arg(cause.reason));
 }
 
 BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const ReleaseCandidate& primary,
@@ -50,9 +43,9 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
     if(page.kind == BandcampPageKind::Album) {
         const auto* candidate = std::get_if<AlbumCandidate>(&primary);
         if(!candidate) {
-            return ResolutionFailure{makeError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse,
-                                               context.resourceUrl, 0, QStringLiteral("identity"),
-                                               QStringLiteral("parsed resource is not an album"))};
+            return ResolutionFailure{makeResolutionError(
+                ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, context.resourceUrl, 0,
+                QStringLiteral("identity"), QStringLiteral("parsed resource is not an album"))};
         }
         auto admission = admitAlbum(*candidate, context, stop);
         if(const auto* failure = std::get_if<ResolutionFailure>(&admission)) {
@@ -71,9 +64,9 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
 
     const auto* track = std::get_if<TrackPageCandidate>(&primary);
     if(!track) {
-        return ResolutionFailure{makeError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse,
-                                           context.resourceUrl, 0, QStringLiteral("identity"),
-                                           QStringLiteral("parsed resource is not a track"))};
+        return ResolutionFailure{makeResolutionError(
+            ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, context.resourceUrl, 0,
+            QStringLiteral("identity"), QStringLiteral("parsed resource is not a track"))};
     }
     if(track->track.id.isUsable()) {
         context.trackId     = track->track.id.value;
@@ -88,10 +81,10 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
     else {
         const auto* album = std::get_if<AlbumCandidate>(parent);
         if(!album) {
-            return ResolutionFailure{makeError(ResolutionErrorCode::ParentUnavailable, ResolutionStage::Parse,
-                                               context.resourceUrl, track->track.id.value,
-                                               QStringLiteral("parent.resource"),
-                                               QStringLiteral("parent response did not identify an album"))};
+            return ResolutionFailure{makeResolutionError(
+                ResolutionErrorCode::ParentUnavailable, ResolutionStage::Parse, context.resourceUrl,
+                track->track.id.value, QStringLiteral("parent.resource"),
+                QStringLiteral("parent response did not identify an album"))};
         }
         admission = admitAlbumTrack(*track, *album, context, stop);
     }
@@ -173,17 +166,6 @@ public:
     void start()
     {
         m_deadline.start(m_timeoutMs);
-        if(m_request.page.kind == BandcampPageKind::Discography) {
-            const QPointer<BandcampReleaseWorkflow> guard{this};
-            if(!report(ResolutionFailure{makeError(ResolutionErrorCode::UnsupportedRequest, ResolutionStage::Acquire,
-                                                   QUrl(m_request.page.url), 0, QStringLiteral("resource"),
-                                                   QStringLiteral("discography expansion is not implemented"))})
-               || !guard) {
-                return;
-            }
-            settleIfIdle();
-            return;
-        }
         fetchPage(m_request.page, false);
     }
 
@@ -292,9 +274,9 @@ private:
                 outcome = watcher->result();
             }
             catch(...) {
-                outcome = ResolutionFailure{makeError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse,
-                                                      effectiveUrl, 0, QStringLiteral("parser"),
-                                                      QStringLiteral("parser dependency failed"))};
+                outcome = ResolutionFailure{makeResolutionError(
+                    ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, effectiveUrl, 0,
+                    QStringLiteral("parser"), QStringLiteral("parser dependency failed"))};
             }
             watcher->deleteLater();
             watcher->setParent(nullptr);
@@ -320,9 +302,9 @@ private:
                         return parsed;
                     }
                     catch(...) {
-                        return ResolutionFailure{makeError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse,
-                                                           effectiveUrl, 0, QStringLiteral("parser"),
-                                                           QStringLiteral("parser dependency failed"))};
+                        return ResolutionFailure{makeResolutionError(
+                            ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, effectiveUrl, 0,
+                            QStringLiteral("parser"), QStringLiteral("parser dependency failed"))};
                     }
                 }));
         }
@@ -332,9 +314,9 @@ private:
             m_workerActive = false;
             const QPointer<BandcampReleaseWorkflow> guard{this};
             onParsed(parent, effectiveUrl,
-                     ResolutionFailure{makeError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse,
-                                                 effectiveUrl, primaryTrackId(), QStringLiteral("parser"),
-                                                 QStringLiteral("parser worker could not be started"))});
+                     ResolutionFailure{makeResolutionError(
+                         ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, effectiveUrl, primaryTrackId(),
+                         QStringLiteral("parser"), QStringLiteral("parser worker could not be started"))});
             if(!guard) {
                 return;
             }
@@ -365,9 +347,9 @@ private:
         ReleaseCandidate candidate = std::get<ResolutionSuccess<ReleaseCandidate>>(std::move(outcome)).value;
         if(parent) {
             if(!std::holds_alternative<AlbumCandidate>(candidate)) {
-                report(ResolutionFailure{makeError(ResolutionErrorCode::ParentUnavailable, ResolutionStage::Parse,
-                                                   effectiveUrl, primaryTrackId(), QStringLiteral("parent.resource"),
-                                                   QStringLiteral("parent response did not identify an album"))});
+                report(ResolutionFailure{makeResolutionError(
+                    ResolutionErrorCode::ParentUnavailable, ResolutionStage::Parse, effectiveUrl, primaryTrackId(),
+                    QStringLiteral("parent.resource"), QStringLiteral("parent response did not identify an album"))});
                 return;
             }
             m_parentCandidate = std::move(candidate);
@@ -382,9 +364,9 @@ private:
         }
         const auto* track = std::get_if<TrackPageCandidate>(&candidate);
         if(!track) {
-            report(ResolutionFailure{makeError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, effectiveUrl,
-                                               0, QStringLiteral("identity"),
-                                               QStringLiteral("parsed resource is not a track"))});
+            report(ResolutionFailure{makeResolutionError(
+                ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, effectiveUrl, 0,
+                QStringLiteral("identity"), QStringLiteral("parsed resource is not a track"))});
             return;
         }
         if(track->track.id.isUsable()) {
@@ -440,10 +422,10 @@ private:
                 outcome = watcher->result();
             }
             catch(...) {
-                outcome = ResolutionFailure{makeError(ResolutionErrorCode::InvalidField, ResolutionStage::Refine,
-                                                      guard->m_context.resourceUrl, guard->primaryTrackId(),
-                                                      QStringLiteral("processor"),
-                                                      QStringLiteral("resolution dependency failed"))};
+                outcome = ResolutionFailure{makeResolutionError(
+                    ResolutionErrorCode::InvalidField, ResolutionStage::Refine, guard->m_context.resourceUrl,
+                    guard->primaryTrackId(), QStringLiteral("processor"),
+                    QStringLiteral("resolution dependency failed"))};
             }
             watcher->deleteLater();
             watcher->setParent(nullptr);
@@ -474,9 +456,9 @@ private:
                     return outcome;
                 }
                 catch(...) {
-                    return BandcampResolutionOutcome{ResolutionFailure{
-                        makeError(ResolutionErrorCode::InvalidField, ResolutionStage::Refine, resolutionUrl, trackId,
-                                  QStringLiteral("processor"), QStringLiteral("resolution dependency failed"))}};
+                    return BandcampResolutionOutcome{ResolutionFailure{makeResolutionError(
+                        ResolutionErrorCode::InvalidField, ResolutionStage::Refine, resolutionUrl, trackId,
+                        QStringLiteral("processor"), QStringLiteral("resolution dependency failed"))}};
                 }
             }));
         }
@@ -484,9 +466,9 @@ private:
             watcher->deleteLater();
             watcher->setParent(nullptr);
             m_workerActive = false;
-            if(report(ResolutionFailure{makeError(ResolutionErrorCode::InvalidField, ResolutionStage::Refine,
-                                                  context.resourceUrl, context.trackId, QStringLiteral("processor"),
-                                                  QStringLiteral("resolution worker could not be started"))})) {
+            if(report(ResolutionFailure{makeResolutionError(
+                   ResolutionErrorCode::InvalidField, ResolutionStage::Refine, context.resourceUrl, context.trackId,
+                   QStringLiteral("processor"), QStringLiteral("resolution worker could not be started"))})) {
                 settleIfIdle();
             }
         }
@@ -536,8 +518,9 @@ private:
         if(!guard) {
             return;
         }
-        if(report(ResolutionFailure{makeError(ResolutionErrorCode::Timeout, stage, m_currentUrl, trackId,
-                                              QStringLiteral("resource"), QStringLiteral("item deadline expired"))})) {
+        if(report(ResolutionFailure{makeResolutionError(
+               ResolutionErrorCode::Timeout, stage, m_currentUrl, trackId, QStringLiteral("resource"),
+               QStringLiteral("item deadline expired"))})) {
             settleIfIdle();
         }
     }
@@ -576,9 +559,9 @@ private:
             return;
         }
         if(!m_reported) {
-            if(!report(ResolutionFailure{makeError(ResolutionErrorCode::FetchFailed, ResolutionStage::Fetch,
-                                                   m_currentUrl, primaryTrackId(), QStringLiteral("workflow"),
-                                                   QStringLiteral("release workflow ended without an outcome"))})) {
+            if(!report(ResolutionFailure{makeResolutionError(
+                   ResolutionErrorCode::FetchFailed, ResolutionStage::Fetch, m_currentUrl, primaryTrackId(),
+                   QStringLiteral("workflow"), QStringLiteral("release workflow ended without an outcome"))})) {
                 return;
             }
         }
@@ -628,301 +611,9 @@ private:
 };
 } // namespace
 
-BandcampWorkflowSlots::BandcampWorkflowSlots(QObject* parent)
-    : QObject{parent}
-{ }
-
-bool BandcampWorkflowSlots::tryAcquire()
+struct BandcampReleaseResolver::Impl
 {
-    if(m_active >= MaxPhysicalWorkflows) {
-        return false;
-    }
-    ++m_active;
-    return true;
-}
-
-void BandcampWorkflowSlots::release()
-{
-    if(m_active <= 0) {
-        return;
-    }
-    --m_active;
-    emit capacityAvailable();
-}
-
-struct BandcampListingResolver::Impl
-{
-    BandcampListingResolver* owner{nullptr};
-    BandcampClient* client{nullptr};
-    BandcampOperationId operationId{0};
-    QUrl pageUrl;
-    int timeoutMs{0};
-    BandcampListingParser parser;
-    std::shared_ptr<BandcampWorkflowSlots> workflowSlots;
-    OutcomeCallback callback;
-    QTimer deadline;
-    std::shared_ptr<std::atomic_bool> stop{std::make_shared<std::atomic_bool>(false)};
-    CorrelationContext context;
-    BandcampClient::RequestId requestId{0};
-    bool started{false};
-    bool slotHeld{false};
-    bool fetchActive{false};
-    bool workerActive{false};
-    bool reported{false};
-    bool settled{false};
-
-    Impl(BandcampListingResolver* resolver, QNetworkAccessManager* network, BandcampOperationId id, QUrl url,
-         int timeout, BandcampListingParser pageParser, std::shared_ptr<BandcampWorkflowSlots> capacity,
-         OutcomeCallback outcomeCallback)
-        : owner{resolver}
-        , client{new BandcampClient(network, resolver)}
-        , operationId{id}
-        , pageUrl{std::move(url)}
-        , timeoutMs{timeout}
-        , parser{std::move(pageParser)}
-        , workflowSlots{std::move(capacity)}
-        , callback{std::move(outcomeCallback)}
-    {
-        context.jobId       = static_cast<qint64>(operationId);
-        context.resourceUrl = pageUrl;
-        deadline.setSingleShot(true);
-        QObject::connect(&deadline, &QTimer::timeout, owner, [this]() { onDeadline(); });
-        QObject::connect(workflowSlots.get(), &BandcampWorkflowSlots::capacityAvailable, owner,
-                         [this]() { tryStart(); });
-    }
-
-    void start()
-    {
-        if(started || reported) {
-            return;
-        }
-        started = true;
-        tryStart();
-    }
-
-    void tryStart()
-    {
-        if(!started || reported || slotHeld) {
-            return;
-        }
-        if(!workflowSlots || !workflowSlots->tryAcquire()) {
-            return;
-        }
-        slotHeld = true;
-        deadline.start(timeoutMs);
-        fetchActive = true;
-        const QPointer<BandcampListingResolver> guard{owner};
-        requestId
-            = client->fetch(pageUrl, [this](BandcampFetchOutcome outcome) { onFetch(std::move(outcome)); }, context);
-        if(!guard) {
-            return;
-        }
-    }
-
-    void cancel()
-    {
-        if(reported || settled) {
-            return;
-        }
-        stop->store(true, std::memory_order_relaxed);
-        deadline.stop();
-        const QPointer<BandcampListingResolver> guard{owner};
-        report(ResolutionCancelled{});
-        if(!guard) {
-            return;
-        }
-        if(fetchActive && requestId != 0) {
-            client->cancel(requestId);
-        }
-        settleIfIdle();
-    }
-
-    void onDeadline()
-    {
-        if(reported || settled) {
-            return;
-        }
-        stop->store(true, std::memory_order_relaxed);
-        const QPointer<BandcampListingResolver> guard{owner};
-        report(ResolutionFailure{makeError(ResolutionErrorCode::Timeout, ResolutionStage::Fetch, pageUrl, 0,
-                                           QStringLiteral("listing"), QStringLiteral("discography page timed out"))});
-        if(!guard) {
-            return;
-        }
-        if(fetchActive && requestId != 0) {
-            client->cancel(requestId);
-        }
-        settleIfIdle();
-    }
-
-    void onFetch(BandcampFetchOutcome outcome)
-    {
-        fetchActive = false;
-        requestId   = 0;
-        if(reported) {
-            settleIfIdle();
-            return;
-        }
-        if(std::holds_alternative<ResolutionCancelled>(outcome)) {
-            const QPointer<BandcampListingResolver> guard{owner};
-            report(ResolutionCancelled{});
-            if(guard) {
-                settleIfIdle();
-            }
-            return;
-        }
-        if(const auto* failure = std::get_if<BandcampFetchFailure>(&outcome)) {
-            const QPointer<BandcampListingResolver> guard{owner};
-            report(ResolutionFailure{failure->error});
-            if(guard) {
-                settleIfIdle();
-            }
-            return;
-        }
-        auto response       = std::get<ResolutionSuccess<BandcampFetchResponse>>(std::move(outcome)).value;
-        context.resourceUrl = response.url;
-        parse(std::move(response.body), response.url);
-    }
-
-    void parse(QByteArray body, QUrl effectiveUrl)
-    {
-        workerActive  = true;
-        auto* watcher = new QFutureWatcher<BandcampListingParseOutcome>(owner);
-        const QPointer<BandcampListingResolver> guard{owner};
-        QObject::connect(watcher, &QFutureWatcherBase::finished, owner, [guard, watcher]() {
-            if(!guard) {
-                watcher->deleteLater();
-                return;
-            }
-            BandcampListingParseOutcome outcome = ResolutionCancelled{};
-            try {
-                outcome = watcher->result();
-            }
-            catch(...) {
-                outcome = ResolutionFailure{makeError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse,
-                                                      guard->m_impl->pageUrl, 0, QStringLiteral("listing"),
-                                                      QStringLiteral("listing parser dependency failed"))};
-            }
-            watcher->deleteLater();
-            watcher->setParent(nullptr);
-            guard->m_impl->workerActive = false;
-            if(!guard->m_impl->reported) {
-                guard->m_impl->report(std::move(outcome));
-                if(!guard) {
-                    return;
-                }
-            }
-            guard->m_impl->settleIfIdle();
-        });
-
-        const CorrelationContext parseContext = context;
-        const auto stopToken                  = stop;
-        const auto pageParser                 = parser;
-        try {
-            watcher->setFuture(
-                QtConcurrent::run([body = std::move(body), effectiveUrl = std::move(effectiveUrl), parseContext,
-                                   stopToken, pageParser]() mutable -> BandcampListingParseOutcome {
-                    try {
-                        const auto parsed = pageParser(body, effectiveUrl, parseContext, stopToken.get());
-                        return stopToken->load(std::memory_order_relaxed)
-                                 ? BandcampListingParseOutcome{ResolutionCancelled{}}
-                                 : parsed;
-                    }
-                    catch(...) {
-                        return ResolutionFailure{makeError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse,
-                                                           effectiveUrl, 0, QStringLiteral("listing"),
-                                                           QStringLiteral("listing parser dependency failed"))};
-                    }
-                }));
-        }
-        catch(...) {
-            watcher->deleteLater();
-            watcher->setParent(nullptr);
-            workerActive = false;
-            const QPointer<BandcampListingResolver> guard{owner};
-            report(ResolutionFailure{makeError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, pageUrl, 0,
-                                               QStringLiteral("listing"),
-                                               QStringLiteral("listing parser worker could not be started"))});
-            if(guard) {
-                settleIfIdle();
-            }
-        }
-    }
-
-    void report(BandcampListingParseOutcome outcome)
-    {
-        if(reported) {
-            return;
-        }
-        reported = true;
-        deadline.stop();
-        const QPointer<BandcampListingResolver> guard{owner};
-        try {
-            callback(std::move(outcome));
-        }
-        catch(...) {
-            qCWarning(BANDCAMP_RESOLVE) << "A listing outcome handler threw";
-        }
-        if(guard) {
-            settleIfIdle();
-        }
-    }
-
-    void settleIfIdle()
-    {
-        if(settled || fetchActive || workerActive) {
-            return;
-        }
-        if(!reported) {
-            report(ResolutionFailure{makeError(ResolutionErrorCode::FetchFailed, ResolutionStage::Fetch, pageUrl, 0,
-                                               QStringLiteral("listing"),
-                                               QStringLiteral("listing workflow ended without an outcome"))});
-            return;
-        }
-        settled = true;
-        const QPointer<BandcampListingResolver> guard{owner};
-        if(slotHeld) {
-            slotHeld = false;
-            workflowSlots->release();
-            if(!guard) {
-                return;
-            }
-        }
-        emit owner->physicallyQuiescent();
-    }
-};
-
-BandcampListingResolver::BandcampListingResolver(QNetworkAccessManager* network, BandcampOperationId operationId,
-                                                 QUrl pageUrl, int timeoutMs, BandcampListingParser parser,
-                                                 std::shared_ptr<BandcampWorkflowSlots> workflowSlots,
-                                                 OutcomeCallback callback, QObject* parent)
-    : QObject{parent}
-    , m_impl{std::make_unique<Impl>(this, network, operationId, std::move(pageUrl), timeoutMs, std::move(parser),
-                                    std::move(workflowSlots), std::move(callback))}
-{ }
-
-BandcampListingResolver::~BandcampListingResolver()
-{
-    m_impl->stop->store(true, std::memory_order_relaxed);
-    m_impl->deadline.stop();
-    if(m_impl->fetchActive && m_impl->client && m_impl->requestId != 0) {
-        m_impl->client->cancel(m_impl->requestId);
-    }
-}
-
-void BandcampListingResolver::start()
-{
-    m_impl->start();
-}
-
-void BandcampListingResolver::cancel()
-{
-    m_impl->cancel();
-}
-
-struct BandcampResolver::Impl
-{
-    BandcampResolver* owner{nullptr};
+    BandcampReleaseResolver* owner{nullptr};
     BandcampClient* client{nullptr};
     BandcampOperationId operationId{0};
     QVector<BandcampReleaseRequest> pending;
@@ -940,7 +631,7 @@ struct BandcampResolver::Impl
     bool quietSent{false};
     bool pumpQueued{false};
 
-    Impl(BandcampResolver* resolver, QNetworkAccessManager* network, BandcampOperationId id,
+    Impl(BandcampReleaseResolver* resolver, QNetworkAccessManager* network, BandcampOperationId id,
          QVector<BandcampReleaseRequest> requests, OperationOptions operationOptions, BandcampPageParser pageParser,
          std::shared_ptr<BandcampWorkflowSlots> capacity)
         : owner{resolver}
@@ -961,7 +652,7 @@ struct BandcampResolver::Impl
             return;
         }
         started = true;
-        const QPointer<BandcampResolver> guard{owner};
+        const QPointer<BandcampReleaseResolver> guard{owner};
         pump();
         if(!guard) {
             return;
@@ -975,7 +666,7 @@ struct BandcampResolver::Impl
             return;
         }
         cancelled = true;
-        const QPointer<BandcampResolver> guard{owner};
+        const QPointer<BandcampReleaseResolver> guard{owner};
         while(nextRequest < pending.size()) {
             const BandcampReleaseRequest request = pending.at(nextRequest++);
             publish(request.key, ResolutionCancelled{});
@@ -1011,7 +702,7 @@ struct BandcampResolver::Impl
                     QStringLiteral("domain_cache_hit"),
                     {DiagnosticField::text(QStringLiteral("scope"), pageKindName(request.page.kind))});
                 ++nextRequest;
-                const QPointer<BandcampResolver> guard{owner};
+                const QPointer<BandcampReleaseResolver> guard{owner};
                 publish(request.key, ResolutionSuccess<BandcampResolvedData>{cache.value(identity)}, identity);
                 if(!guard) {
                     return;
@@ -1032,7 +723,7 @@ struct BandcampResolver::Impl
                 },
                 [this](const QString& key) { workflowSettled(key); }, owner);
             active.insert(request.key, workflow);
-            const QPointer<BandcampResolver> guard{owner};
+            const QPointer<BandcampReleaseResolver> guard{owner};
             emit owner->activeCountChanged(active.size());
             if(!guard) {
                 return;
@@ -1061,7 +752,7 @@ struct BandcampResolver::Impl
         outcomes.insert(key, std::move(outcome));
         const auto it = outcomes.constFind(key);
         if(it != outcomes.cend()) {
-            const QPointer<BandcampResolver> guard{owner};
+            const QPointer<BandcampReleaseResolver> guard{owner};
             ++outcomeDeliveryDepth;
             emit owner->keyedOutcomeReady(key, it.value());
             if(!guard) {
@@ -1083,7 +774,7 @@ struct BandcampResolver::Impl
         if(workflow) {
             workflow->deleteLater();
         }
-        const QPointer<BandcampResolver> guard{owner};
+        const QPointer<BandcampReleaseResolver> guard{owner};
         workflowSlots->release();
         if(!guard) {
             return;
@@ -1118,47 +809,48 @@ struct BandcampResolver::Impl
         }
         if(started && !completionSent && outcomes.size() == pending.size()) {
             completionSent = true;
-            const QPointer<BandcampResolver> guard{owner};
-            emit owner->completed(outcomes);
+            const QPointer<BandcampReleaseResolver> guard{owner};
+            emit owner->completed();
             if(!guard) {
                 return;
             }
         }
         if(completionSent && active.isEmpty() && !quietSent) {
             quietSent = true;
-            const QPointer<BandcampResolver> guard{owner};
+            const QPointer<BandcampReleaseResolver> guard{owner};
             emit owner->physicallyQuiescent();
         }
     }
 };
 
-BandcampResolver::BandcampResolver(QNetworkAccessManager* network, BandcampOperationId operationId,
-                                   QVector<BandcampReleaseRequest> requests, OperationOptions options,
-                                   BandcampPageParser parser, std::shared_ptr<BandcampWorkflowSlots> workflowSlots,
-                                   QObject* parent)
+BandcampReleaseResolver::BandcampReleaseResolver(QNetworkAccessManager* network, BandcampOperationId operationId,
+                                                 QVector<BandcampReleaseRequest> requests, OperationOptions options,
+                                                 BandcampPageParser parser,
+                                                 std::shared_ptr<BandcampWorkflowSlots> workflowSlots,
+                                                 QObject* parent)
     : QObject{parent}
     , m_impl{std::make_unique<Impl>(this, network, operationId, std::move(requests), options, std::move(parser),
                                     std::move(workflowSlots))}
 { }
 
-BandcampResolver::~BandcampResolver() = default;
+BandcampReleaseResolver::~BandcampReleaseResolver() = default;
 
-void BandcampResolver::start()
+void BandcampReleaseResolver::start()
 {
     m_impl->start();
 }
 
-void BandcampResolver::cancel()
+void BandcampReleaseResolver::cancel()
 {
     m_impl->cancel();
 }
 
-bool BandcampResolver::isComplete() const
+bool BandcampReleaseResolver::isComplete() const
 {
     return m_impl->completionSent;
 }
 
-qsizetype BandcampResolver::completedOutcomeCount() const
+qsizetype BandcampReleaseResolver::completedOutcomeCount() const
 {
     return static_cast<qsizetype>(m_impl->outcomes.size());
 }

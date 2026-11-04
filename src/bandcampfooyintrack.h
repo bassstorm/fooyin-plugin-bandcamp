@@ -1,27 +1,16 @@
 #pragma once
 
-#include "bandcampdiagnostics.h"
 #include "bandcampmodel.h"
+#include "bandcampurl.h"
 
-#include <core/library/musiclibrary.h>
 #include <core/track.h>
 #include <core/trackmetadatastore.h>
 
-#include <QElapsedTimer>
-#include <QFutureWatcher>
-#include <QMetaObject>
-#include <QObject>
-#include <QPointer>
-#include <QQueue>
+#include <QHash>
 
-#include <functional>
 #include <memory>
 #include <optional>
 #include <variant>
-
-namespace Fooyin {
-class PlaylistHandler;
-}
 
 namespace Fooyin::Bandcamp {
 inline constexpr auto StreamProviderProperty   = "_STREAM_PROVIDER";
@@ -30,118 +19,49 @@ inline constexpr auto BandcampStreamUrlProperty = "_BANDCAMP_STREAM_URL";
 inline constexpr auto BandcampExpiresAtProperty = "_BANDCAMP_EXPIRES_AT";
 inline constexpr auto BandcampTrackIdProperty   = "_BANDCAMP_TRACK_ID";
 
-[[nodiscard]] Fooyin::Track makeFooyinTrack(
-    const BandcampResolvedTrack& resolved,
-    std::shared_ptr<Fooyin::TrackMetadataStore> metadataStore = {});
-[[nodiscard]] std::optional<qint64> bandcampStreamExpiryMs(const QString& streamUrl);
-
-struct FooyinLibraryApi
+enum class BandcampExpiryState : quint8
 {
-    QPointer<QObject> owner;
-    std::function<Fooyin::TrackList()> tracks;
-    QPointer<QObject> playlistOwner;
-    // Copied in current playlist order, then occurrence order, on the owning thread.
-    std::function<Fooyin::TrackList()> playlistTracks;
-    std::function<std::shared_ptr<Fooyin::TrackMetadataStore>()> metadataStore;
-    std::function<Fooyin::WriteRequest(const Fooyin::TrackList&)> writeTrackMetadata;
+    Valid,
+    Unset,
+    Invalid,
 };
 
-[[nodiscard]] FooyinLibraryApi fooyinLibraryApi(Fooyin::MusicLibrary* library, Fooyin::PlaylistHandler* playlists);
-
-struct FooyinTrackCommitSuccess
+struct BandcampStreamExpiry
 {
-    // Occurrence count/order is identical to the incoming list. New tracks remain ID-less
-    // for the normal playlist insertion path.
-    Fooyin::TrackList tracks;
-    qsizetype updatedResidentCount{0};
-    qsizetype newIdentityCount{0};
+    BandcampExpiryState state{BandcampExpiryState::Unset};
+    qint64 milliseconds{0};
 };
 
-enum class FooyinTrackCommitErrorCode : quint8
+struct BandcampPersistedTransport
 {
-    Cancelled,
-    InvalidIdentity,
-    MissingResident,
-    InvalidTimeout,
-    LibraryUnavailable,
-    WrongThread,
-    PersistenceFailed,
-    HostOperationFailed,
+    BandcampPageUrl source;
+    QString streamUrl;
+    BandcampStreamExpiry expiry;
 };
 
-struct FooyinTrackCommitFailure
+struct BandcampTransportFailure
 {
-    FooyinTrackCommitErrorCode code{FooyinTrackCommitErrorCode::HostOperationFailed};
-    qint64 trackId{0};
     QString reason;
 };
 
-using FooyinTrackCommitOutcome = std::variant<FooyinTrackCommitSuccess, FooyinTrackCommitFailure>;
+using BandcampPersistedTransportResult = std::variant<BandcampPersistedTransport, BandcampTransportFailure>;
 
-class BandcampLibraryGateway final : public QObject
+class BandcampResolvedTrackLookup
 {
 public:
-    using Completion = std::function<void(FooyinTrackCommitOutcome)>;
-
-    explicit BandcampLibraryGateway(FooyinLibraryApi api, QObject* parent = nullptr);
-    ~BandcampLibraryGateway() override;
-
-    void cancel();
-    void commit(QList<BandcampResolvedTrack> incoming, int activeTimeoutMs, QObject* callbackContext,
-                CorrelationContext correlation, Completion completion);
-    void refreshTransport(BandcampResolvedTrack incoming, int activeTimeoutMs, QObject* callbackContext,
-                          CorrelationContext correlation, Completion completion);
+    explicit BandcampResolvedTrackLookup(const BandcampResolvedData& data);
+    [[nodiscard]] std::optional<BandcampResolvedTrack> find(qint64 id) const;
 
 private:
-    void enqueue(QList<BandcampResolvedTrack> incoming, int activeTimeoutMs, QObject* callbackContext,
-                 CorrelationContext correlation, Completion completion, bool refreshOnly);
-    struct CommitRequest
-    {
-        quint64 token{0};
-        QList<BandcampResolvedTrack> incoming;
-        int activeTimeoutMs{0};
-        QPointer<QObject> callbackContext;
-        CorrelationContext correlation;
-        Completion completion;
-        QMetaObject::Connection receiverDestroyed;
-        bool refreshOnly{false};
-    };
-
-    struct ActiveCommit
-    {
-        CommitRequest request;
-        Fooyin::TrackList output;
-        Fooyin::TrackList writeTargets;
-        qsizetype newIdentityCount{0};
-        QPointer<QFutureWatcher<Fooyin::WriteResult>> watcher;
-        std::function<void()> cancelWrite;
-        QElapsedTimer deadline;
-        bool timedOut{false};
-        bool callbackDelivered{false};
-        bool withdrawn{false};
-        bool enteringWrite{false};
-    };
-
-    void scheduleNext();
-    void startNext();
-    void start(const CommitRequest& request);
-    void onWriteFinished(quint64 token);
-    void onTimeout(quint64 token);
-    void withdraw(quint64 token);
-    void failActive(FooyinTrackCommitFailure error);
-    void finishActive(FooyinTrackCommitOutcome outcome);
-    void abandonActive();
-    void deliver(QObject* context, Completion completion, FooyinTrackCommitOutcome outcome,
-                 const CorrelationContext& correlation) const;
-    void traceTransportChange(const CorrelationContext& context, const Fooyin::Track& previous,
-                              const Fooyin::Track& updated) const;
-    void logFailure(const CorrelationContext& context, const FooyinTrackCommitFailure& failure) const;
-
-    FooyinLibraryApi m_api;
-    QQueue<CommitRequest> m_pending;
-    std::optional<ActiveCommit> m_active;
-    quint64 m_nextToken{1};
-    bool m_nextScheduled{false};
-    bool m_cancelled{false};
+    QHash<qint64, const BandcampTrack*> m_tracks;
+    const BandcampAlbumMetadata* m_album{nullptr};
 };
+
+[[nodiscard]] Fooyin::Track makeFooyinTrack(
+    const BandcampResolvedTrack& resolved,
+    std::shared_ptr<Fooyin::TrackMetadataStore> metadataStore = {});
+void setBandcampTransport(Fooyin::Track& track, const BandcampTrack& source);
+[[nodiscard]] std::optional<qint64> bandcampStreamExpiryMs(const QString& streamUrl);
+[[nodiscard]] BandcampPersistedTransportResult readBandcampPersistedTransport(const Fooyin::Track& track, qint64 id);
+[[nodiscard]] bool bandcampRefreshNeeded(BandcampStreamExpiry expiry, qint64 nowMs, qint64 windowMs);
 } // namespace Fooyin::Bandcamp

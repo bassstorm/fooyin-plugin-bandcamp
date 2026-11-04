@@ -1,4 +1,4 @@
-#include "bandcamprefresh.h"
+#include "bandcamprefreshcontroller.h"
 #include "bandcampsettings.h"
 #include "bandcampfakenetwork.h"
 #include "bandcamptestpages.h"
@@ -110,13 +110,13 @@ struct LibraryBoundary
 
 struct Capture
 {
-    explicit Capture(BandcampRefreshOperation& operation)
+    explicit Capture(BandcampRefreshController& operation)
     {
-        QObject::connect(&operation, &BandcampRefreshOperation::finished, &receiver, [this](const auto& value) {
+        QObject::connect(&operation, &BandcampRefreshController::finished, &receiver, [this](const auto& value) {
             summary = value;
             ++finishes;
         });
-        QObject::connect(&operation, &BandcampRefreshOperation::consumerFinished, &receiver,
+        QObject::connect(&operation, &BandcampRefreshController::consumerFinished, &receiver,
                          [this](qint64, const auto& value) { outcomes.append(value); });
     }
     QObject receiver;
@@ -131,8 +131,7 @@ class RefreshTests : public QObject
 private slots:
     void freshnessMeasuredBoundary();
     void selectionAndOptionsSnapshot();
-    void transportAcquisitionPrecedesPersistenceAndMatchesTrackId();
-    void transportObserverCancellationDoesNotOrphanConsumers();
+    void transportWriteMatchesSelectedTrackWhenPersistenceFails();
     void groupedAlbumAndStandalonePreserveResidents();
     void atomicReleaseFailureAndMissingId();
     void persistedBoundaryFailuresAndUntrustedExpiry();
@@ -141,7 +140,7 @@ private slots:
     void cancellationDuringWriteCountsAcceptedAndDoesNotFinishEarly();
     void cancellationBeforeWriting();
     void withdrawalAndDeletion();
-    void localFailureAndObserverFaultsAreObservable();
+    void localFailuresAreObservableAndLaterRefreshSucceeds();
 };
 
 void RefreshTests::freshnessMeasuredBoundary()
@@ -167,12 +166,12 @@ void RefreshTests::freshnessMeasuredBoundary()
 void RefreshTests::selectionAndOptionsSnapshot()
 {
     FakeNetworkManager network;
-    BandcampService service{&network};
+    BandcampResolutionService service{&network};
     LibraryBoundary host;
     const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
     Fooyin::TrackList selected{Fooyin::Track{u"file:///local.mp3"_s}};
     QVERIFY(!hasSelectedBandcampTracks(selected));
-    BandcampRefreshOperation empty{&service, selected, {}, host.api};
+    BandcampRefreshController empty{&service, selected, {}, host.api};
     Capture emptyResult{empty};
     empty.start(now);
     QCOMPARE(emptyResult.finishes, 1);
@@ -182,7 +181,7 @@ void RefreshTests::selectionAndOptionsSnapshot()
     selected.push_back(selected.back());
     QVERIFY(hasSelectedBandcampTracks(selected));
     OperationOptions options;
-    BandcampRefreshOperation reusable{&service, selected, options, host.api};
+    BandcampRefreshController reusable{&service, selected, options, host.api};
     selected.clear();
     options.prePlaybackRefreshWindowMs = 0;
     Capture captured{reusable};
@@ -190,13 +189,16 @@ void RefreshTests::selectionAndOptionsSnapshot()
     QCOMPARE(captured.finishes, 1);
     QCOMPARE(captured.summary.unchanged, 1);
     QVERIFY(network.requested.empty());
+    QVERIFY(std::none_of(reusable.children().cbegin(), reusable.children().cend(), [](QObject* child) {
+        return dynamic_cast<BandcampLibraryGateway*>(child) != nullptr;
+    }));
 
     auto near = resident(7, AlbumUrl, now + 1000);
     host.library = {near};
     network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
     OperationOptions oneMinute;
     oneMinute.prePlaybackRefreshWindowMs = refreshWindowMilliseconds(1);
-    BandcampRefreshOperation refresh{&service, {near}, oneMinute, host.api};
+    BandcampRefreshController refresh{&service, {near}, oneMinute, host.api};
     oneMinute.prePlaybackRefreshWindowMs = 0;
     Capture refreshed{refresh};
     refresh.start(now);
@@ -204,17 +206,17 @@ void RefreshTests::selectionAndOptionsSnapshot()
     QCOMPARE(refreshed.summary.updated, 1);
     QCOMPARE(network.requested.size(), 1);
 
-    BandcampRefreshOperation zero{&service, {near}, oneMinute, host.api};
+    BandcampRefreshController zero{&service, {near}, oneMinute, host.api};
     Capture zeroResult{zero};
     zero.start(now);
     QCOMPARE(zeroResult.summary.unchanged, 1);
     QCOMPARE(network.requested.size(), 1);
 }
 
-void RefreshTests::transportAcquisitionPrecedesPersistenceAndMatchesTrackId()
+void RefreshTests::transportWriteMatchesSelectedTrackWhenPersistenceFails()
 {
     FakeNetworkManager network;
-    BandcampService service{&network};
+    BandcampResolutionService service{&network};
     LibraryBoundary host;
     const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
     const qint64 firstExpiry = now + 7'200'000;
@@ -227,86 +229,22 @@ void RefreshTests::transportAcquisitionPrecedesPersistenceAndMatchesTrackId()
                                               {row(7, firstExpiry), row(8, selectedExpiry)})};
     });
 
-    BandcampRefreshOperation operation{&service, {selected}, {}, host.api};
+    BandcampRefreshController operation{&service, {selected}, {}, host.api};
     Capture result{operation};
-    int preparedCount{0};
-    QObject::connect(&operation, &BandcampRefreshOperation::transportPrepared, &operation,
-                     [&](qint64 id, const QString& sourceUrl, const QString& streamUrl, qint64 expiresAtMs,
-                         bool refreshed) {
-        ++preparedCount;
-        QCOMPARE(id, qint64{8});
-        QCOMPARE(sourceUrl, AlbumUrl);
-        QCOMPARE(streamUrl, stream(selectedExpiry));
-        QCOMPARE(expiresAtMs, selectedExpiry);
-        QVERIFY(refreshed);
-        QVERIFY(host.writes.empty());
-    });
     operation.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(result.finishes, 1, 3000);
-    QCOMPARE(preparedCount, 1);
     QCOMPARE(result.summary.failed, 1);
     QCOMPARE(result.summary.updated, 0);
     QCOMPARE(host.writes.size(), std::size_t{1});
+    QCOMPARE(host.writes.front().front().id(), 8);
+    QCOMPARE(host.writes.front().front().extraProperties().value(BandcampStreamUrlProperty), stream(selectedExpiry));
     QCOMPARE(network.requested.size(), 1);
-}
-
-void RefreshTests::transportObserverCancellationDoesNotOrphanConsumers()
-{
-    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
-    {
-        FakeNetworkManager network;
-        BandcampService service{&network};
-        LibraryBoundary host;
-        auto selected = resident(8, AlbumUrl, now - 1000);
-        host.library = {selected};
-        network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
-
-        BandcampRefreshOperation operation{&service, {selected}, {}, host.api};
-        Capture result{operation};
-        int prepared{0};
-        QObject::connect(&operation, &BandcampRefreshOperation::transportPrepared, &operation,
-                         [&](qint64, const QString&, const QString&, qint64, bool) {
-            ++prepared;
-            operation.cancel();
-        });
-        operation.start(now);
-        QTRY_COMPARE_WITH_TIMEOUT(result.finishes, 1, 3000);
-        QCOMPARE(prepared, 1);
-        QCOMPARE(result.summary.cancelled, 1);
-        QCOMPARE(result.summary.updated, 0);
-        QCOMPARE(result.summary.failed, 0);
-        QVERIFY(host.writes.empty());
-    }
-
-    {
-        FakeNetworkManager network;
-        BandcampService service{&network};
-        LibraryBoundary host;
-        const Fooyin::Track first = resident(7, AlbumUrl, now + 7'200'000);
-        const Fooyin::Track second = resident(8, AlbumUrl, now + 7'200'000);
-        BandcampRefreshOperation operation{&service, {first, second}, {}, host.api};
-        Capture result{operation};
-        int prepared{0};
-        QObject::connect(&operation, &BandcampRefreshOperation::transportPrepared, &operation,
-                         [&](qint64, const QString&, const QString&, qint64, bool) {
-            ++prepared;
-            operation.cancel();
-        });
-        operation.start(now);
-        QCOMPARE(result.finishes, 1);
-        QCOMPARE(prepared, 1);
-        QCOMPARE(result.summary.cancelled, 2);
-        QCOMPARE(result.summary.updated, 0);
-        QCOMPARE(result.summary.failed, 0);
-        QVERIFY(network.requested.empty());
-        QVERIFY(host.writes.empty());
-    }
 }
 
 void RefreshTests::groupedAlbumAndStandalonePreserveResidents()
 {
     FakeNetworkManager network;
-    BandcampService service{&network};
+    BandcampResolutionService service{&network};
     LibraryBoundary host;
     const auto now = QDateTime::currentMSecsSinceEpoch();
     host.library = {resident(7, AlbumUrl, now - 1000), resident(8, AlbumUrl, now - 1000),
@@ -318,7 +256,7 @@ void RefreshTests::groupedAlbumAndStandalonePreserveResidents()
     auto selected = host.library;
     selected.push_back(selected.front());
     selected.push_back(Fooyin::Track{u"file:///other.mp3"_s});
-    BandcampRefreshOperation operation{&service, selected, {}, host.api};
+    BandcampRefreshController operation{&service, selected, {}, host.api};
     Capture result{operation};
     operation.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(result.finishes, 1, 3000);
@@ -349,7 +287,7 @@ void RefreshTests::groupedAlbumAndStandalonePreserveResidents()
 void RefreshTests::atomicReleaseFailureAndMissingId()
 {
     FakeNetworkManager network;
-    BandcampService service{&network};
+    BandcampResolutionService service{&network};
     LibraryBoundary host;
     const auto now = QDateTime::currentMSecsSinceEpoch();
     host.library = {resident(7, AlbumUrl, now - 1000), resident(8, AlbumUrl, now - 1000),
@@ -358,7 +296,7 @@ void RefreshTests::atomicReleaseFailureAndMissingId()
         return FakeResponse{.body = request.url().path().startsWith(u"/album")
                                        ? album(now + 7'200'000, true) : solo(now + 7'200'000)};
     });
-    BandcampRefreshOperation operation{&service, host.library, {}, host.api};
+    BandcampRefreshController operation{&service, host.library, {}, host.api};
     Capture result{operation};
     operation.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(result.finishes, 1, 3000);
@@ -371,7 +309,7 @@ void RefreshTests::atomicReleaseFailureAndMissingId()
     QCOMPARE(host.writes.size(), std::size_t{1});
     QCOMPARE(host.writes.front().front().id(), 9);
     network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
-    BandcampRefreshOperation missing{&service, {resident(99, AlbumUrl, now - 1000)}, {}, host.api};
+    BandcampRefreshController missing{&service, {resident(99, AlbumUrl, now - 1000)}, {}, host.api};
     Capture missingResult{missing};
     missing.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(missingResult.finishes, 1, 3000);
@@ -383,7 +321,7 @@ void RefreshTests::atomicReleaseFailureAndMissingId()
 void RefreshTests::persistedBoundaryFailuresAndUntrustedExpiry()
 {
     FakeNetworkManager network;
-    BandcampService service{&network};
+    BandcampResolutionService service{&network};
     LibraryBoundary host;
     const auto now = QDateTime::currentMSecsSinceEpoch();
     network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
@@ -394,14 +332,14 @@ void RefreshTests::persistedBoundaryFailuresAndUntrustedExpiry()
              {BandcampStreamUrlProperty, u"http://t4.bcbits.com/stream/abc?ts=123"_s}}) {
         auto invalid = track;
         invalid.setExtraProperty(property, value);
-        BandcampRefreshOperation operation{&service, {invalid}, {}, host.api};
+        BandcampRefreshController operation{&service, {invalid}, {}, host.api};
         Capture result{operation};
         operation.start(now);
         QCOMPARE(result.summary.failed, 1);
     }
     auto invalidUri = track;
     invalidUri.setFilePath(u"bandcamp://track/07"_s);
-    BandcampRefreshOperation invalid{&service, {invalidUri}, {}, host.api};
+    BandcampRefreshController invalid{&service, {invalidUri}, {}, host.api};
     Capture invalidResult{invalid};
     invalid.start(now);
     QCOMPARE(invalidResult.summary.failed, 1);
@@ -412,14 +350,14 @@ void RefreshTests::persistedBoundaryFailuresAndUntrustedExpiry()
         host.library = {unknown};
         OperationOptions options;
         options.prePlaybackRefreshWindowMs = 0;
-        BandcampRefreshOperation operation{&service, {unknown}, options, host.api};
+        BandcampRefreshController operation{&service, {unknown}, options, host.api};
         Capture result{operation};
         operation.start(now);
         QTRY_COMPARE_WITH_TIMEOUT(result.finishes, 1, 3000);
         QCOMPARE(result.summary.updated, 1);
     }
     network.setResponder([now](const auto&) { return FakeResponse{.body = album(now - 1000)}; });
-    BandcampRefreshOperation expired{&service, {resident(7, AlbumUrl, now - 1000)}, {}, host.api};
+    BandcampRefreshController expired{&service, {resident(7, AlbumUrl, now - 1000)}, {}, host.api};
     Capture expiredResult{expired};
     expired.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(expiredResult.finishes, 1, 3000);
@@ -429,7 +367,7 @@ void RefreshTests::persistedBoundaryFailuresAndUntrustedExpiry()
         return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
                                              {streamEntry(R"("id":7,"title":"Unknown expiry")")})};
     });
-    BandcampRefreshOperation unknownFresh{&service, {resident(7, AlbumUrl, now - 1000)}, {}, host.api};
+    BandcampRefreshController unknownFresh{&service, {resident(7, AlbumUrl, now - 1000)}, {}, host.api};
     Capture unknownResult{unknownFresh};
     unknownFresh.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(unknownResult.finishes, 1, 3000);
@@ -472,13 +410,13 @@ void RefreshTests::queuedWriteReadsCurrentResidentAndFailsMissing()
 void RefreshTests::failedWriteIsNotUpdated()
 {
     FakeNetworkManager network;
-    BandcampService service{&network};
+    BandcampResolutionService service{&network};
     LibraryBoundary host;
     const auto now = QDateTime::currentMSecsSinceEpoch();
     host.library = {resident(7, AlbumUrl, now - 1000)};
     host.failWrite = true;
     network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
-    BandcampRefreshOperation operation{&service, host.library, {}, host.api};
+    BandcampRefreshController operation{&service, host.library, {}, host.api};
     Capture result{operation};
     operation.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(result.finishes, 1, 3000);
@@ -490,14 +428,14 @@ void RefreshTests::cancellationDuringWriteCountsAcceptedAndDoesNotFinishEarly()
 {
     for(int scenario = 0; scenario != 3; ++scenario) {
         FakeNetworkManager network;
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         LibraryBoundary host;
         host.failWrite = scenario == 1;
         host.writeState = scenario == 2 ? Fooyin::WriteState::Cancelled : Fooyin::WriteState::Completed;
         const auto now = QDateTime::currentMSecsSinceEpoch();
         host.library = {resident(7, AlbumUrl, now - 1000), resident(8, AlbumUrl, now - 1000)};
         network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
-        BandcampRefreshOperation operation{&service, host.library, {}, host.api};
+        BandcampRefreshController operation{&service, host.library, {}, host.api};
         Capture result{operation};
         host.writeHook = [&]() {
             operation.cancel();
@@ -514,10 +452,10 @@ void RefreshTests::cancellationDuringWriteCountsAcceptedAndDoesNotFinishEarly()
         network.setResponder([now](const auto&) {
             return FakeResponse{.body = album(now + 7'200'000), .holdDelivery = true};
         });
-        QPointer<BandcampService> dyingSource{new BandcampService{&network}};
-        auto* withdrawing = new BandcampRefreshOperation{dyingSource, host.library, {}, host.api};
+        QPointer<BandcampResolutionService> dyingSource{new BandcampResolutionService{&network}};
+        auto* withdrawing = new BandcampRefreshController{dyingSource, host.library, {}, host.api};
         Capture teardown{*withdrawing};
-        connect(dyingSource, &BandcampService::scopeResolved, &host.owner,
+        connect(dyingSource, &BandcampResolutionService::scopeResolved, &host.owner,
                 [&dyingSource]() { delete dyingSource; });
         const auto requestsBefore = network.requested.size();
         withdrawing->start(now);
@@ -532,16 +470,16 @@ void RefreshTests::cancellationDuringWriteCountsAcceptedAndDoesNotFinishEarly()
 void RefreshTests::withdrawalAndDeletion()
 {
     FakeNetworkManager network;
-    BandcampService service{&network};
+    BandcampResolutionService service{&network};
     LibraryBoundary host;
     const auto now = QDateTime::currentMSecsSinceEpoch();
     host.library = {resident(7, AlbumUrl, now - 1000)};
     network.setResponder([now](const auto&) {
         return FakeResponse{.body = album(now + 7'200'000), .holdDelivery = true};
     });
-    auto* operation = new BandcampRefreshOperation{&service, host.library, {}, host.api};
+    auto* operation = new BandcampRefreshController{&service, host.library, {}, host.api};
     Capture result{*operation};
-    BandcampRefreshOperation independent{&service, host.library, {}, host.api};
+    BandcampRefreshController independent{&service, host.library, {}, host.api};
     Capture independentResult{independent};
     operation->start(now);
     independent.start(now);
@@ -557,14 +495,14 @@ void RefreshTests::withdrawalAndDeletion()
     host.writes.clear();
 
     network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
-    QPointer<BandcampRefreshOperation> doomed
-        = new BandcampRefreshOperation{&service, host.library, {}, host.api};
+    QPointer<BandcampRefreshController> doomed
+        = new BandcampRefreshController{&service, host.library, {}, host.api};
     host.snapshotHook = [&]() { delete doomed; };
     doomed->start(now);
     QTRY_VERIFY_WITH_TIMEOUT(!doomed, 3000);
     QVERIFY(host.writes.empty());
     host.snapshotHook = {};
-    doomed = new BandcampRefreshOperation{&service, host.library, {}, host.api};
+    doomed = new BandcampRefreshController{&service, host.library, {}, host.api};
     host.writeHook = [&]() { delete doomed; };
     doomed->start(now);
     QTRY_VERIFY_WITH_TIMEOUT(!doomed, 3000);
@@ -575,14 +513,14 @@ void RefreshTests::withdrawalAndDeletion()
 void RefreshTests::cancellationBeforeWriting()
 {
     FakeNetworkManager network;
-    BandcampService service{&network};
+    BandcampResolutionService service{&network};
     LibraryBoundary host;
     const auto now = QDateTime::currentMSecsSinceEpoch();
     host.library = {resident(7, AlbumUrl, now - 1000)};
     network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
-    BandcampRefreshOperation queued{&service, host.library, {}, host.api};
+    BandcampRefreshController queued{&service, host.library, {}, host.api};
     Capture queuedResult{queued};
-    const auto connection = connect(&service, &BandcampService::operationFinished, &queued,
+    const auto connection = connect(&service, &BandcampResolutionService::operationFinished, &queued,
                                     [&queued]() { queued.cancel(); });
     queued.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(queuedResult.finishes, 1, 3000);
@@ -590,7 +528,7 @@ void RefreshTests::cancellationBeforeWriting()
     QVERIFY(host.writes.empty());
     disconnect(connection);
 
-    BandcampRefreshOperation reading{&service, host.library, {}, host.api};
+    BandcampRefreshController reading{&service, host.library, {}, host.api};
     Capture readingResult{reading};
     host.snapshotHook = [&]() { reading.cancel(); };
     reading.start(now);
@@ -599,7 +537,7 @@ void RefreshTests::cancellationBeforeWriting()
     QVERIFY(host.writes.empty());
 }
 
-void RefreshTests::localFailureAndObserverFaultsAreObservable()
+void RefreshTests::localFailuresAreObservableAndLaterRefreshSucceeds()
 {
     LogCapture logs{u"fy.bandcamp.tracks.warning=true"_s};
     LibraryBoundary host;
@@ -608,12 +546,12 @@ void RefreshTests::localFailureAndObserverFaultsAreObservable()
     invalidOne.setFilePath(u"bandcamp://track/07"_s);
     auto invalidTwo = invalidOne;
     invalidTwo.setFilePath(u"bandcamp://track/0"_s);
-    BandcampRefreshOperation absent{
+    BandcampRefreshController absent{
         nullptr, {resident(7, AlbumUrl, now - 1000), resident(8, AlbumUrl, now - 1000), invalidOne, invalidTwo},
         {}, host.api};
     Capture absentResult{absent};
     QList<qint64> identities;
-    connect(&absent, &BandcampRefreshOperation::consumerFinished, &absent,
+    connect(&absent, &BandcampRefreshController::consumerFinished, &absent,
             [&identities](qint64 id) { identities.append(id); });
     absent.start(now);
     QCOMPARE(absentResult.finishes, 1);
@@ -628,10 +566,10 @@ void RefreshTests::localFailureAndObserverFaultsAreObservable()
     }));
 
     FakeNetworkManager network;
-    BandcampService service{&network};
+    BandcampResolutionService service{&network};
     host.library = {resident(7, AlbumUrl, now - 1000)};
     network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
-    BandcampRefreshOperation observed{&service, host.library, {}, host.api};
+    BandcampRefreshController observed{&service, host.library, {}, host.api};
     Capture observedResult{observed};
     observed.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(observedResult.finishes, 1, 3000);
@@ -645,4 +583,4 @@ int runRefreshTests(int argc, char** argv)
     return QTest::qExec(&tests, argc, argv);
 }
 
-#include "bandcamprefreshtests.moc"
+#include "bandcamprefreshcontrollertests.moc"

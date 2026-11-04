@@ -1,4 +1,5 @@
 #include "bandcampplayback.h"
+#include "bandcampplaybackpreparation.h"
 #include "bandcampfakenetwork.h"
 #include "bandcamplogcapture.h"
 #include "bandcamptestpages.h"
@@ -12,6 +13,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QMetaObject>
+#include <QPromise>
 #include <QtTest>
 
 #include <algorithm>
@@ -22,6 +24,8 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 using namespace Qt::StringLiterals;
 using namespace Fooyin::Bandcamp;
@@ -49,6 +53,56 @@ Fooyin::Track playbackTrack(qint64 expiryMs)
     track.setExtraProperty(u"_USER_PROPERTY"_s, u"preserve me"_s);
     return track;
 }
+
+QByteArray playbackEntry(qint64 id, qint64 expiryMs)
+{
+    return "{\"id\":" + QByteArray::number(id) + ",\"title\":\"Selected\",\"file\":{\"mp3-128\":\""
+        + playbackStream(expiryMs).toUtf8() + "\"}}";
+}
+
+struct PlaybackLibrary
+{
+    PlaybackLibrary()
+    {
+        api.owner = &owner;
+        api.playlistOwner = &owner;
+        api.tracks = [this]() {
+            ++libraryReads;
+            return library;
+        };
+        api.playlistTracks = [this]() { return playlist; };
+        api.metadataStore = []() { return std::shared_ptr<Fooyin::TrackMetadataStore>{}; };
+        api.writeTrackMetadata = [this](const Fooyin::TrackList& targets) {
+            writes.push_back(targets);
+            pending = std::make_shared<QPromise<Fooyin::WriteResult>>();
+            pending->start();
+            return Fooyin::WriteRequest{[this]() { ++cancellations; }, pending->future()};
+        };
+    }
+
+    void finishWrite(bool success)
+    {
+        const int count = static_cast<int>(writes.back().size());
+        pending->addResult(Fooyin::WriteResult{Fooyin::WriteState::Completed, success ? count : 0,
+                                               success ? 0 : count});
+        pending->finish();
+    }
+
+    void finishCancelledWrite()
+    {
+        pending->addResult(Fooyin::WriteResult{Fooyin::WriteState::Cancelled, 0, 0});
+        pending->finish();
+    }
+
+    QObject owner;
+    FooyinLibraryApi api;
+    Fooyin::TrackList library;
+    Fooyin::TrackList playlist;
+    std::vector<Fooyin::TrackList> writes;
+    std::shared_ptr<QPromise<Fooyin::WriteResult>> pending;
+    int libraryReads{0};
+    int cancellations{0};
+};
 
 struct RemoteState
 {
@@ -284,20 +338,20 @@ private:
 
 struct PlaybackFixture
 {
-    PlaybackFixture(int remoteOpenSucceedsOn)
+    PlaybackFixture(int remoteOpenSucceedsOn, FooyinLibraryApi libraryApi = {})
     {
         settingsPath = QCoreApplication::applicationDirPath()
             + QStringLiteral("/bandcamp-playback-settings-%1.ini").arg(QCoreApplication::applicationPid());
         QFile::remove(settingsPath);
         settings = std::make_unique<Fooyin::SettingsManager>(settingsPath);
         network = std::make_shared<FakeNetworkManager>();
-        service = std::make_unique<BandcampService>(network.get());
+        service = std::make_unique<BandcampResolutionService>(network.get());
         audioLoader = std::make_shared<Fooyin::AudioLoader>();
         remoteState = std::make_shared<RemoteState>();
         remoteState->succeedsOn = remoteOpenSucceedsOn;
         remoteIo = std::make_unique<FixtureRemoteIo>(network, settings.get(), remoteState);
         bridge = std::make_shared<BandcampPlaybackBridge>(service.get(), audioLoader, remoteIo.get(),
-                                                          settings.get(), FooyinLibraryApi{});
+                                                          settings.get(), std::move(libraryApi));
     }
 
     ~PlaybackFixture()
@@ -317,7 +371,7 @@ struct PlaybackFixture
     QString settingsPath;
     std::unique_ptr<Fooyin::SettingsManager> settings;
     std::shared_ptr<FakeNetworkManager> network;
-    std::unique_ptr<BandcampService> service;
+    std::unique_ptr<BandcampResolutionService> service;
     std::shared_ptr<Fooyin::AudioLoader> audioLoader;
     std::shared_ptr<RemoteState> remoteState;
     std::unique_ptr<FixtureRemoteIo> remoteIo;
@@ -329,6 +383,13 @@ class PlaybackTests : public QObject
     Q_OBJECT
 
 private slots:
+    void cachedPreparationDoesNotCreateGateway();
+    void refreshedPreparationDoesNotWaitForPersistence();
+    void cancellationDuringPlaybackHandoffSkipsPersistence();
+    void invalidAndUnusablePlaybackTransportsFail();
+    void serviceDestroyedBeforeStartDoesNotProduceTwoOutcomes();
+    void shutdownWithdrawsPendingPersistence();
+    void serviceTeardownFailsPendingPreparation();
     void hostSchemeSelectionAndBoundedSameUrlReopen();
     void decoderOpenFailureDoesNotRetry();
     void shutdownWithdrawsPendingPreparation();
@@ -339,6 +400,233 @@ private slots:
     void preparationRejectsMainThreadCall();
     void delegateExceptionLatchesPlaybackFailure();
 };
+
+void PlaybackTests::cachedPreparationDoesNotCreateGateway()
+{
+    FakeNetworkManager network;
+    BandcampResolutionService service{&network};
+    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    const Fooyin::Track track = playbackTrack(now + 7'200'000);
+    BandcampPlaybackPreparation preparation{&service, track, {}, {}};
+    QString streamUrl;
+    int preparedCount{0};
+    int finishedCount{0};
+    int failedCount{0};
+    connect(&preparation, &BandcampPlaybackPreparation::prepared, &preparation, [&](const QString& value) {
+        streamUrl = value;
+        ++preparedCount;
+    });
+    connect(&preparation, &BandcampPlaybackPreparation::failed, &preparation, [&]() { ++failedCount; });
+    connect(&preparation, &BandcampPlaybackPreparation::finished, &preparation, [&]() { ++finishedCount; });
+    preparation.start(now);
+
+    QCOMPARE(preparedCount, 1);
+    QCOMPARE(finishedCount, 1);
+    QCOMPARE(failedCount, 0);
+    QCOMPARE(streamUrl, track.extraProperties().value(BandcampStreamUrlProperty));
+    QVERIFY(network.requested.isEmpty());
+    QVERIFY(std::none_of(preparation.children().cbegin(), preparation.children().cend(), [](QObject* child) {
+        return dynamic_cast<BandcampLibraryGateway*>(child) != nullptr;
+    }));
+}
+
+void PlaybackTests::refreshedPreparationDoesNotWaitForPersistence()
+{
+    for(int scenario = 0; scenario < 3; ++scenario) {
+        PlaybackLibrary host;
+        PlaybackFixture fixture{1, host.api};
+        const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+        const qint64 freshExpiry = now + 10'800'000;
+        Fooyin::Track original = playbackTrack(scenario == 1 ? now + 7'200'000 : now - 60'000);
+        original.setId(123);
+        if(scenario == 1) {
+            original.setExtraProperty(BandcampExpiresAtProperty, u"1"_s);
+        }
+        host.library = {original};
+        auto playlistCopy = original;
+        playlistCopy.setId(124);
+        playlistCopy.setTitle(u"Playlist edit"_s);
+        host.playlist = {playlistCopy};
+        fixture.network->setResponder([now, freshExpiry](const QNetworkRequest&) {
+            return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
+                                                 {playbackEntry(789, now + 7'200'000),
+                                                  playbackEntry(456, freshExpiry)})};
+        });
+
+        auto bridge = fixture.bridge;
+        auto work = std::async(std::launch::async, [bridge, original]() { return bridge->prepare(original, {}); });
+        QTRY_VERIFY_WITH_TIMEOUT(work.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready, 5000);
+        const auto result = work.get();
+        QVERIFY(std::holds_alternative<BandcampPlaybackBridge::PreparedTransport>(result));
+        QCOMPARE(std::get<BandcampPlaybackBridge::PreparedTransport>(result).streamUrl, playbackStream(freshExpiry));
+        QTRY_COMPARE_WITH_TIMEOUT(host.writes.size(), std::size_t{1}, 3000);
+        QVERIFY(host.pending);
+        QVERIFY(!host.pending->future().isFinished());
+        const auto& written = host.writes.front().front();
+        QCOMPARE(written.id(), 123);
+        QCOMPARE(written.filepath(), original.filepath());
+        QCOMPARE(written.title(), u"User-edited title"_s);
+        QCOMPARE(written.extraTag(u"MOOD"_s), original.extraTag(u"MOOD"_s));
+        QCOMPARE(written.extraProperties().value(u"_USER_PROPERTY"_s), u"preserve me"_s);
+        QCOMPARE(written.extraProperties().value(BandcampStreamUrlProperty), playbackStream(freshExpiry));
+        QCOMPARE(fixture.network->requested.size(), 1);
+
+        host.finishWrite(scenario != 2);
+        QTRY_VERIFY_WITH_TIMEOUT(fixture.service->findChildren<BandcampPlaybackPreparation*>().isEmpty(), 3000);
+    }
+}
+
+void PlaybackTests::cancellationDuringPlaybackHandoffSkipsPersistence()
+{
+    PlaybackLibrary host;
+    FakeNetworkManager network;
+    BandcampResolutionService service{&network};
+    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    Fooyin::Track original = playbackTrack(now - 60'000);
+    original.setId(123);
+    host.library = {original};
+    network.setResponder([now](const QNetworkRequest&) {
+        return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
+                                             {playbackEntry(456, now + 7'200'000)})};
+    });
+
+    BandcampPlaybackPreparation preparation{&service, original, {}, host.api};
+    int prepared{0};
+    int failed{0};
+    int finished{0};
+    connect(&preparation, &BandcampPlaybackPreparation::prepared, &preparation, [&](const QString&) {
+        ++prepared;
+        preparation.cancel();
+    });
+    connect(&preparation, &BandcampPlaybackPreparation::failed, &preparation, [&]() { ++failed; });
+    connect(&preparation, &BandcampPlaybackPreparation::finished, &preparation, [&]() { ++finished; });
+    preparation.start(now);
+
+    QTRY_COMPARE_WITH_TIMEOUT(finished, 1, 3000);
+    QCOMPARE(prepared, 1);
+    QCOMPARE(failed, 0);
+    QCOMPARE(network.requested.size(), 1);
+    QCOMPARE(host.libraryReads, 0);
+    QVERIFY(host.writes.empty());
+    QVERIFY(!preparation.findChild<BandcampLibraryGateway*>());
+    QCoreApplication::processEvents();
+    QCOMPARE(finished, 1);
+}
+
+void PlaybackTests::invalidAndUnusablePlaybackTransportsFail()
+{
+    FakeNetworkManager network;
+    BandcampResolutionService service{&network};
+    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    const Fooyin::Track valid = playbackTrack(now + 7'200'000);
+    for(const auto& [property, value] : QList<QPair<QString, QString>>{
+            {StreamProviderProperty, u"other"_s},
+            {BandcampSourceUrlProperty, u"https://artist.bandcamp.com/music"_s},
+            {BandcampStreamUrlProperty, u"http://t4.bcbits.com/stream/abc?ts=123"_s},
+            {BandcampTrackIdProperty, u"999"_s}}) {
+        auto invalid = valid;
+        invalid.setExtraProperty(property, value);
+        BandcampPlaybackPreparation preparation{&service, invalid, {}, {}};
+        int failures{0};
+        int finishes{0};
+        connect(&preparation, &BandcampPlaybackPreparation::failed, &preparation, [&]() { ++failures; });
+        connect(&preparation, &BandcampPlaybackPreparation::finished, &preparation, [&]() { ++finishes; });
+        preparation.start(now);
+        QCOMPARE(failures, 1);
+        QCOMPARE(finishes, 1);
+        QVERIFY(preparation.children().isEmpty());
+    }
+    QVERIFY(network.requested.isEmpty());
+
+    for(int scenario = 0; scenario < 2; ++scenario) {
+        network.setResponder([now, scenario](const QNetworkRequest&) {
+            const qint64 id = scenario == 0 ? 789 : 456;
+            const qint64 expiry = scenario == 0 ? now + 7'200'000 : now - 60'000;
+            return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
+                                                 {playbackEntry(id, expiry)})};
+        });
+        BandcampPlaybackPreparation preparation{&service, playbackTrack(now - 60'000), {}, {}};
+        int failures{0};
+        int finishes{0};
+        int prepared{0};
+        connect(&preparation, &BandcampPlaybackPreparation::failed, &preparation, [&]() { ++failures; });
+        connect(&preparation, &BandcampPlaybackPreparation::finished, &preparation, [&]() { ++finishes; });
+        connect(&preparation, &BandcampPlaybackPreparation::prepared, &preparation, [&]() { ++prepared; });
+        preparation.start(now);
+        QTRY_COMPARE_WITH_TIMEOUT(finishes, 1, 3000);
+        QCOMPARE(failures, 1);
+        QCOMPARE(prepared, 0);
+        QVERIFY(preparation.children().isEmpty());
+    }
+    QCOMPARE(network.requested.size(), 2);
+}
+
+void PlaybackTests::shutdownWithdrawsPendingPersistence()
+{
+    PlaybackLibrary host;
+    PlaybackFixture fixture{1, host.api};
+    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    Fooyin::Track original = playbackTrack(now - 60'000);
+    original.setId(123);
+    host.library = {original};
+    fixture.network->setResponder([now](const QNetworkRequest&) {
+        return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
+                                             {playbackEntry(456, now + 7'200'000)})};
+    });
+    auto bridge = fixture.bridge;
+    auto work = std::async(std::launch::async, [bridge, original]() { return bridge->prepare(original, {}); });
+    QTRY_VERIFY_WITH_TIMEOUT(work.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready, 5000);
+    QVERIFY(std::holds_alternative<BandcampPlaybackBridge::PreparedTransport>(work.get()));
+    QTRY_COMPARE_WITH_TIMEOUT(host.writes.size(), std::size_t{1}, 3000);
+
+    fixture.bridge->shutdown();
+    QCOMPARE(host.cancellations, 1);
+    host.finishCancelledWrite();
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.service->findChildren<BandcampPlaybackPreparation*>().isEmpty(), 3000);
+}
+
+void PlaybackTests::serviceDestroyedBeforeStartDoesNotProduceTwoOutcomes()
+{
+    FakeNetworkManager network;
+    auto service = std::make_unique<BandcampResolutionService>(&network);
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    BandcampPlaybackPreparation preparation{service.get(), playbackTrack(now - 60'000), {}, {}};
+    int failures{0};
+    int finishes{0};
+    int prepared{0};
+    connect(&preparation, &BandcampPlaybackPreparation::failed, &preparation, [&]() { ++failures; });
+    connect(&preparation, &BandcampPlaybackPreparation::finished, &preparation, [&]() { ++finishes; });
+    connect(&preparation, &BandcampPlaybackPreparation::prepared, &preparation, [&]() { ++prepared; });
+    service.reset();
+    QCOMPARE(failures, 0);
+    preparation.start(now);
+    QCOMPARE(failures, 1);
+    QCOMPARE(finishes, 1);
+    QCOMPARE(prepared, 0);
+    preparation.start(now);
+    preparation.cancel();
+    QCOMPARE(failures, 1);
+    QCOMPARE(finishes, 1);
+    QVERIFY(network.requested.isEmpty());
+}
+
+void PlaybackTests::serviceTeardownFailsPendingPreparation()
+{
+    PlaybackFixture fixture{1};
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    fixture.network->setResponder([](const QNetworkRequest&) {
+        return FakeResponse{.holdDelivery = true, .holdAfterAbort = true};
+    });
+    const Fooyin::Track track = playbackTrack(now - 60'000);
+    auto bridge = fixture.bridge;
+    auto work = std::async(std::launch::async, [bridge, track]() { return bridge->prepare(track, {}); });
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.network->requested.size(), 1, 3000);
+    fixture.service.reset();
+    QTRY_VERIFY_WITH_TIMEOUT(work.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready, 1000);
+    QVERIFY(std::holds_alternative<BandcampPlaybackBridge::Failure>(work.get()));
+    fixture.network->finishAbortedReplies();
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.network->liveReplyCount(), qsizetype{0}, 2000);
+}
 
 void PlaybackTests::hostSchemeSelectionAndBoundedSameUrlReopen()
 {

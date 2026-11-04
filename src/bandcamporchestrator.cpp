@@ -1,11 +1,19 @@
 #include "bandcamporchestrator.h"
 
 #include <algorithm>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
 namespace Fooyin::Bandcamp {
 namespace {
+QString listingPageKey(QUrl url)
+{
+    url.setFragment(QString());
+    url = url.adjusted(QUrl::NormalizePathSegments);
+    return url.toString(QUrl::FullyEncoded);
+}
+
 qint64 resolvedIdentity(const BandcampResolvedData& data)
 {
     return std::visit(
@@ -21,6 +29,28 @@ qint64 resolvedIdentity(const BandcampResolvedData& data)
         data);
 }
 } // namespace
+
+BandcampWorkflowSlots::BandcampWorkflowSlots(QObject* parent)
+    : QObject{parent}
+{ }
+
+bool BandcampWorkflowSlots::tryAcquire()
+{
+    if(m_active >= MaxParallelism) {
+        return false;
+    }
+    ++m_active;
+    return true;
+}
+
+void BandcampWorkflowSlots::release()
+{
+    if(m_active <= 0) {
+        return;
+    }
+    --m_active;
+    emit capacityAvailable();
+}
 
 BandcampOrchestrator::BandcampOrchestrator(const QList<BandcampPageUrl>& pages, BandcampDiscographyOrder order)
     : m_order{order}
@@ -75,22 +105,74 @@ bool BandcampOrchestrator::isComplete() const
     return isDiscoveryComplete() && m_nextGroup == m_groups.size() && m_delivered == occurrenceCount();
 }
 
-void BandcampOrchestrator::appendListingBatch(qsizetype inputOrdinal, const BandcampListingBatch& batch)
+std::optional<BandcampListingRequest> BandcampOrchestrator::nextDiscography()
 {
-    if(inputOrdinal < 0 || inputOrdinal >= m_groups.size()) {
-        return;
+    while(m_nextDiscovery < m_groups.size()) {
+        const qsizetype ordinal = m_nextDiscovery++;
+        const Group& group = m_groups.at(ordinal);
+        if(group.discography && !group.discoveryComplete) {
+            return BandcampListingRequest{ordinal, QUrl(group.inputPage.url)};
+        }
     }
+    return std::nullopt;
+}
+
+std::optional<ResolutionError> BandcampOrchestrator::beginListingPage(qsizetype inputOrdinal, const QUrl& url)
+{
+    Q_ASSERT(inputOrdinal >= 0 && inputOrdinal < m_groups.size());
     Group& group = m_groups[inputOrdinal];
-    if(!group.discography || group.discoveryComplete) {
-        return;
+    Q_ASSERT(group.discography && !group.discoveryComplete);
+    const QString key = listingPageKey(url);
+    if(key.isEmpty() || group.seenListingPages.contains(key)) {
+        return ResolutionError{ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Acquire, url, 0,
+                               QStringLiteral("listing.continuation"),
+                               QStringLiteral("discography continuation repeated a page")};
+    }
+    group.seenListingPages.insert(key);
+    group.requestedListingPage = url;
+    return std::nullopt;
+}
+
+std::optional<ResolutionError> BandcampOrchestrator::appendListingBatch(qsizetype inputOrdinal,
+                                                                       const BandcampListingBatch& batch)
+{
+    Q_ASSERT(inputOrdinal >= 0 && inputOrdinal < m_groups.size());
+    Group& group = m_groups[inputOrdinal];
+    Q_ASSERT(group.discography && !group.discoveryComplete);
+    const QUrl requestedUrl = group.requestedListingPage.isEmpty() ? QUrl(group.inputPage.url)
+                                                                   : group.requestedListingPage;
+    const QUrl effectiveUrl = batch.effectiveUrl.isValid() ? batch.effectiveUrl : requestedUrl;
+    const QString effectiveKey = listingPageKey(effectiveUrl);
+    if(effectiveKey != listingPageKey(requestedUrl)) {
+        if(group.seenListingPages.contains(effectiveKey)) {
+            return ResolutionError{ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Acquire,
+                                   effectiveUrl, 0, QStringLiteral("listing.continuation"),
+                                   QStringLiteral("discography redirect repeated a previously visited page")};
+        }
+        group.seenListingPages.insert(effectiveKey);
+    }
+
+    constexpr qsizetype maxCount = std::numeric_limits<qsizetype>::max();
+    const qsizetype previousSize = group.occurrences.size();
+    if(batch.references.size() > maxCount - previousSize) {
+        return ResolutionError{ResolutionErrorCode::ResourceLimitExceeded, ResolutionStage::Parse, effectiveUrl, 0,
+                               QStringLiteral("listing.ordinal"),
+                               QStringLiteral("discography listing ordinal overflow")};
     }
     const qsizetype previousCount = std::max<qsizetype>(1, group.occurrences.size());
+    const qsizetype addedCount = std::max<qsizetype>(1, previousSize + batch.references.size()) - previousCount;
+    if(addedCount > maxCount - m_occurrenceCount) {
+        return ResolutionError{ResolutionErrorCode::ResourceLimitExceeded, ResolutionStage::Parse, effectiveUrl, 0,
+                               QStringLiteral("listing.ordinal"),
+                               QStringLiteral("discography listing ordinal overflow")};
+    }
     for(const BandcampListingReference& reference : batch.references) {
         const QString key = addRequest(reference.page);
         group.occurrences.append({key, reference.page, reference.id, std::nullopt});
         registerRequest(inputOrdinal, key);
     }
-    m_occurrenceCount += std::max<qsizetype>(1, group.occurrences.size()) - previousCount;
+    m_occurrenceCount += addedCount;
+    return std::nullopt;
 }
 
 QVector<BandcampAssociatedOutcome> BandcampOrchestrator::completeDiscography(qsizetype inputOrdinal)
@@ -113,6 +195,8 @@ QVector<BandcampAssociatedOutcome> BandcampOrchestrator::completeDiscography(qsi
             {{}, group.inputPage, 0, BandcampResolutionOutcome{ResolutionFailure{std::move(error)}}});
     }
     group.discoveryComplete = true;
+    group.seenListingPages.clear();
+    group.requestedListingPage.clear();
     --m_pendingDiscoveries;
     return drain();
 }
@@ -128,9 +212,11 @@ QVector<BandcampAssociatedOutcome> BandcampOrchestrator::failDiscography(qsizety
         return {};
     }
     m_occurrenceCount -= std::max<qsizetype>(1, group.occurrences.size()) - 1;
+    removeGroupRequests(inputOrdinal);
     group.occurrences.clear();
     group.outputOrder.clear();
-    group.pendingKeys.clear();
+    group.seenListingPages.clear();
+    group.requestedListingPage.clear();
     group.nextOutput = 0;
     group.occurrences.append({{}, group.inputPage, 0, outcome});
     group.discoveryComplete = true;
@@ -147,10 +233,14 @@ QVector<BandcampAssociatedOutcome> BandcampOrchestrator::associate(const QString
 
 QVector<BandcampAssociatedOutcome> BandcampOrchestrator::cancelPending()
 {
-    for(Group& group : m_groups) {
+    for(qsizetype groupIndex = 0; groupIndex < m_groups.size(); ++groupIndex) {
+        Group& group = m_groups[groupIndex];
         if(group.discography && !group.discoveryComplete) {
             m_occurrenceCount -= std::max<qsizetype>(1, group.occurrences.size()) - 1;
+            removeGroupRequests(groupIndex);
             group.occurrences.clear();
+            group.seenListingPages.clear();
+            group.requestedListingPage.clear();
             group.occurrences.append({{}, group.inputPage, 0, BandcampResolutionOutcome{ResolutionCancelled{}}});
             group.discoveryComplete = true;
             --m_pendingDiscoveries;
@@ -179,15 +269,47 @@ QString BandcampOrchestrator::addRequest(const BandcampPageUrl& page)
 
 void BandcampOrchestrator::registerRequest(qsizetype groupIndex, const QString& key)
 {
-    if(groupIndex < 0 || groupIndex >= m_groups.size() || key.isEmpty() || m_outcomes.contains(key)) {
+    if(groupIndex < 0 || groupIndex >= m_groups.size() || key.isEmpty()) {
         return;
     }
     Group& group = m_groups[groupIndex];
-    if(group.pendingKeys.contains(key)) {
+    if(group.requestKeys.contains(key)) {
         return;
     }
-    group.pendingKeys.insert(key);
+    group.requestKeys.insert(key);
+    if(!m_outcomes.contains(key)) {
+        group.pendingKeys.insert(key);
+    }
     m_requestGroups[key].append(groupIndex);
+}
+
+void BandcampOrchestrator::removeGroupRequests(qsizetype groupIndex)
+{
+    Group& group = m_groups[groupIndex];
+    QSet<QString> removed;
+    for(const QString& key : std::as_const(group.requestKeys)) {
+        auto it = m_requestGroups.find(key);
+        Q_ASSERT(it != m_requestGroups.end());
+        it->removeAll(groupIndex);
+        if(it->isEmpty()) {
+            m_requestGroups.erase(it);
+            m_requestKeys.remove(key);
+            m_outcomes.remove(key);
+            removed.insert(key);
+        }
+    }
+    group.requestKeys.clear();
+    group.pendingKeys.clear();
+    while(!m_requests.isEmpty() && removed.remove(m_requests.last().key)) {
+        m_requests.removeLast();
+    }
+    if(!removed.isEmpty()) {
+        m_requests.erase(std::remove_if(m_requests.begin(), m_requests.end(),
+                                        [&removed](const BandcampReleaseRequest& request) {
+                                            return removed.contains(request.key);
+                                        }),
+                         m_requests.end());
+    }
 }
 
 void BandcampOrchestrator::recordOutcome(const QString& key, const BandcampResolutionOutcome& outcome)

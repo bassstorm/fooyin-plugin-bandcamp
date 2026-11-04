@@ -101,13 +101,13 @@ private slots:
         BandcampListingBatch batch;
         batch.references = {reference(u"https://artist.bandcamp.com/album/one"_s, 1, 0),
                             reference(u"https://artist.bandcamp.com/album/two"_s, 2, 1)};
-        orchestrator.appendListingBatch(0, batch);
+        QVERIFY(!orchestrator.appendListingBatch(0, batch));
         QCOMPARE(orchestrator.occurrenceCount(), 4);
         orchestrator.failDiscography(0, failure(u"continuation failed"_s));
         QCOMPARE(orchestrator.occurrenceCount(), 3);
         QVERIFY(!orchestrator.isDiscoveryComplete());
 
-        orchestrator.appendListingBatch(2, batch);
+        QVERIFY(!orchestrator.appendListingBatch(2, batch));
         QCOMPARE(orchestrator.occurrenceCount(), 4);
         orchestrator.cancelPending();
         QCOMPARE(orchestrator.occurrenceCount(), 3);
@@ -116,6 +116,87 @@ private slots:
         QVERIFY(orchestrator.isComplete());
         QVERIFY(orchestrator.cancelPending().isEmpty());
         QCOMPARE(orchestrator.occurrenceCount(), 3);
+    }
+
+    void failedDiscoveryRemovesOnlyUnsharedRequests()
+    {
+        const BandcampPageUrl artist = page(u"https://artist.bandcamp.com/music"_s);
+        const BandcampPageUrl shared = page(u"https://artist.bandcamp.com/album/shared"_s);
+        const BandcampPageUrl label = page(u"https://label.bandcamp.com/music"_s);
+        const BandcampPageUrl abandoned = page(u"https://artist.bandcamp.com/album/abandoned"_s);
+        const BandcampPageUrl kept = page(u"https://label.bandcamp.com/album/kept"_s);
+        BandcampOrchestrator orchestrator{{artist, shared, label}};
+
+        BandcampListingBatch first;
+        first.references = {reference(abandoned.url, 41, 0), reference(shared.url, 40, 1)};
+        QVERIFY(!orchestrator.appendListingBatch(0, first));
+        const QString sharedKey = orchestrator.requests().first().key;
+        QVERIFY(orchestrator.associate(sharedKey, albumOutcome(40, {})).isEmpty());
+
+        BandcampListingBatch second;
+        second.references = {reference(shared.url, 40, 0), reference(kept.url, 42, 1)};
+        QVERIFY(!orchestrator.appendListingBatch(2, second));
+        QCOMPARE(orchestrator.occurrenceCount(), 5);
+        QCOMPARE(orchestrator.requests().size(), 3);
+
+        const auto failed = orchestrator.failDiscography(0, failure(u"continuation failed"_s));
+        QCOMPARE(failed.size(), 2);
+        QVERIFY(std::holds_alternative<ResolutionFailure>(failed.at(0).outcome));
+        QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(failed.at(1).outcome));
+        QCOMPARE(orchestrator.occurrenceCount(), 4);
+        QCOMPARE(orchestrator.requests().size(), 2);
+        QCOMPARE(orchestrator.requests().at(0).page.url, shared.url);
+        QCOMPARE(orchestrator.requests().at(1).page.url, kept.url);
+
+        const auto sharedResult = orchestrator.completeDiscography(2);
+        QCOMPARE(sharedResult.size(), 1);
+        QCOMPARE(sharedResult.first().page.url, shared.url);
+        const auto keptResult = orchestrator.associate(orchestrator.requests().last().key, albumOutcome(42, {}));
+        QCOMPARE(keptResult.size(), 1);
+        QCOMPARE(keptResult.first().page.url, kept.url);
+        QVERIFY(orchestrator.isComplete());
+    }
+
+    void listingCyclesAndRedirectsAreTrackedPerDiscography()
+    {
+        const BandcampPageUrl artist = page(u"https://artist.bandcamp.com/music"_s);
+        const QUrl firstPage{artist.url};
+        const QUrl secondPage{u"https://artist.bandcamp.com/music?page=2"_s};
+        BandcampOrchestrator orchestrator{{artist, artist}};
+
+        const auto first = orchestrator.nextDiscography();
+        QVERIFY(first);
+        QCOMPARE(first->inputOrdinal, 0);
+        QVERIFY(!orchestrator.beginListingPage(first->inputOrdinal, first->url));
+        BandcampListingBatch batch;
+        batch.effectiveUrl = firstPage;
+        batch.references = {reference(u"https://artist.bandcamp.com/album/one"_s, 1, 0)};
+        QVERIFY(!orchestrator.appendListingBatch(0, batch));
+        const auto repeated = orchestrator.beginListingPage(
+            0, QUrl(u"https://artist.bandcamp.com/nested/../music#fragment"_s));
+        QVERIFY(repeated);
+        QCOMPARE(repeated->code, ResolutionErrorCode::RelationshipUnresolved);
+        orchestrator.failDiscography(0, ResolutionFailure{*repeated});
+        QVERIFY(orchestrator.requests().isEmpty());
+
+        const auto second = orchestrator.nextDiscography();
+        QVERIFY(second);
+        QCOMPARE(second->inputOrdinal, 1);
+        QVERIFY(!orchestrator.beginListingPage(second->inputOrdinal, second->url));
+        QVERIFY(!orchestrator.appendListingBatch(1, batch));
+        QVERIFY(!orchestrator.beginListingPage(1, secondPage));
+        BandcampListingBatch redirected;
+        redirected.effectiveUrl = firstPage;
+        redirected.references = {reference(u"https://artist.bandcamp.com/album/two"_s, 2, 0)};
+        const auto redirectError = orchestrator.appendListingBatch(1, redirected);
+        QVERIFY(redirectError);
+        QCOMPARE(redirectError->code, ResolutionErrorCode::RelationshipUnresolved);
+        QCOMPARE(redirectError->reason, u"discography redirect repeated a previously visited page"_s);
+        QCOMPARE(orchestrator.requests().size(), 1);
+        orchestrator.failDiscography(1, ResolutionFailure{*redirectError});
+        QVERIFY(orchestrator.requests().isEmpty());
+        QVERIFY(!orchestrator.nextDiscography());
+        QVERIFY(orchestrator.isComplete());
     }
 
     void ordersLargeChronologicalCollectionAfterSingleReadinessPass()
@@ -130,7 +211,7 @@ private slots:
         }
 
         BandcampOrchestrator orchestrator{{discography}, BandcampDiscographyOrder::Ascending};
-        orchestrator.appendListingBatch(0, batch);
+        QVERIFY(!orchestrator.appendListingBatch(0, batch));
         orchestrator.completeDiscography(0);
         QCOMPARE(orchestrator.requests().size(), Count);
 
@@ -164,7 +245,7 @@ private slots:
         batch.references = {reference(member.url, 2, 0), reference(album2022.url, 3, 1), reference(albumTie.url, 4, 2),
                             reference(unknown.url, 5, 3), reference(failed.url, 6, 4)};
         BandcampOrchestrator orchestrator{{discography, direct}, BandcampDiscographyOrder::Ascending};
-        orchestrator.appendListingBatch(0, batch);
+        QVERIFY(!orchestrator.appendListingBatch(0, batch));
         orchestrator.completeDiscography(0);
         QCOMPARE(orchestrator.requests().size(), 6);
 
@@ -207,7 +288,7 @@ private slots:
         BandcampListingBatch batch;
         batch.references = {reference(tie.url, 1, 0), reference(unknown.url, 2, 1), reference(newer.url, 3, 2)};
         BandcampOrchestrator orchestrator{{discography}, BandcampDiscographyOrder::Descending};
-        orchestrator.appendListingBatch(0, batch);
+        QVERIFY(!orchestrator.appendListingBatch(0, batch));
         orchestrator.completeDiscography(0);
 
         const auto requests = orchestrator.requests();
@@ -228,7 +309,7 @@ private slots:
         BandcampListingBatch batch;
         batch.references = {reference(one.url, 1, 0), reference(one.url, 999, 1), reference(two.url, 2, 2)};
         BandcampOrchestrator orchestrator{{discography}, BandcampDiscographyOrder::Unsorted};
-        orchestrator.appendListingBatch(0, batch);
+        QVERIFY(!orchestrator.appendListingBatch(0, batch));
         orchestrator.completeDiscography(0);
         QCOMPARE(orchestrator.requests().size(), 2);
 
@@ -258,9 +339,9 @@ private slots:
         labelBatch.references = {reference(label1.url, 3, 0), reference(label2.url, 4, 1)};
 
         BandcampOrchestrator orchestrator{{artist, direct, label}, BandcampDiscographyOrder::Ascending};
-        orchestrator.appendListingBatch(0, artistBatch);
+        QVERIFY(!orchestrator.appendListingBatch(0, artistBatch));
         orchestrator.completeDiscography(0);
-        orchestrator.appendListingBatch(2, labelBatch);
+        QVERIFY(!orchestrator.appendListingBatch(2, labelBatch));
         orchestrator.completeDiscography(2);
         QVERIFY(
             orchestrator.associate(orchestrator.requests().at(0).key, albumOutcome(50, QDate(2021, 1, 1))).isEmpty());

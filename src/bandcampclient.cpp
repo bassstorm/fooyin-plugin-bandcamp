@@ -106,14 +106,9 @@ BandcampClient::RequestId BandcampClient::fetch(const QUrl& url, Callback callba
             this,
             [self, callback = std::move(callback), url]() mutable {
                 if(self) {
-                    try {
-                        callback(BandcampFetchFailure{clientError(ResolutionErrorCode::UnsupportedRequest, url,
-                                                                  QStringLiteral("resourceUrl"),
-                                                                  QStringLiteral("unsupported request URL"))});
-                    }
-                    catch(...) {
-                        qCWarning(BANDCAMP_FETCH) << "A fetch completion handler threw";
-                    }
+                    callback(BandcampFetchFailure{clientError(ResolutionErrorCode::UnsupportedRequest, url,
+                                                              QStringLiteral("resourceUrl"),
+                                                              QStringLiteral("unsupported request URL"))});
                 }
             },
             Qt::QueuedConnection);
@@ -341,12 +336,7 @@ void BandcampClient::settle(RequestId id, BandcampFetchOutcome outcome)
             if(!guard) {
                 return;
             }
-            try {
-                callback(std::move(outcome));
-            }
-            catch(...) {
-                qCWarning(BANDCAMP_FETCH) << "A fetch completion handler threw";
-            }
+            callback(std::move(outcome));
         },
         Qt::QueuedConnection);
 }

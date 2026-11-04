@@ -1,4 +1,5 @@
 #include "bandcampfooyintrack.h"
+#include "bandcamplibrarygateway.h"
 #include "bandcampimportcontroller.h"
 #include "bandcamplogging.h"
 #include "bandcamptrackuri.h"

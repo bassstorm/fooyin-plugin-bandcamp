@@ -1,4 +1,4 @@
-#include "bandcampservice.h"
+#include "bandcampresolutionservice.h"
 
 #include "bandcamplogging.h"
 
@@ -7,7 +7,6 @@
 #include <QSet>
 #include <QTimer>
 
-#include <limits>
 #include <utility>
 
 namespace Fooyin::Bandcamp {
@@ -15,13 +14,6 @@ namespace {
 ResolutionError submissionError(ResolutionErrorCode code, const QUrl& url, QString field, QString reason)
 {
     return {code, ResolutionStage::Acquire, url, 0, std::move(field), std::move(reason)};
-}
-
-QString listingPageKey(QUrl url)
-{
-    url.setFragment(QString());
-    url = url.adjusted(QUrl::NormalizePathSegments);
-    return url.toString(QUrl::FullyEncoded);
 }
 
 class BandcampOperation final : public QObject
@@ -41,7 +33,6 @@ public:
         , m_network{network}
         , m_workflowSlots{std::move(workflowSlots)}
         , m_id{id}
-        , m_inputPages{pages}
         , m_options{options}
         , m_releaseParser{std::move(releaseParser)}
         , m_listingParser{std::move(listingParser)}
@@ -103,18 +94,13 @@ private:
         if(m_operationCancelled || m_finished) {
             return;
         }
-        while(m_nextInput < m_inputPages.size() && m_inputPages.at(m_nextInput).kind != BandcampPageKind::Discography) {
-            ++m_nextInput;
-        }
-        if(m_nextInput >= m_inputPages.size()) {
+        const auto discovery = m_orchestrator.nextDiscography();
+        if(!discovery) {
             startResolver();
             return;
         }
-        m_activeDiscoveryInput = m_nextInput++;
-        m_seenListingPages.clear();
-        m_discoveredReferences = 0;
-        m_activeListingReferences.clear();
-        startListing(QUrl(m_inputPages.at(m_activeDiscoveryInput).url));
+        m_activeDiscoveryInput = discovery->inputOrdinal;
+        startListing(discovery->url);
     }
 
     void startListing(const QUrl& url)
@@ -122,18 +108,14 @@ private:
         if(m_operationCancelled || m_finished) {
             return;
         }
-        const QString key = listingPageKey(url);
-        if(key.isEmpty() || m_seenListingPages.contains(key)) {
+        if(const auto error = m_orchestrator.beginListingPage(m_activeDiscoveryInput, url)) {
             const QPointer<BandcampOperation> guard{this};
-            failActiveDiscovery(ResolutionFailure{ResolutionError{
-                ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Acquire, url, 0,
-                QStringLiteral("listing.continuation"), QStringLiteral("discography continuation repeated a page")}});
+            failActiveDiscovery(ResolutionFailure{*error});
             if(guard) {
                 startDiscovery();
             }
             return;
         }
-        m_seenListingPages.insert(key);
         const auto id  = static_cast<BandcampOperationId>(m_id);
         auto* resolver = new BandcampListingResolver{
             m_network,
@@ -142,8 +124,8 @@ private:
             m_options.itemTimeoutMs,
             m_listingParser,
             m_workflowSlots,
-            [this, input = m_activeDiscoveryInput, requestedUrl = url](BandcampListingParseOutcome outcome) {
-                onListingOutcome(input, requestedUrl, std::move(outcome));
+            [this, input = m_activeDiscoveryInput](BandcampListingParseOutcome outcome) {
+                onListingOutcome(input, std::move(outcome));
             },
             this};
         m_listingResolvers.insert(resolver);
@@ -169,7 +151,7 @@ private:
         }
     }
 
-    void onListingOutcome(qsizetype inputOrdinal, const QUrl& requestedUrl, BandcampListingParseOutcome outcome)
+    void onListingOutcome(qsizetype inputOrdinal, BandcampListingParseOutcome outcome)
     {
         if(m_operationCancelled || m_finished || inputOrdinal != m_activeDiscoveryInput) {
             return;
@@ -191,42 +173,17 @@ private:
         }
 
         BandcampListingBatch batch = std::get<ResolutionSuccess<BandcampListingBatch>>(std::move(outcome)).value;
-        const QUrl effectiveUrl    = batch.effectiveUrl.isValid() ? batch.effectiveUrl : requestedUrl;
-        const QString effectiveKey = listingPageKey(effectiveUrl);
-        const QString requestedKey = listingPageKey(requestedUrl);
-        if(effectiveKey != requestedKey) {
-            if(m_seenListingPages.contains(effectiveKey)) {
-                failActiveDiscovery(ResolutionFailure{
-                    ResolutionError{ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Acquire, effectiveUrl,
-                                    0, QStringLiteral("listing.continuation"),
-                                    QStringLiteral("discography redirect repeated a previously visited page")}});
-                if(guard) {
-                    startDiscovery();
-                }
-                return;
-            }
-            m_seenListingPages.insert(effectiveKey);
-        }
-        if(batch.references.size() > std::numeric_limits<qsizetype>::max() - m_discoveredReferences) {
-            failActiveDiscovery(ResolutionFailure{ResolutionError{
-                ResolutionErrorCode::ResourceLimitExceeded, ResolutionStage::Parse, effectiveUrl, 0,
-                QStringLiteral("listing.ordinal"), QStringLiteral("discography listing ordinal overflow")}});
+        if(const auto error = m_orchestrator.appendListingBatch(inputOrdinal, batch)) {
+            failActiveDiscovery(ResolutionFailure{*error});
             if(guard) {
                 startDiscovery();
             }
             return;
         }
-        for(BandcampListingReference reference : std::as_const(batch.references)) {
-            reference.ordinal = m_discoveredReferences++;
-            m_activeListingReferences.append(std::move(reference));
-        }
         if(batch.continuation) {
             startListing(batch.continuation->locator);
             return;
         }
-        BandcampListingBatch completeBatch;
-        completeBatch.references = std::move(m_activeListingReferences);
-        m_orchestrator.appendListingBatch(inputOrdinal, completeBatch);
         deliverReady(m_orchestrator.completeDiscography(inputOrdinal));
         if(guard) {
             m_activeDiscoveryInput = -1;
@@ -244,9 +201,6 @@ private:
         }
         const qsizetype failedInput = m_activeDiscoveryInput;
         m_activeDiscoveryInput      = -1;
-        m_seenListingPages.clear();
-        m_discoveredReferences = 0;
-        m_activeListingReferences.clear();
         deliverReady(m_orchestrator.failDiscography(failedInput, outcome));
     }
 
@@ -275,10 +229,10 @@ private:
         if(m_resolver) {
             return;
         }
-        m_resolver = new BandcampResolver{m_network,       m_id, m_orchestrator.requests(), m_options, m_releaseParser,
-                                          m_workflowSlots, this};
+        m_resolver = new BandcampReleaseResolver{m_network, m_id, m_orchestrator.requests(), m_options,
+                                                 m_releaseParser, m_workflowSlots, this};
         QObject::connect(
-            m_resolver, &BandcampResolver::keyedOutcomeReady, this,
+            m_resolver, &BandcampReleaseResolver::keyedOutcomeReady, this,
             [this](const QString& key, const BandcampResolutionOutcome& outcome) {
                 const QString keyCopy = key;
                 const BandcampResolutionOutcome outcomeCopy = outcome;
@@ -288,14 +242,12 @@ private:
                     guard->onReleaseOutcome(keyCopy, outcomeCopy);
                 }
             });
-        QObject::connect(m_resolver, &BandcampResolver::activeCountChanged, this, [this](qsizetype active) {
+        QObject::connect(m_resolver, &BandcampReleaseResolver::activeCountChanged, this, [this](qsizetype active) {
             m_active = active;
             publishProgress();
         });
-        QObject::connect(
-            m_resolver, &BandcampResolver::completed, this,
-            [this](const QHash<QString, BandcampResolutionOutcome>& outcomes) { onResolverCompleted(outcomes); });
-        QObject::connect(m_resolver, &BandcampResolver::physicallyQuiescent, this, [this]() {
+        QObject::connect(m_resolver, &BandcampReleaseResolver::completed, this, [this]() { onResolverCompleted(); });
+        QObject::connect(m_resolver, &BandcampReleaseResolver::physicallyQuiescent, this, [this]() {
             m_resolverQuiescent = true;
             notifyQuiescent();
         });
@@ -306,19 +258,10 @@ private:
         deliverReady(m_orchestrator.associate(key, outcome));
     }
 
-    void onResolverCompleted(const QHash<QString, BandcampResolutionOutcome>& outcomes)
+    void onResolverCompleted()
     {
         if(m_resolverCompleted || m_finished) {
             return;
-        }
-        const QPointer<BandcampOperation> guard{this};
-        for(const BandcampReleaseRequest& request : m_orchestrator.requests()) {
-            const auto outcome = outcomes.constFind(request.key);
-            Q_ASSERT(outcome != outcomes.cend());
-            onReleaseOutcome(request.key, *outcome);
-            if(!guard) {
-                return;
-            }
         }
         m_resolverCompleted = true;
         finishIfReady();
@@ -414,23 +357,18 @@ private:
     QPointer<QNetworkAccessManager> m_network;
     std::shared_ptr<BandcampWorkflowSlots> m_workflowSlots;
     BandcampOperationId m_id{0};
-    QList<BandcampPageUrl> m_inputPages;
     OperationOptions m_options;
     BandcampPageParser m_releaseParser;
     BandcampListingParser m_listingParser;
     BandcampOrchestrator m_orchestrator;
-    BandcampResolver* m_resolver{nullptr};
+    BandcampReleaseResolver* m_resolver{nullptr};
     QSet<BandcampListingResolver*> m_listingResolvers;
     BandcampListingResolver* m_currentListingResolver{nullptr};
-    QSet<QString> m_seenListingPages;
-    QList<BandcampListingReference> m_activeListingReferences;
     ResultHandler m_resultHandler;
     ProgressHandler m_progressHandler;
     FinishedHandler m_finishedHandler;
     QuietHandler m_quietHandler;
-    qsizetype m_nextInput{0};
     qsizetype m_activeDiscoveryInput{-1};
-    qsizetype m_discoveredReferences{0};
     qsizetype m_outcomeDeliveryDepth{0};
     qsizetype m_succeeded{0};
     qsizetype m_failed{0};
@@ -445,17 +383,17 @@ private:
 };
 } // namespace
 
-struct BandcampService::Impl
+struct BandcampResolutionService::Impl
 {
-    BandcampService* owner{nullptr};
+    BandcampResolutionService* owner{nullptr};
     QNetworkAccessManager* network{nullptr};
-    BandcampServiceDependencies dependencies;
+    BandcampResolutionServiceDependencies dependencies;
     std::shared_ptr<BandcampWorkflowSlots> workflowSlots{std::make_shared<BandcampWorkflowSlots>()};
     QHash<BandcampOperationId, BandcampOperation*> operations;
     BandcampOperationId nextOperationId{1};
 
-    Impl(BandcampService* service, QNetworkAccessManager* networkManager,
-         BandcampServiceDependencies serviceDependencies)
+    Impl(BandcampResolutionService* service, QNetworkAccessManager* networkManager,
+         BandcampResolutionServiceDependencies serviceDependencies)
         : owner{service}
         , network{networkManager}
         , dependencies{std::move(serviceDependencies)}
@@ -493,7 +431,7 @@ struct BandcampService::Impl
             ++nextOperationId;
         }
         const BandcampOperationId id = nextOperationId++;
-        const QPointer<BandcampService> guard{owner};
+        const QPointer<BandcampResolutionService> guard{owner};
         auto* operation = new BandcampOperation{network,
                                                 workflowSlots,
                                                 id,
@@ -549,20 +487,20 @@ struct BandcampService::Impl
     }
 };
 
-BandcampService::BandcampService(QNetworkAccessManager* network, QObject* parent,
-                                 BandcampServiceDependencies dependencies)
+BandcampResolutionService::BandcampResolutionService(QNetworkAccessManager* network, QObject* parent,
+                                                     BandcampResolutionServiceDependencies dependencies)
     : QObject{parent}
     , m_impl{std::make_unique<Impl>(this, network, std::move(dependencies))}
 { }
 
-BandcampService::~BandcampService() = default;
+BandcampResolutionService::~BandcampResolutionService() = default;
 
-BandcampSubmission BandcampService::submit(const QList<BandcampPageUrl>& pages, OperationOptions options)
+BandcampSubmission BandcampResolutionService::submit(const QList<BandcampPageUrl>& pages, OperationOptions options)
 {
     return m_impl->submit(pages, options);
 }
 
-void BandcampService::cancel(BandcampOperationId id)
+void BandcampResolutionService::cancel(BandcampOperationId id)
 {
     m_impl->cancel(id);
 }

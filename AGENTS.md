@@ -13,9 +13,9 @@ Each stage of the pipeline has one clear owner and responsibility:
 | **HTTP Client** (`bandcampclient.*`) | Bounded single-request HTTP fetch, redirect handling, effective URL, and reply lifetime. | Retries, HTML/JSON parsing, or caching. |
 | **Parser** (`bandcampparser.*`, `bandcamphtmlreader.*`) | Extracting Bandcamp `data-tralbum` JSON and discography listing structure into typed candidates with provenance. | Network requests, cross-page reconciliation, or final scope validity. |
 | **Assembly & Admission** (`bandcampassembly.*`) | Reconciling track and parent-album candidates, enforcing authority rules, and validating required fields for the requested scope. | Raw HTML/JSON access or heuristic title/number cleanup. |
-| **Post-Processors** (`bandcamppostprocessor.*`, `bandcampprocessors.*`) | Ordered semantic refinement of admitted album metadata (first) and track metadata (second). | Rejecting resources, removing tracks, changing identities/streams, or raw source access. |
-| **Resolver & Orchestrator** (`bandcampresolver.*`, `bandcamporchestrator.*`, `bandcampservice.*`) | Discography unfolding, request deduplication, parent acquisition, bounded parallelism, operation-scoped domain caching, and input-order preservation. | Source parsing or Fooyin database/playlist mutations. |
-| **Fooyin Integration** (`bandcampfooyintrack.*`, `bandcampimportcontroller.*`, `bandcamprefresh.*`, `bandcampplayback.*`, `bandcampplugin.*`) | Projecting domain tracks to Fooyin tracks, one-way snapshot transport writes, playlist import, stream refresh, and playback bridging. | Metadata normalization or Bandcamp source interpretation. |
+| **Post-Processors** (`bandcamppostprocessor.*`) | Ordered semantic refinement of admitted album metadata (first) and track metadata (second). | Rejecting resources, removing tracks, changing identities/streams, or raw source access. |
+| **Resolver & Orchestrator** (`bandcamplistingresolver.*`, `bandcampreleaseresolver.*`, `bandcamporchestrator.*`, `bandcampresolutionservice.*`) | Discography unfolding, request deduplication, parent acquisition, bounded parallelism, operation-scoped domain caching, and input-order preservation. | Source parsing or Fooyin database/playlist mutations. |
+| **Fooyin Integration** (`bandcampfooyintrack.*`, `bandcamplibrarygateway.*`, `bandcampimportcontroller.*`, `bandcamprefreshcontroller.*`, `bandcampplaybackpreparation.*`, `bandcampplayback.*`, `bandcampprogressdialog.*`, `bandcampplugin.*`) | Projecting domain tracks to Fooyin tracks, one-way snapshot transport writes, playlist import, stream refresh, and playback bridging. | Metadata normalization or Bandcamp source interpretation. |
 
 Do not split a single state machine across layers or mix UI batch workflows with single-track audio-thread preparation.
 
@@ -30,7 +30,7 @@ Do not split a single state machine across layers or mix UI batch workflows with
 - **Validate untrusted input once at the entry boundary** that interprets it:
   - User URL inputs at the URL parser/dialog boundary (`bandcampurl.*`, `bandcampurldialog.*`).
   - Network responses and Bandcamp HTML/JSON at the HTTP client and parser boundaries (`bandcampclient.*`, `bandcampparser.*`).
-  - Persisted Fooyin `ExtraProperties` when reading transport state back from resident tracks (`bandcampfooyintrack.*`, `bandcamprefresh.*`).
+  - Persisted Fooyin `ExtraProperties` when reading transport state back from resident tracks (`bandcampfooyintrack.*`).
   - Persisted user settings when loading configuration (`bandcampsettings.*`).
 - **Internal consumers trust producer contracts.** Once a value is parsed into a validated internal type or marked `Usable`, downstream layers (`Orchestrator`, `Resolver`, `Assembly`, `Post-Processors`, `Fooyin Track Projection`) must not re-parse URLs, re-clamp options, re-verify key uniqueness, or wrap internal callbacks/signals in defensive `try/catch` blocks.
 - **Stop at the deciding boundary.** When an owning stage determines a terminal failure for the requested scope, return that structured failure immediately rather than deferring or synthesizing fallback errors downstream.
@@ -56,7 +56,7 @@ Do not split a single state machine across layers or mix UI batch workflows with
 
 ### Source vs. Domain Separation
 
-- Bandcamp's web representation (`data-tralbum` JSON and discography HTML) is inconsistent in the wild. Only the parser reads it, producing typed candidates and provenance (`Explicit`, `Fallback`, `Inherited`, `Inferred`).
+- Bandcamp's web representation (`data-tralbum` JSON and discography HTML) is inconsistent in the wild. Only the parser reads it, producing typed candidates and provenance (`Explicit`, `Fallback`, `Inherited`, `Derived`).
 - Domain models (`BandcampAlbum`, `BandcampTrack` in [bandcampmodel.h](src/bandcampmodel.h)) admit only entities satisfying all required fields (positive stable ID, canonical release `sourceUrl`, nonblank title, and valid HTTPS `streamUrl` for tracks) and exclude parser/operational context.
 
 ### Upward-Only Fetch Direction
@@ -71,7 +71,7 @@ Do not split a single state machine across layers or mix UI batch workflows with
 
 - **Parent album authority:** The resolved parent album is authoritative for album metadata (`title`, `artist`, `releaseDate`, `sourceUrl`), declared membership, `trackTotal`, and album-backed track streams. An unavailable album child stream cannot be bypassed with an older track-page stream.
 - **Track facts vs. album facts:** Explicit album-child values (`title`, `artist`, `trackNumber`, `duration`) precede conflicting track-page equivalents, while missing child fields may fall back to explicit track-page values. Track-owned `releaseDate` preserves explicit track values and inherits the album date only when missing.
-- **Provenance precedence:** Inferred, fallback, or inherited values never overwrite explicit facts.
+- **Provenance precedence:** Derived, fallback, or inherited values never overwrite explicit facts.
 - **Narrow normalization:** Post-processors refine optional metadata (artist inference, dirty-title prefix stripping, track-number repair) only when preconditions hold across the stable sibling set, preserving required fields and legitimate artist/title differences.
 
 ### Scope & Atomicity
@@ -108,4 +108,3 @@ cmake --preset tests-sanitize
 cmake --build --preset tests-sanitize
 ctest --preset tests-ci --output-on-failure
 ```
-

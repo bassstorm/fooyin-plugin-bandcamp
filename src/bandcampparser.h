@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bandcampdiagnostics.h"
-#include "bandcampresolution.h"
+#include "bandcampoutcome.h"
 #include "bandcampurl.h"
 
 #include <QByteArray>
@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <optional>
+#include <utility>
 
 namespace Fooyin::Bandcamp {
 constexpr qsizetype MaxPageBytes        = 20 * 1024 * 1024;
@@ -21,6 +22,56 @@ constexpr qsizetype MaxSourceRecords    = 100000;
 constexpr qsizetype MaxDeclaredTracks   = 10000;
 constexpr qint64 MaxDurationMs          = 604800000;
 constexpr qint64 MaxTrackNumber         = 100000;
+
+// Where a candidate value came from. Explicit values are read from the
+// resource's own data.
+enum class FieldProvenance : quint8
+{
+    Explicit,
+    Fallback,
+    Inherited,
+    Derived
+};
+
+QString provenanceName(FieldProvenance provenance);
+
+// Invalid is kept apart from Missing so a rejected source value is not mistaken
+// for an absent one.
+enum class FieldState : quint8
+{
+    Missing,
+    Invalid,
+    Usable
+};
+
+template <typename T>
+struct CandidateField
+{
+    FieldState state{FieldState::Missing};
+    // Semantic provenance only. Concrete JSONPaths stay in parser diagnostics.
+    FieldProvenance provenance{FieldProvenance::Explicit};
+    T value{};
+
+    [[nodiscard]] bool isUsable() const
+    {
+        return state == FieldState::Usable;
+    }
+
+    static CandidateField usable(T value, FieldProvenance provenance)
+    {
+        return CandidateField{FieldState::Usable, provenance, std::move(value)};
+    }
+
+    static CandidateField invalid()
+    {
+        return CandidateField{FieldState::Invalid, FieldProvenance::Explicit, T{}};
+    }
+
+    static CandidateField missing()
+    {
+        return CandidateField{};
+    }
+};
 
 struct TrackCandidate
 {

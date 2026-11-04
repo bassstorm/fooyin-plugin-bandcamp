@@ -1,7 +1,7 @@
 #pragma once
 
-#include "bandcampfooyintrack.h"
-#include "bandcampservice.h"
+#include "bandcamplibrarygateway.h"
+#include "bandcampresolutionservice.h"
 
 #include <core/engine/inputplugin.h>
 
@@ -38,7 +38,7 @@ public:
 
     using Preparation = std::variant<PreparedTransport, Failure>;
 
-    BandcampPlaybackBridge(BandcampService* service, std::shared_ptr<Fooyin::AudioLoader> audioLoader,
+    BandcampPlaybackBridge(BandcampResolutionService* service, std::shared_ptr<Fooyin::AudioLoader> audioLoader,
                            Fooyin::RemoteIoService* remoteIo, Fooyin::SettingsManager* settings,
                            FooyinLibraryApi libraryApi);
     ~BandcampPlaybackBridge();

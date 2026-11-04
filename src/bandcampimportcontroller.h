@@ -1,7 +1,7 @@
 #pragma once
 
-#include "bandcampfooyintrack.h"
-#include "bandcampservice.h"
+#include "bandcamplibrarygateway.h"
+#include "bandcampresolutionservice.h"
 
 #include <utils/id.h>
 

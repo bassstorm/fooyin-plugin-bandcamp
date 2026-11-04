@@ -1,7 +1,8 @@
 #pragma once
 
+#include "bandcamplistingresolver.h"
 #include "bandcamporchestrator.h"
-#include "bandcampresolver.h"
+#include "bandcampreleaseresolver.h"
 
 #include <QList>
 #include <QObject>
@@ -59,20 +60,20 @@ struct BandcampOperationSummary
     qsizetype cancelled{0};
 };
 
-struct BandcampServiceDependencies
+struct BandcampResolutionServiceDependencies
 {
     BandcampPageParser parseReleasePage;
     BandcampListingParser parseDiscographyPage;
 };
 
-class BandcampService : public QObject
+class BandcampResolutionService : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit BandcampService(QNetworkAccessManager* network, QObject* parent = nullptr,
-                             BandcampServiceDependencies dependencies = {});
-    ~BandcampService() override;
+    explicit BandcampResolutionService(QNetworkAccessManager* network, QObject* parent = nullptr,
+                                       BandcampResolutionServiceDependencies dependencies = {});
+    ~BandcampResolutionService() override;
 
     BandcampSubmission submit(const QList<BandcampPageUrl>& pages, OperationOptions options = {});
     void cancel(BandcampOperationId id);

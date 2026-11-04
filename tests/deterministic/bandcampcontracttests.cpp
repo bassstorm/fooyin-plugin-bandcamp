@@ -1,5 +1,6 @@
 #include "bandcampdiagnostics.h"
-#include "bandcampresolution.h"
+#include "bandcampoutcome.h"
+#include "bandcampparser.h"
 #include "bandcampsettings.h"
 
 #include <QtTest>

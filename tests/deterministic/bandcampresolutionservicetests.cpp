@@ -1,6 +1,7 @@
 #include "bandcampfakenetwork.h"
-#include "bandcampresolver.h"
-#include "bandcampservice.h"
+#include "bandcamplogcapture.h"
+#include "bandcampreleaseresolver.h"
+#include "bandcampresolutionservice.h"
 #include "bandcamptestpages.h"
 #include "bandcampurl.h"
 
@@ -10,6 +11,7 @@
 #include <QTimer>
 #include <QtTest>
 
+#include <algorithm>
 #include <memory>
 
 using namespace Qt::StringLiterals;
@@ -56,7 +58,7 @@ struct ResolverRun
     QHash<QString, BandcampResolutionOutcome> outcomes;
 };
 
-ServiceRun resolve(BandcampService& service, const QList<BandcampPageUrl>& pages, OperationOptions options = {})
+ServiceRun resolve(BandcampResolutionService& service, const QList<BandcampPageUrl>& pages, OperationOptions options = {})
 {
     ServiceRun run;
     QEventLoop loop;
@@ -64,9 +66,9 @@ ServiceRun resolve(BandcampService& service, const QList<BandcampPageUrl>& pages
     timeout.setSingleShot(true);
     timeout.start(7000);
     QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
-    QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+    QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
                      [&run](const BandcampScopeResult& result) { run.results.append(result); });
-    QObject::connect(&service, &BandcampService::operationFinished, &loop,
+    QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                      [&run, &loop](const BandcampOperationSummary& summary) {
                          run.finished = true;
                          run.summary  = summary;
@@ -95,15 +97,14 @@ ResolverRun resolveRequests(FakeNetworkManager& network, QVector<BandcampRelease
               return parseReleasePage(body, url, std::move(context), stop);
           };
     auto workflowCapacity = std::make_shared<BandcampWorkflowSlots>();
-    BandcampResolver resolver{
+    BandcampReleaseResolver resolver{
         &network, 1, std::move(requests), options, std::move(parser), std::move(workflowCapacity)};
     QObject::connect(
-        &resolver, &BandcampResolver::keyedOutcomeReady, &loop,
+        &resolver, &BandcampReleaseResolver::keyedOutcomeReady, &loop,
         [&run](const QString& key, const BandcampResolutionOutcome& outcome) { run.outcomes.insert(key, outcome); });
-    QObject::connect(&resolver, &BandcampResolver::completed, &loop,
-                     [&run, &loop](const QHash<QString, BandcampResolutionOutcome>& outcomes) {
+    QObject::connect(&resolver, &BandcampReleaseResolver::completed, &loop,
+                     [&run, &loop]() {
                          run.finished = true;
-                         run.outcomes = outcomes;
                          loop.quit();
                      });
 
@@ -120,7 +121,7 @@ BandcampPageUrl page(const QString& url)
 }
 } // namespace
 
-class BandcampServiceTests : public QObject
+class BandcampResolutionServiceTests : public QObject
 {
     Q_OBJECT
 
@@ -141,7 +142,7 @@ private slots:
             }
             return FakeResponse{.status = 404};
         });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
 
         const ServiceRun run = resolve(service, {page(AlbumUrl), page(TrackUrl), page(AlbumUrl), page(StandaloneUrl)},
                                        OperationOptions{3, 10000});
@@ -180,9 +181,10 @@ private slots:
 
     void serverErrorProducesOneOutcome()
     {
+        LogCapture logs{u"fy.bandcamp.resolve.warning=true\nfy.trace.bandcamp.resolve.debug=true"_s};
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.status = 503}; });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
 
         const ServiceRun run = resolve(service, {page(AlbumUrl)});
 
@@ -194,6 +196,26 @@ private slots:
         QVERIFY(failure);
         QCOMPARE(failure->error.code, ResolutionErrorCode::FetchFailed);
         QCOMPARE(network.requested.size(), 1);
+        QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
+            return log.category == u"fy.trace.bandcamp.resolve"_s
+                && log.message.contains(u"job=\"1\""_s)
+                && log.message.contains(u"release=\"https://artist.bandcamp.com/album/parent\""_s)
+                && log.message.contains(u"workflow_outcome"_s)
+                && log.message.contains(u"outcome=\"failure\""_s)
+                && log.message.contains(u"code=\"fetch_failed\""_s)
+                && log.message.contains(u"stage=\"fetch\""_s);
+        }));
+        QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
+            return log.category == u"fy.bandcamp.resolve"_s
+                && log.message.contains(u"job=\"1\""_s)
+                && log.message.contains(u"release=\"https://artist.bandcamp.com/album/parent\""_s)
+                && log.message.contains(u"scope_failed"_s)
+                && log.message.contains(u"ordinal=\"0\""_s)
+                && log.message.contains(u"code=\"fetch_failed\""_s)
+                && log.message.contains(u"stage=\"fetch\""_s)
+                && log.message.contains(u"field=\"httpStatus\""_s)
+                && log.message.contains(u"reason=\"HTTP 503\""_s);
+        }));
     }
 
     void cancellingFromResultDoesNotFinishBeforeOrderedResults()
@@ -205,7 +227,7 @@ private slots:
             }
             return FakeResponse{.body = SecondAlbumDocument};
         });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
@@ -215,14 +237,14 @@ private slots:
         int delivered                   = 0;
         int deliveredAtCompletion       = -1;
         BandcampOperationSummary summary;
-        QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
                          [&service, &operationId, &delivered](const BandcampScopeResult&) {
                              if(++delivered == 1) {
                                  service.cancel(operationId);
                              }
                          });
         QObject::connect(
-            &service, &BandcampService::operationFinished, &loop,
+            &service, &BandcampResolutionService::operationFinished, &loop,
             [&loop, &summary, &delivered, &deliveredAtCompletion](const BandcampOperationSummary& completed) {
                 summary               = completed;
                 deliveredAtCompletion = delivered;
@@ -242,6 +264,7 @@ private slots:
 
     void resolverCachesAdmittedResultsByPageIdentity()
     {
+        LogCapture logs{u"fy.trace.bandcamp.resolve.debug=true"_s};
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument}; });
 
@@ -258,6 +281,13 @@ private slots:
         QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(first.value()));
         QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(second.value()));
         QCOMPARE(network.requested.size(), 1);
+        QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
+            return log.category == u"fy.trace.bandcamp.resolve"_s
+                && log.message.contains(u"job=\"1\""_s)
+                && log.message.contains(u"release=\"https://artist.bandcamp.com/album/parent\""_s)
+                && log.message.contains(u"domain_cache_hit"_s)
+                && log.message.contains(u"scope=\"album\""_s);
+        }));
     }
 
     void resolverDoesNotCacheFailedResolutions()
@@ -280,18 +310,73 @@ private slots:
         QCOMPARE(network.requested.size(), 2);
     }
 
+    void resolverCompletesAfterReentrantOutcomeCancellation()
+    {
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument}; });
+        BandcampReleaseResolver resolver{
+            &network,
+            1,
+            {{u"first"_s, page(AlbumUrl)}, {u"second"_s, page(SecondAlbumUrl)},
+             {u"third"_s, page(u"https://artist.bandcamp.com/album/third"_s)}},
+            OperationOptions{1, 10000},
+            parseReleasePage,
+            std::make_shared<BandcampWorkflowSlots>()};
+
+        QHash<QString, BandcampResolutionOutcome> outcomes;
+        QStringList deliveredKeys;
+        int completions = 0;
+        qsizetype outcomesAtCompletion = -1;
+        bool insideFirstOutcome = false;
+        bool completedInsideOutcome = false;
+        QObject::connect(&resolver, &BandcampReleaseResolver::keyedOutcomeReady, &resolver,
+                         [&](const QString& key, const BandcampResolutionOutcome& outcome) {
+                             deliveredKeys.append(key);
+                             outcomes.insert(key, outcome);
+                             if(key == u"first"_s) {
+                                 insideFirstOutcome = true;
+                                 resolver.cancel();
+                                 insideFirstOutcome = false;
+                             }
+                         });
+        QObject::connect(&resolver, &BandcampReleaseResolver::completed, &resolver, [&]() {
+            ++completions;
+            outcomesAtCompletion = deliveredKeys.size();
+            completedInsideOutcome = insideFirstOutcome;
+        });
+
+        resolver.start();
+        QTRY_COMPARE_WITH_TIMEOUT(completions, 1, 3000);
+        QCOMPARE(outcomesAtCompletion, 3);
+        QVERIFY(!completedInsideOutcome);
+        QCOMPARE(deliveredKeys.size(), 3);
+        QCOMPARE(outcomes.size(), 3);
+        QCOMPARE(deliveredKeys.first(), u"first"_s);
+        const auto first = outcomes.constFind(u"first"_s);
+        const auto second = outcomes.constFind(u"second"_s);
+        const auto third = outcomes.constFind(u"third"_s);
+        QVERIFY(first != outcomes.cend());
+        QVERIFY(second != outcomes.cend());
+        QVERIFY(third != outcomes.cend());
+        QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(first.value()));
+        QVERIFY(std::holds_alternative<ResolutionCancelled>(second.value()));
+        QVERIFY(std::holds_alternative<ResolutionCancelled>(third.value()));
+        QCOMPARE(resolver.completedOutcomeCount(), 3);
+        QCOMPARE(network.requested.size(), 1);
+    }
+
     void separateOperationsDoNotSharePageRequests()
     {
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument}; });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
         timeout.start(5000);
         QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
         int finished = 0;
-        QObject::connect(&service, &BandcampService::operationFinished, &loop, [&finished, &loop]() {
+        QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop, [&finished, &loop]() {
             ++finished;
             if(finished == 2) {
                 loop.quit();
@@ -317,7 +402,7 @@ private slots:
             }
             return FakeResponse{.body = SecondAlbumDocument};
         });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
 
         const ServiceRun run = resolve(service, {page(AlbumUrl), page(SecondAlbumUrl)}, OperationOptions{1, 1000});
 
@@ -336,7 +421,7 @@ private slots:
     {
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.status = 503}; });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         QList<BandcampPageUrl> pages;
         for(int i = 0; i < 300; ++i) {
             pages.append(page(QStringLiteral("https://artist-%1.bandcamp.com/album/failure-%1").arg(i)));
@@ -360,8 +445,8 @@ private slots:
     {
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument}; });
-        auto* service = new BandcampService{&network};
-        QPointer<BandcampService> guard{service};
+        auto* service = new BandcampResolutionService{&network};
+        QPointer<BandcampResolutionService> guard{service};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
@@ -369,7 +454,7 @@ private slots:
         QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
         int resolved = 0;
         bool success = false;
-        QObject::connect(service, &BandcampService::scopeResolved, &loop,
+        QObject::connect(service, &BandcampResolutionService::scopeResolved, &loop,
                          [&service, &loop, &resolved, &success](const BandcampScopeResult& result) {
                              ++resolved;
                              success = std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(result.outcome);
@@ -402,8 +487,8 @@ private slots:
             }
             return FakeResponse{.status = 404};
         });
-        auto* service = new BandcampService{&network};
-        QPointer<BandcampService> guard{service};
+        auto* service = new BandcampResolutionService{&network};
+        QPointer<BandcampResolutionService> guard{service};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
@@ -411,7 +496,7 @@ private slots:
         QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
         int resolved = 0;
         bool failed  = false;
-        QObject::connect(service, &BandcampService::scopeResolved, &loop,
+        QObject::connect(service, &BandcampResolutionService::scopeResolved, &loop,
                          [&service, &loop, &resolved, &failed](const BandcampScopeResult& result) {
                              ++resolved;
                              failed = result.page.kind == BandcampPageKind::Discography
@@ -441,8 +526,8 @@ private slots:
         network.setResponder([](const QNetworkRequest&) {
             return FakeResponse{.status = 200, .body = "pending", .holdDelivery = true, .holdAfterAbort = true};
         });
-        auto* service = new BandcampService{&network};
-        QPointer<BandcampService> guard{service};
+        auto* service = new BandcampResolutionService{&network};
+        QPointer<BandcampResolutionService> guard{service};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
@@ -452,7 +537,7 @@ private slots:
         bool cancelScheduled            = false;
         int resolved                    = 0;
         bool cancelled                  = false;
-        QObject::connect(service, &BandcampService::scopeResolved, &loop,
+        QObject::connect(service, &BandcampResolutionService::scopeResolved, &loop,
                          [&service, &loop, &resolved, &cancelled](const BandcampScopeResult& result) {
                              ++resolved;
                              cancelled = std::holds_alternative<ResolutionCancelled>(result.outcome);
@@ -460,7 +545,7 @@ private slots:
                              service = nullptr;
                              loop.quit();
                          });
-        QObject::connect(service, &BandcampService::progressChanged, &loop,
+        QObject::connect(service, &BandcampResolutionService::progressChanged, &loop,
                          [&loop, &service, &operationId, &cancelScheduled](const BandcampOperationProgress& state) {
                              if(state.active == 0 || cancelScheduled) {
                                  return;
@@ -498,7 +583,7 @@ private slots:
             }
             return FakeResponse{.holdDelivery = true, .holdAfterAbort = true};
         });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         QList<BandcampPageUrl> pages;
         for(int i = 0; i < 300; ++i) {
             pages.append(page(QStringLiteral("https://artist.bandcamp.com/album/release-%1").arg(i)));
@@ -510,9 +595,9 @@ private slots:
         timeout.setSingleShot(true);
         timeout.start(5000);
         QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
-        QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
                          [&run](const BandcampScopeResult& result) { run.results.append(result); });
-        QObject::connect(&service, &BandcampService::operationFinished, &loop,
+        QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                          [&run, &loop](const BandcampOperationSummary& summary) {
                              run.finished = true;
                              run.summary  = summary;
@@ -521,7 +606,7 @@ private slots:
         const auto submission = service.submit(pages, OperationOptions{8, 10000});
         QVERIFY(std::holds_alternative<BandcampOperationAccepted>(submission));
         const BandcampOperationId operationId = std::get<BandcampOperationAccepted>(submission).id;
-        QPointer<BandcampResolver> resolverGuard{service.findChild<BandcampResolver*>()};
+        QPointer<BandcampReleaseResolver> resolverGuard{service.findChild<BandcampReleaseResolver*>()};
         QVERIFY(resolverGuard);
         QTimer::singleShot(1, &service, [&service, operationId]() { service.cancel(operationId); });
         loop.exec();
@@ -544,7 +629,7 @@ private slots:
         waitingTimeout.start(7000);
         QObject::connect(&waitingTimeout, &QTimer::timeout, &waitingLoop, &QEventLoop::quit);
         QObject::connect(
-            &service, &BandcampService::operationFinished, &waitingLoop,
+            &service, &BandcampResolutionService::operationFinished, &waitingLoop,
             [&waitingLoop, &waitingFinished, &waitingSummary, waitingId](const BandcampOperationSummary& summary) {
                 if(summary.operationId == waitingId) {
                     waitingFinished = true;
@@ -603,7 +688,7 @@ private slots:
             }
             return FakeResponse{.status = 404};
         });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         OperationOptions options;
         options.parallelism      = 2;
         options.discographyOrder = BandcampDiscographyOrder::Ascending;
@@ -626,7 +711,7 @@ private slots:
     void accumulatesMultipleListingPagesBeyondThePerPageValueLimit()
     {
         const BandcampPageUrl release = page(AlbumUrl);
-        BandcampServiceDependencies dependencies;
+        BandcampResolutionServiceDependencies dependencies;
         dependencies.parseReleasePage = [](const QByteArray&, const QUrl& url, CorrelationContext,
                                            const std::atomic_bool*) -> ReleaseParseOutcome {
             return ResolutionFailure{ResolutionError{ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, url, 0,
@@ -652,7 +737,7 @@ private slots:
 
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = "listing"}; });
-        BandcampService service{&network, nullptr, std::move(dependencies)};
+        BandcampResolutionService service{&network, nullptr, std::move(dependencies)};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
@@ -662,12 +747,12 @@ private slots:
         bool allFailed      = true;
         BandcampOperationSummary summary;
         bool finished = false;
-        QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
                          [&delivered, &allFailed](const auto& result) {
                              ++delivered;
                              allFailed = allFailed && std::holds_alternative<ResolutionFailure>(result.outcome);
                          });
-        QObject::connect(&service, &BandcampService::operationFinished, &loop,
+        QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                          [&summary, &finished, &loop](const BandcampOperationSummary& value) {
                              summary  = value;
                              finished = true;
@@ -693,6 +778,54 @@ private slots:
         QCOMPARE(network.requested.at(2).path(), u"/album/parent"_s);
     }
 
+    void discoveryProgressIncludesReferencesBeforeContinuationFinishes()
+    {
+        const QByteArray firstListing = discographyPage(
+            R"(<li data-item-id="album-40"><a href="/album/parent"></a></li><li data-item-id="album-41"><a href="/album/second"></a></li>)",
+            R"(<link rel="next" href="?page=2">)");
+        const QByteArray secondListing = discographyPage(
+            R"(<li data-item-id="album-40"><a href="/album/parent"></a></li>)");
+        FakeNetworkManager network;
+        network.setResponder([&](const QNetworkRequest& request) {
+            if(request.url().path() == u"/music"_s) {
+                return request.url().query().isEmpty() ? FakeResponse{.body = firstListing}
+                                                       : FakeResponse{.body = secondListing, .holdDelivery = true};
+            }
+            return FakeResponse{.body = request.url().path() == u"/album/parent"_s ? AlbumDocument
+                                                                                  : SecondAlbumDocument};
+        });
+        BandcampResolutionService service{&network};
+        QObject receiver;
+        QList<BandcampOperationProgress> progress;
+        QList<BandcampScopeResult> results;
+        std::optional<BandcampOperationSummary> summary;
+        QObject::connect(&service, &BandcampResolutionService::progressChanged, &receiver,
+                         [&progress](const auto& value) { progress.append(value); });
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &receiver,
+                         [&results](const auto& value) { results.append(value); });
+        QObject::connect(&service, &BandcampResolutionService::operationFinished, &receiver,
+                         [&summary](const auto& value) { summary = value; });
+
+        QVERIFY(std::holds_alternative<BandcampOperationAccepted>(
+            service.submit({page(u"https://artist.bandcamp.com/music"_s)})));
+        QTRY_COMPARE_WITH_TIMEOUT(network.requested.size(), 2, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(std::any_of(progress.cbegin(), progress.cend(), [](const auto& value) {
+            return value.phase == BandcampOperationPhase::Discovering && value.requested == 2;
+        }), 3000);
+        QVERIFY(results.isEmpty());
+        QVERIFY(!summary);
+
+        network.releaseHeldResponses();
+        QTRY_VERIFY_WITH_TIMEOUT(summary.has_value(), 3000);
+        QCOMPARE(summary->requested, 3);
+        QCOMPARE(summary->succeeded, 3);
+        QCOMPARE(results.size(), 3);
+        QCOMPARE(results.at(0).page.url, AlbumUrl);
+        QCOMPARE(results.at(1).page.url, SecondAlbumUrl);
+        QCOMPARE(results.at(2).page.url, AlbumUrl);
+        QCOMPARE(network.requested.size(), 4);
+    }
+
     void repeatedListingContinuationFailsCollectionWithoutResolvingPartialEntries()
     {
         const QByteArray firstListing = discographyPage(
@@ -707,7 +840,7 @@ private slots:
             }
             return FakeResponse{.body = AlbumDocument};
         });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
 
         const ServiceRun run = resolve(service, {page(u"https://artist.bandcamp.com/music"_s)});
         QVERIFY(run.finished);
@@ -718,6 +851,36 @@ private slots:
         QCOMPARE(run.results.first().page.kind, BandcampPageKind::Discography);
         QVERIFY(std::holds_alternative<ResolutionFailure>(run.results.first().outcome));
         QCOMPARE(network.requested.size(), 2);
+    }
+
+    void failedContinuationKeepsIndependentSharedReleaseOnly()
+    {
+        const QByteArray listing = discographyPage(
+            R"(<li data-item-id="album-40"><a href="/album/parent"></a></li><li data-item-id="album-41"><a href="/album/second"></a></li>)",
+            R"(<link rel="next" href="?page=2">)");
+        FakeNetworkManager network;
+        network.setResponder([&](const QNetworkRequest& request) {
+            if(request.url().path() == u"/music"_s) {
+                return request.url().query().isEmpty() ? FakeResponse{.body = listing} : FakeResponse{.status = 500};
+            }
+            return FakeResponse{.body = AlbumDocument};
+        });
+        BandcampResolutionService service{&network};
+
+        const ServiceRun run = resolve(service, {page(u"https://artist.bandcamp.com/music"_s), page(AlbumUrl)});
+        QVERIFY(run.finished);
+        QCOMPARE(run.summary.requested, 2);
+        QCOMPARE(run.summary.failed, 1);
+        QCOMPARE(run.summary.succeeded, 1);
+        QCOMPARE(run.results.size(), 2);
+        QVERIFY(std::holds_alternative<ResolutionFailure>(run.results.at(0).outcome));
+        QCOMPARE(run.results.at(1).page.url, AlbumUrl);
+        QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(run.results.at(1).outcome));
+        QCOMPARE(network.requested.size(), 3);
+        QCOMPARE(network.requested.last().path(), u"/album/parent"_s);
+        QVERIFY(std::none_of(network.requested.cbegin(), network.requested.cend(), [](const QUrl& url) {
+            return url.path() == u"/album/second"_s;
+        }));
     }
 
     void malformedDiscoveryDoesNotSuppressIndependentInputs()
@@ -732,7 +895,7 @@ private slots:
             }
             return FakeResponse{.status = 404};
         });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
 
         const ServiceRun run = resolve(service, {page(u"https://artist.bandcamp.com/music"_s), page(AlbumUrl)});
         QVERIFY(run.finished);
@@ -751,7 +914,7 @@ private slots:
         FakeNetworkManager network;
         network.setResponder(
             [](const QNetworkRequest&) { return FakeResponse{.holdDelivery = true, .holdAfterAbort = true}; });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
@@ -759,13 +922,13 @@ private slots:
         QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
         bool finished       = false;
         qsizetype cancelled = 0;
-        QObject::connect(&service, &BandcampService::scopeResolved, &loop, [&cancelled](const auto& result) {
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop, [&cancelled](const auto& result) {
             if(std::holds_alternative<ResolutionCancelled>(result.outcome)) {
                 ++cancelled;
             }
         });
         BandcampOperationSummary summary;
-        QObject::connect(&service, &BandcampService::operationFinished, &loop,
+        QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                          [&finished, &summary, &loop](const BandcampOperationSummary& value) {
                              finished = true;
                              summary  = value;
@@ -808,7 +971,7 @@ private slots:
             }
             return FakeResponse{.body = SecondAlbumDocument};
         });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
@@ -821,9 +984,9 @@ private slots:
         bool finished = false;
         BandcampOperationSummary summary;
         BandcampOperationId id = 0;
-        QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
                          [&results](const BandcampScopeResult& result) { results.append(result); });
-        QObject::connect(&service, &BandcampService::progressChanged, &loop,
+        QObject::connect(&service, &BandcampResolutionService::progressChanged, &loop,
                          [&progressValues, &results, &sawOrderedWait, &id](const BandcampOperationProgress& value) {
                              if(value.operationId != id) {
                                  return;
@@ -834,7 +997,7 @@ private slots:
                                  sawOrderedWait = true;
                              }
                          });
-        QObject::connect(&service, &BandcampService::operationFinished, &loop,
+        QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                          [&finished, &summary, &loop, &id](const BandcampOperationSummary& value) {
                              if(value.operationId == id) {
                                  summary = value;
@@ -871,7 +1034,7 @@ private slots:
     {
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument}; });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         QList<BandcampPageUrl> pages;
         for(int i = 0; i < 300; ++i) {
             pages.append(page(QStringLiteral("https://artist-%1.bandcamp.com/album/parent").arg(i)));
@@ -890,9 +1053,9 @@ private slots:
         bool finished = false;
         BandcampOperationSummary summary;
         BandcampOperationId id = 0;
-        QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
                          [&results](const BandcampScopeResult& result) { results.append(result); });
-        QObject::connect(&service, &BandcampService::progressChanged, &loop,
+        QObject::connect(&service, &BandcampResolutionService::progressChanged, &loop,
                          [&service, &progressValues, &results, &cancelledFromProgress,
                           &firstProgressHadNoOrderedResult, &id](const BandcampOperationProgress& value) {
                              if(value.operationId != id) {
@@ -906,7 +1069,7 @@ private slots:
                                  service.cancel(id);
                              }
                          });
-        QObject::connect(&service, &BandcampService::operationFinished, &loop,
+        QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                          [&finished, &summary, &loop, &id](const BandcampOperationSummary& value) {
                              if(value.operationId == id) {
                                  finished = true;
@@ -945,8 +1108,8 @@ private slots:
     {
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument}; });
-        auto* service = new BandcampService{&network};
-        QPointer<BandcampService> guard{service};
+        auto* service = new BandcampResolutionService{&network};
+        QPointer<BandcampResolutionService> guard{service};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
@@ -955,7 +1118,7 @@ private slots:
 
         bool deleted = false;
         BandcampOperationId id = 0;
-        QObject::connect(service, &BandcampService::progressChanged, &loop,
+        QObject::connect(service, &BandcampResolutionService::progressChanged, &loop,
                          [&service, &loop, &deleted, &id](const BandcampOperationProgress& progress) {
                              if(progress.operationId == id && progress.completedWork > 0) {
                                  delete service;
@@ -980,7 +1143,7 @@ private slots:
         network.setResponder([](const QNetworkRequest&) {
             return FakeResponse{.body = discographyPage({}), .delayMs = 30};
         });
-        BandcampService service{&network};
+        BandcampResolutionService service{&network};
         QEventLoop loop;
         QTimer timeout;
         timeout.setSingleShot(true);
@@ -992,15 +1155,15 @@ private slots:
         bool finished = false;
         BandcampOperationSummary summary;
         BandcampOperationId id = 0;
-        QObject::connect(&service, &BandcampService::progressChanged, &loop,
+        QObject::connect(&service, &BandcampResolutionService::progressChanged, &loop,
                          [&progressValues, &id](const BandcampOperationProgress& value) {
                              if(value.operationId == id) {
                                  progressValues.append(value);
                              }
                          });
-        QObject::connect(&service, &BandcampService::scopeResolved, &loop,
+        QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
                          [&results](const BandcampScopeResult& result) { results.append(result); });
-        QObject::connect(&service, &BandcampService::operationFinished, &loop,
+        QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                          [&finished, &summary, &loop, &id](const BandcampOperationSummary& value) {
                              if(value.operationId == id) {
                                  summary = value;
@@ -1030,8 +1193,8 @@ private slots:
 
 int runServiceTests(int argc, char** argv)
 {
-    BandcampServiceTests tests;
+    BandcampResolutionServiceTests tests;
     return QTest::qExec(&tests, argc, argv);
 }
 
-#include "bandcampservicetests.moc"
+#include "bandcampresolutionservicetests.moc"

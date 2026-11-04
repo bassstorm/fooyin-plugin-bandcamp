@@ -3,7 +3,6 @@
 #include "bandcampmodel.h"
 #include "bandcampparser.h"
 #include "bandcamppostprocessor.h"
-#include "bandcampprocessors.h"
 #include "bandcamptestpages.h"
 
 #include <QElapsedTimer>

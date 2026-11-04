@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bandcampdiagnostics.h"
-#include "bandcampresolution.h"
+#include "bandcampoutcome.h"
 
 #include <QByteArray>
 #include <QElapsedTimer>

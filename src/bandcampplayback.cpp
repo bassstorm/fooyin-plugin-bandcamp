@@ -1,7 +1,7 @@
 #include "bandcampplayback.h"
 
 #include "bandcamplogging.h"
-#include "bandcamprefresh.h"
+#include "bandcampplaybackpreparation.h"
 #include "bandcampsettings.h"
 #include "bandcamptrackuri.h"
 
@@ -48,7 +48,7 @@ struct PlaybackWaiter
     QString failure;
     std::chrono::steady_clock::time_point deadline
         = std::chrono::steady_clock::now() + PlaybackSourceDeadlineLimit;
-    QPointer<BandcampRefreshOperation> operation;
+    QPointer<BandcampPlaybackPreparation> operation;
 };
 
 void completeWaiter(const std::shared_ptr<PlaybackWaiter>& waiter, QString failure)
@@ -74,7 +74,7 @@ void playbackDiagnostic(qint64 trackId, const QString& event, const QString& rea
 
 struct BandcampPlaybackBridge::State
 {
-    QPointer<BandcampService> service;
+    QPointer<BandcampResolutionService> service;
     std::shared_ptr<Fooyin::AudioLoader> audioLoader;
     QPointer<Fooyin::RemoteIoService> remoteIo;
     std::mutex remoteIoMutex;
@@ -85,7 +85,7 @@ struct BandcampPlaybackBridge::State
     std::mutex waitersMutex;
     std::vector<std::weak_ptr<PlaybackWaiter>> waiters;
     std::mutex operationsMutex;
-    std::vector<QPointer<BandcampRefreshOperation>> operations;
+    std::vector<QPointer<BandcampPlaybackPreparation>> operations;
 
     void removeWaiter(const std::shared_ptr<PlaybackWaiter>& waiter)
     {
@@ -96,7 +96,7 @@ struct BandcampPlaybackBridge::State
         });
     }
 
-    void removeOperation(BandcampRefreshOperation* operation)
+    void removeOperation(BandcampPlaybackPreparation* operation)
     {
         const std::scoped_lock lock{operationsMutex};
         std::erase_if(operations, [operation](const auto& current) { return current.isNull() || current == operation; });
@@ -126,92 +126,82 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
         return;
     }
 
-    try {
-        FySettings settings;
-        const auto loaded = loadBandcampSettings(settings);
-        OperationOptions options;
-        options.parallelism = loaded.parallelism;
-        options.itemTimeoutMs = loaded.itemTimeoutMs;
-        options.discographyOrder = loaded.discographyOrder;
-        options.prePlaybackRefreshWindowMs
-            = refreshWindowMilliseconds(loaded.prePlaybackRefreshWindowMinutes);
-        const auto deadline = std::chrono::steady_clock::now()
-            + std::chrono::milliseconds{options.itemTimeoutMs};
-        {
-            const std::scoped_lock lock{waiter->mutex};
-            if(state->shuttingDown.load(std::memory_order_acquire)) {
-                waiter->completed = true;
-                waiter->failure = QStringLiteral("Playback preparation was withdrawn.");
-                waiter->changed.notify_all();
-                return;
-            }
-            if(waiter->cancelled || waiter->completed) {
-                waiter->completed = true;
-                waiter->failure = QStringLiteral("Playback preparation was cancelled.");
-                waiter->changed.notify_all();
-                return;
-            }
-            waiter->deadline = deadline;
+    FySettings settings;
+    const auto loaded = loadBandcampSettings(settings);
+    OperationOptions options;
+    options.parallelism = loaded.parallelism;
+    options.itemTimeoutMs = loaded.itemTimeoutMs;
+    options.discographyOrder = loaded.discographyOrder;
+    options.prePlaybackRefreshWindowMs
+        = refreshWindowMilliseconds(loaded.prePlaybackRefreshWindowMinutes);
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::milliseconds{options.itemTimeoutMs};
+    {
+        const std::scoped_lock lock{waiter->mutex};
+        if(state->shuttingDown.load(std::memory_order_acquire)) {
+            waiter->completed = true;
+            waiter->failure = QStringLiteral("Playback preparation was withdrawn.");
+            waiter->changed.notify_all();
+            return;
         }
-        waiter->changed.notify_all();
+        if(waiter->cancelled || waiter->completed) {
+            waiter->completed = true;
+            waiter->failure = QStringLiteral("Playback preparation was cancelled.");
+            waiter->changed.notify_all();
+            return;
+        }
+        waiter->deadline = deadline;
+    }
+    waiter->changed.notify_all();
 
-        auto* operation = new BandcampRefreshOperation{state->service, {track}, options, state->libraryApi,
-                                                       state->service};
-        {
-            const std::scoped_lock lock{state->operationsMutex, waiter->mutex};
-            if(state->shuttingDown.load(std::memory_order_acquire) || waiter->cancelled || waiter->completed) {
-                delete operation;
-                if(!waiter->completed) {
-                    waiter->completed = true;
-                    waiter->failure = state->shuttingDown.load(std::memory_order_acquire)
-                        ? QStringLiteral("Playback preparation was withdrawn.")
-                        : QStringLiteral("Playback preparation was cancelled.");
-                }
-                waiter->changed.notify_all();
-                return;
-            }
-            waiter->operation = operation;
-            state->operations.emplace_back(operation);
-        }
-        const std::weak_ptr weakState{state};
-        QObject::connect(operation, &BandcampRefreshOperation::transportPrepared, operation,
-                         [waiter, deadline](qint64, const QString&, const QString& streamUrl, qint64, bool) {
-            {
-                const std::scoped_lock lock{waiter->mutex};
-                if(waiter->cancelled || waiter->completed) {
-                    return;
-                }
-                waiter->transport = BandcampPlaybackBridge::PreparedTransport{streamUrl, deadline};
+    auto* operation = new BandcampPlaybackPreparation{state->service, track, options, state->libraryApi,
+                                                      state->service};
+    {
+        const std::scoped_lock lock{state->operationsMutex, waiter->mutex};
+        if(state->shuttingDown.load(std::memory_order_acquire) || waiter->cancelled || waiter->completed) {
+            delete operation;
+            if(!waiter->completed) {
+                waiter->completed = true;
+                waiter->failure = state->shuttingDown.load(std::memory_order_acquire)
+                    ? QStringLiteral("Playback preparation was withdrawn.")
+                    : QStringLiteral("Playback preparation was cancelled.");
             }
             waiter->changed.notify_all();
-        });
-        QObject::connect(operation, &BandcampRefreshOperation::consumerFinished, operation,
-                         [waiter](qint64, const BandcampRefreshOutcome& outcome) {
-            if(std::holds_alternative<BandcampRefreshFailure>(outcome)) {
-                completeWaiter(waiter, QStringLiteral("Bandcamp could not prepare a playable stream."));
-            }
-            else if(std::holds_alternative<BandcampRefreshCancelled>(outcome)) {
-                completeWaiter(waiter, QStringLiteral("Playback preparation was cancelled."));
-            }
-        });
-        QObject::connect(operation, &BandcampRefreshOperation::finished, operation,
-                         [weakState, waiter, operation](const BandcampRefreshSummary&) {
-            {
-                const std::scoped_lock lock{waiter->mutex};
-                if(waiter->operation == operation) {
-                    waiter->operation.clear();
-                }
-            }
-            if(const auto locked = weakState.lock()) {
-                locked->removeOperation(operation);
-            }
-            operation->deleteLater();
-        });
-        operation->start(QDateTime::currentMSecsSinceEpoch());
+            return;
+        }
+        waiter->operation = operation;
+        state->operations.emplace_back(operation);
     }
-    catch(...) {
-        completeWaiter(waiter, QStringLiteral("Starting playback preparation failed."));
-    }
+    const std::weak_ptr weakState{state};
+    QObject::connect(operation, &BandcampPlaybackPreparation::prepared, operation,
+                     [waiter, deadline](const QString& streamUrl) {
+        {
+            const std::scoped_lock lock{waiter->mutex};
+            if(waiter->cancelled || waiter->completed) {
+                return;
+            }
+            waiter->transport = BandcampPlaybackBridge::PreparedTransport{streamUrl, deadline};
+        }
+        waiter->changed.notify_all();
+    });
+    QObject::connect(operation, &BandcampPlaybackPreparation::failed, operation,
+                     [waiter](const QString& reason) {
+        completeWaiter(waiter, reason);
+    });
+    QObject::connect(operation, &BandcampPlaybackPreparation::finished, operation,
+                     [weakState, waiter, operation]() {
+        {
+            const std::scoped_lock lock{waiter->mutex};
+            if(waiter->operation == operation) {
+                waiter->operation.clear();
+            }
+        }
+        if(const auto locked = weakState.lock()) {
+            locked->removeOperation(operation);
+        }
+        operation->deleteLater();
+    });
+    operation->start(QDateTime::currentMSecsSinceEpoch());
 }
 
 void cancelPreparation(const std::weak_ptr<BandcampPlaybackBridge::State>& weakState,
@@ -223,27 +213,20 @@ void cancelPreparation(const std::weak_ptr<BandcampPlaybackBridge::State>& weakS
     }
     QMetaObject::invokeMethod(application, [weakState, waiter]() {
         if(const auto state = weakState.lock()) {
-            QPointer<BandcampRefreshOperation> operation;
+            QPointer<BandcampPlaybackPreparation> operation;
             {
                 const std::scoped_lock lock{waiter->mutex};
                 operation = waiter->operation;
             }
             if(operation) {
-                try {
-                    operation->cancel();
-                }
-                catch(...) {
-                    completeWaiter(waiter, QStringLiteral("Playback operation withdrawal failed."));
-                    playbackDiagnostic(0, QStringLiteral("playback.withdraw.failed"),
-                                       QStringLiteral("Withdrawing playback preparation failed."));
-                }
+                operation->cancel();
             }
         }
     }, Qt::QueuedConnection);
 }
 } // namespace
 
-BandcampPlaybackBridge::BandcampPlaybackBridge(BandcampService* service,
+BandcampPlaybackBridge::BandcampPlaybackBridge(BandcampResolutionService* service,
                                                std::shared_ptr<Fooyin::AudioLoader> audioLoader,
                                                Fooyin::RemoteIoService* remoteIo,
                                                Fooyin::SettingsManager* settings,
@@ -386,20 +369,14 @@ void BandcampPlaybackBridge::shutdown()
         state->remoteIo.clear();
     }
     auto cancelOperations = [state]() {
-        std::vector<QPointer<BandcampRefreshOperation>> operations;
+        std::vector<QPointer<BandcampPlaybackPreparation>> operations;
         {
             const std::scoped_lock lock{state->operationsMutex};
             operations = std::exchange(state->operations, {});
         }
-        for(const QPointer<BandcampRefreshOperation>& operation : operations) {
+        for(const QPointer<BandcampPlaybackPreparation>& operation : operations) {
             if(operation) {
-                try {
-                    operation->cancel();
-                }
-                catch(...) {
-                    playbackDiagnostic(0, QStringLiteral("playback.shutdown.withdraw.failed"),
-                                       QStringLiteral("Withdrawing an operation during shutdown failed."));
-                }
+                operation->cancel();
             }
         }
     };

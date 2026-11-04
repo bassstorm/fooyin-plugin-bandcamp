@@ -19,6 +19,21 @@
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::Bandcamp {
+QString provenanceName(FieldProvenance provenance)
+{
+    switch(provenance) {
+        case FieldProvenance::Explicit:
+            return QStringLiteral("explicit");
+        case FieldProvenance::Fallback:
+            return QStringLiteral("fallback");
+        case FieldProvenance::Inherited:
+            return QStringLiteral("inherited");
+        case FieldProvenance::Derived:
+            return QStringLiteral("derived");
+    }
+    return QStringLiteral("unknown");
+}
+
 namespace {
 using Private::decodeHtmlEntities;
 using Private::HtmlAttributes;

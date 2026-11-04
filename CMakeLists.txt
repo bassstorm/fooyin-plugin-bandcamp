@@ -42,12 +42,16 @@ target_link_libraries(bandcamp_core
 add_library(bandcamp_fooyin STATIC
     src/bandcampplayback.cpp
     src/bandcampplayback.h
+    src/bandcampplaybackpreparation.cpp
+    src/bandcampplaybackpreparation.h
     src/bandcampfooyintrack.cpp
     src/bandcampfooyintrack.h
+    src/bandcamplibrarygateway.cpp
+    src/bandcamplibrarygateway.h
     src/bandcampimportcontroller.cpp
     src/bandcampimportcontroller.h
-    src/bandcamprefresh.cpp
-    src/bandcamprefresh.h
+    src/bandcamprefreshcontroller.cpp
+    src/bandcamprefreshcontroller.h
 )
 set_target_properties(bandcamp_fooyin PROPERTIES
     AUTOMOC ON
@@ -64,8 +68,8 @@ create_fooyin_plugin(
     DEPENDS Fooyin::Gui Qt6::Concurrent bandcamp_core bandcamp_fooyin
     SOURCES src/bandcampplugin.cpp
             src/bandcampplugin.h
-            src/bandcampresultsdialog.cpp
-            src/bandcampresultsdialog.h
+            src/bandcampprogressdialog.cpp
+            src/bandcampprogressdialog.h
             src/bandcampsettingsdialog.cpp
             src/bandcampsettingsdialog.h
             src/bandcampurldialog.cpp
