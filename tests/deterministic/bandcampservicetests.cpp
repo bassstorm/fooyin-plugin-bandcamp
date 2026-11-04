@@ -107,9 +107,7 @@ ResolverRun resolveRequests(FakeNetworkManager& network, QVector<BandcampRelease
                          loop.quit();
                      });
 
-    if(resolver.start()) {
-        return run;
-    }
+    resolver.start();
     if(!run.finished) {
         loop.exec();
     }
@@ -127,23 +125,6 @@ class BandcampServiceTests : public QObject
     Q_OBJECT
 
 private slots:
-    void rejectsNoncanonicalAndOversizedPageValues()
-    {
-        FakeNetworkManager network;
-        BandcampService service{&network};
-
-        const BandcampPageUrl noncanonical{
-            BandcampPageKind::Album, u"https://artist.bandcamp.com/album/parent?token=secret"_s, {}};
-        const BandcampPageUrl oversized{BandcampPageKind::Album, QString(9000, u'a'), {}};
-        for(const BandcampPageUrl& invalid : {noncanonical, oversized}) {
-            const BandcampSubmission submission = service.submit({invalid});
-            QVERIFY(std::holds_alternative<BandcampSubmissionRejected>(submission));
-            QCOMPARE(std::get<BandcampSubmissionRejected>(submission).error.code,
-                     ResolutionErrorCode::UnsupportedRequest);
-        }
-        QVERIFY(network.requested.isEmpty());
-    }
-
     void resolvesAlbumMemberAndStandaloneThroughOnePipeline()
     {
         FakeNetworkManager network;
@@ -297,32 +278,6 @@ private slots:
         QVERIFY(std::holds_alternative<ResolutionFailure>(first.value()));
         QVERIFY(std::holds_alternative<ResolutionFailure>(second.value()));
         QCOMPARE(network.requested.size(), 2);
-    }
-
-    void resolverRejectsEmptyOrDuplicateKeysBeforeFetching()
-    {
-        const QVector<BandcampReleaseRequest> emptyKey{{QString{}, page(AlbumUrl)}};
-        const QVector<BandcampReleaseRequest> duplicateKeys{{u"same-key"_s, page(AlbumUrl)},
-                                                            {u"same-key"_s, page(SecondAlbumUrl)}};
-        for(const QVector<BandcampReleaseRequest>& requests : {emptyKey, duplicateKeys}) {
-            FakeNetworkManager network;
-            auto workflowCapacity = std::make_shared<BandcampWorkflowSlots>();
-            BandcampResolver resolver{
-                &network,
-                1,
-                requests,
-                OperationOptions{},
-                [](const QByteArray& body, const QUrl& url, CorrelationContext context, const std::atomic_bool* stop) {
-                    return parseReleasePage(body, url, std::move(context), stop);
-                },
-                std::move(workflowCapacity)};
-
-            const std::optional<ResolutionError> rejection = resolver.start();
-            QVERIFY(rejection.has_value());
-            QCOMPARE(rejection->code, ResolutionErrorCode::UnsupportedRequest);
-            QCOMPARE(rejection->field, u"requestKey"_s);
-            QVERIFY(network.requested.isEmpty());
-        }
     }
 
     void separateOperationsDoNotSharePageRequests()

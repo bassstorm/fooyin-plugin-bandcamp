@@ -426,7 +426,7 @@ private slots:
         page.parent.declaration = ParentDeclaration::NoParent;
         page.parent.albumId     = CandidateField<qint64>::missing();
         page.parent.albumUrl    = CandidateField<QUrl>::missing();
-        page.sourceUrl          = explicitValue(AlbumUrl);
+        page.sourceUrl          = CandidateField<QUrl>::missing();
         const auto standalone   = admitStandaloneTrack(page);
         QVERIFY(failure(standalone));
         QCOMPARE(failure(standalone)->trackId, qint64{7});

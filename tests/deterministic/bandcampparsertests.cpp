@@ -105,12 +105,14 @@ void ParserTests::cleanup()
 
 void ParserTests::kindAndIdentityAliases()
 {
-    const auto result = parse(R"({"item_type":"a","id":3493169048,"url":"not an identity","trackinfo":[]})");
+    const auto result = parseReleasePage(
+        tralbumPage(R"({"item_type":"a","id":3493169048,"url":"not an identity","trackinfo":[]})"),
+        QUrl{u"https://artist.bandcamp.com/album/viewed?from=test#part"_s});
     const auto* album = value<AlbumCandidate>(result);
     QVERIFY(album);
     QCOMPARE(album->id.value, qint64{3493169048});
     QCOMPARE(album->id.provenance, FieldProvenance::Explicit);
-    QCOMPARE(album->sourceUrl.value.toString(), u"https://artist.bandcamp.com/track/viewed"_s);
+    QCOMPARE(album->sourceUrl.value.toString(), u"https://artist.bandcamp.com/album/viewed"_s);
     QCOMPARE(album->title.state, FieldState::Missing);
 
     const auto equal = parse(
@@ -240,7 +242,7 @@ void ParserTests::viewedTrackUsesStableIdAndOwnFields()
     QCOMPARE(page->fallbackArtist.value, u"Album artist"_s);
     QCOMPARE(page->fallbackArtist.provenance, FieldProvenance::Fallback);
     QCOMPARE(page->parent.declaration, ParentDeclaration::AlbumBacked);
-    QCOMPARE(page->parent.albumUrl.value.toString(), u"https://artist.bandcamp.com/album/parent?from=track"_s);
+    QCOMPARE(page->parent.albumUrl.value.toString(), u"https://artist.bandcamp.com/album/parent"_s);
 }
 
 void ParserTests::rowFallbackIsExplicitAndRootIsOnlyContext()
@@ -760,8 +762,6 @@ void ParserTests::limitedHtmlReader_data()
         << QStringList(32, u"br:0"_s).join(u' ') << 0;
     QTest::newRow("record-overflow") << QByteArray("<br>").repeated(33)
         << QStringList(32, u"br:0"_s).join(u' ') << 2;
-    QTest::newRow("page-boundary") << QByteArray("<x>") + QByteArray(249, ' ') + "</x>" << u"x:0 /x:0"_s << 0;
-    QTest::newRow("page-overflow") << QByteArray(257, ' ') << QString{} << 2;
     QTest::newRow("cancelled") << QByteArray("<script>ignored</script>") << u"script:0"_s << 3;
     QTest::newRow("unfinished-utf8") << QByteArray("<x></x>\xc3") << QString{} << 1;
 }

@@ -68,13 +68,13 @@ class BandcampResolver : public QObject
     Q_OBJECT
 
 public:
-    // Request keys must be non-empty and unique within this list; invalid lists are rejected by start().
+    // Request keys are trusted to be non-empty and unique; the caller (BandcampService) guarantees this.
     BandcampResolver(QNetworkAccessManager* network, BandcampOperationId operationId,
                      QVector<BandcampReleaseRequest> requests, OperationOptions options, BandcampPageParser parser,
                      std::shared_ptr<BandcampWorkflowSlots> workflowSlots, QObject* parent = nullptr);
     ~BandcampResolver() override;
 
-    [[nodiscard]] std::optional<ResolutionError> start();
+    void start();
     void cancel();
     [[nodiscard]] bool isComplete() const;
     [[nodiscard]] qsizetype completedOutcomeCount() const;

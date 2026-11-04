@@ -79,26 +79,18 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
         context.trackId     = track->track.id.value;
         context.resourceUrl = QUrl(bandcampTrackUri(track->track.id.value));
     }
-    const ParentRequirement requirement = classifyParentEvidence(*track, context);
-    if(const auto* failure = std::get_if<ResolutionFailure>(&requirement)) {
-        return *failure;
-    }
 
+    // The workflow classified parent evidence and fetched the parent when required, so the parent's presence is the decision.
     ResolutionOutcome<TrackAdmission> admission = ResolutionCancelled{};
-    if(std::holds_alternative<StandaloneParentEvidence>(requirement)) {
+    if(!parent) {
         admission = admitStandaloneTrack(*track, context, stop);
     }
     else {
-        const auto& required = std::get<RequiredAlbumParent>(requirement);
-        if(!parent) {
-            return ResolutionFailure{makeError(ResolutionErrorCode::ParentUnavailable, ResolutionStage::Acquire,
-                                               required.url, track->track.id.value, QStringLiteral("parent.albumUrl"),
-                                               QStringLiteral("required album parent is unavailable"))};
-        }
         const auto* album = std::get_if<AlbumCandidate>(parent);
         if(!album) {
             return ResolutionFailure{makeError(ResolutionErrorCode::ParentUnavailable, ResolutionStage::Parse,
-                                               required.url, track->track.id.value, QStringLiteral("parent.resource"),
+                                               context.resourceUrl, track->track.id.value,
+                                               QStringLiteral("parent.resource"),
                                                QStringLiteral("parent response did not identify an album"))};
         }
         admission = admitAlbumTrack(*track, *album, context, stop);
@@ -410,15 +402,8 @@ private:
             return;
         }
 
-        const auto& required             = std::get<RequiredAlbumParent>(requirement);
-        const BandcampPageUrl parentPage = parseBandcampPageUrl(required.url.toString(QUrl::FullyEncoded));
-        if(!parentPage.isValid() || parentPage.kind != BandcampPageKind::Album) {
-            report(ResolutionFailure{makeError(ResolutionErrorCode::ParentUnavailable, ResolutionStage::Acquire,
-                                               required.url, primaryTrackId(), QStringLiteral("parent.albumUrl"),
-                                               QStringLiteral("required parent location is not an album URL"))});
-            return;
-        }
-        fetchPage(parentPage, true);
+        const auto& required = std::get<RequiredAlbumParent>(requirement);
+        fetchPage(BandcampPageUrl{BandcampPageKind::Album, required.url.toString(QUrl::FullyEncoded), {}}, true);
     }
 
     void resolve()
@@ -962,7 +947,7 @@ struct BandcampResolver::Impl
         , client{new BandcampClient(network, resolver)}
         , operationId{id}
         , pending{std::move(requests)}
-        , options{clampOperationOptions(operationOptions)}
+        , options{operationOptions}
         , parser{std::move(pageParser)}
         , workflowSlots{std::move(capacity)}
     {
@@ -970,28 +955,18 @@ struct BandcampResolver::Impl
                          [this]() { schedulePump(); });
     }
 
-    std::optional<ResolutionError> start()
+    void start()
     {
         if(started) {
-            return std::nullopt;
-        }
-        QSet<QString> requestKeys;
-        for(const BandcampReleaseRequest& request : pending) {
-            if(request.key.isEmpty() || requestKeys.contains(request.key)) {
-                return makeError(ResolutionErrorCode::UnsupportedRequest, ResolutionStage::Acquire,
-                                 QUrl(request.page.url), 0, QStringLiteral("requestKey"),
-                                 QStringLiteral("resolver request keys must be non-empty and unique"));
-            }
-            requestKeys.insert(request.key);
+            return;
         }
         started = true;
         const QPointer<BandcampResolver> guard{owner};
         pump();
         if(!guard) {
-            return std::nullopt;
+            return;
         }
         maybeComplete();
-        return std::nullopt;
     }
 
     void cancel()
@@ -1168,9 +1143,9 @@ BandcampResolver::BandcampResolver(QNetworkAccessManager* network, BandcampOpera
 
 BandcampResolver::~BandcampResolver() = default;
 
-std::optional<ResolutionError> BandcampResolver::start()
+void BandcampResolver::start()
 {
-    return m_impl->start();
+    m_impl->start();
 }
 
 void BandcampResolver::cancel()

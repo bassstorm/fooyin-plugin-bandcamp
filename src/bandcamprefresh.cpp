@@ -101,14 +101,7 @@ BandcampRefreshOperation::BandcampRefreshOperation(BandcampService* service, Foo
         connect(service, &BandcampService::scopeResolved, this, &BandcampRefreshOperation::acceptScope);
         connect(service, &BandcampService::progressChanged, this, [this](const auto& progress) {
             if(!m_stopping && !m_finished && progress.operationId == m_summary.operationId) {
-                const auto context = correlation(m_summary.operationId);
-                try {
-                    emit progressChanged(progress);
-                }
-                catch(...) {
-                    logBoundaryException(context, QStringLiteral("refresh.observer.failed"),
-                                         QStringLiteral("progress observer threw"));
-                }
+                emit progressChanged(progress);
             }
         });
         connect(service, &BandcampService::operationFinished, this, [this](const auto& summary) {
@@ -201,17 +194,7 @@ void BandcampRefreshOperation::start(qint64 nowMs)
         return;
     }
     for(const auto& transport : reusableTransports) {
-        try {
-            emit transportPrepared(transport.id, transport.sourceUrl, transport.streamUrl,
-                                   transport.expiresAtMs, false);
-        }
-        catch(...) {
-            if(guard) {
-                stopWithFailure({BandcampRefreshError::OperationFailed,
-                                 QStringLiteral("Publishing reusable transport failed.")});
-            }
-            return;
-        }
+        emit transportPrepared(transport.id, transport.sourceUrl, transport.streamUrl, transport.expiresAtMs, false);
         if(!guard) {
             return;
         }
@@ -426,14 +409,7 @@ void BandcampRefreshOperation::settle(qint64 id, BandcampRefreshOutcome outcome,
                                      DiagnosticField::text(QStringLiteral("reason"), error.reason)});
         }
     }
-    const auto context = correlation(m_summary.operationId).withTrack(id);
-    try {
-        emit consumerFinished(id, outcome);
-    }
-    catch(...) {
-        logBoundaryException(context, QStringLiteral("refresh.observer.failed"),
-                             QStringLiteral("consumer observer threw"));
-    }
+    emit consumerFinished(id, outcome);
 }
 
 bool BandcampRefreshOperation::withdrawSource()
@@ -570,12 +546,6 @@ void BandcampRefreshOperation::finishIfReady()
                              DiagnosticField::number(QStringLiteral("unchanged"), summary.unchanged),
                              DiagnosticField::number(QStringLiteral("failed"), summary.failed),
                              DiagnosticField::number(QStringLiteral("cancelled"), summary.cancelled)});
-    try {
-        emit finished(summary);
-    }
-    catch(...) {
-        logBoundaryException(correlation(summary.operationId), QStringLiteral("refresh.observer.failed"),
-                             QStringLiteral("completion observer threw"));
-    }
+    emit finished(summary);
 }
 } // namespace Fooyin::Bandcamp

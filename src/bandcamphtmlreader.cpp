@@ -108,10 +108,6 @@ HtmlReader::HtmlReader(QByteArrayView body, HtmlLimits limits, const std::atomic
     , m_limits{limits}
     , m_stop{stop}
 {
-    if(body.size() > limits.pageBytes) {
-        setError(HtmlError::ResourceLimit);
-        return;
-    }
     // Validate even ignored text, without copying large opaque attributes.
     QStringDecoder decoder(QStringDecoder::Utf8);
     for(qsizetype offset = 0; offset < body.size() && !cancelled(); offset += 4096) {

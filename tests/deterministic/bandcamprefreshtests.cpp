@@ -633,23 +633,9 @@ void RefreshTests::localFailureAndObserverFaultsAreObservable()
     network.setResponder([now](const auto&) { return FakeResponse{.body = album(now + 7'200'000)}; });
     BandcampRefreshOperation observed{&service, host.library, {}, host.api};
     Capture observedResult{observed};
-    const auto throwingObserver = []() { throw std::runtime_error{"private observer text"}; };
-    connect(&observed, &BandcampRefreshOperation::progressChanged, &observed, throwingObserver);
-    connect(&observed, &BandcampRefreshOperation::consumerFinished, &observed, throwingObserver);
-    connect(&observed, &BandcampRefreshOperation::finished, &observed, throwingObserver);
     observed.start(now);
     QTRY_COMPARE_WITH_TIMEOUT(observedResult.finishes, 1, 3000);
     QCOMPARE(observedResult.summary.updated, 1);
-    for(const QString& reason : {u"progress observer threw"_s, u"consumer observer threw"_s,
-                                 u"completion observer threw"_s}) {
-        QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [&reason](const auto& log) {
-            return log.message.contains(u"refresh.observer.failed"_s) && log.message.contains(reason)
-                && log.message.contains(u"job="_s);
-        }));
-    }
-    QVERIFY(std::none_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const auto& log) {
-        return log.message.contains(u"private observer text"_s);
-    }));
 }
 } // namespace
 

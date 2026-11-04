@@ -12,8 +12,6 @@
 
 namespace Fooyin::Bandcamp {
 namespace {
-constexpr qsizetype MaxPageUrlBytes = 8192;
-
 ResolutionError submissionError(ResolutionErrorCode code, const QUrl& url, QString field, QString reason)
 {
     return {code, ResolutionStage::Acquire, url, 0, std::move(field), std::move(reason)};
@@ -44,7 +42,7 @@ public:
         , m_workflowSlots{std::move(workflowSlots)}
         , m_id{id}
         , m_inputPages{pages}
-        , m_options{clampOperationOptions(options)}
+        , m_options{options}
         , m_releaseParser{std::move(releaseParser)}
         , m_listingParser{std::move(listingParser)}
         , m_orchestrator{pages, m_options.discographyOrder}
@@ -266,13 +264,9 @@ private:
         m_resolverQuiescent = false;
         createResolver();
         const QPointer<BandcampOperation> guard{this};
-        const std::optional<ResolutionError> rejection = m_resolver->start();
+        m_resolver->start();
         if(!guard) {
             return;
-        }
-        if(rejection) {
-            m_resolverQuiescent = true;
-            rejectStart(*rejection);
         }
     }
 
@@ -307,30 +301,6 @@ private:
         });
     }
 
-    void rejectStart(const ResolutionError& error)
-    {
-        if(m_finished) {
-            return;
-        }
-        qCWarning(BANDCAMP_RESOLVE).noquote() << formatTraceEvent(
-            CorrelationContext{
-                .jobId = static_cast<qint64>(m_id), .resourceUrl = error.resourceUrl, .trackId = error.trackId},
-            QStringLiteral("resolver_start_rejected"),
-            {DiagnosticField::text(QStringLiteral("code"), resolutionErrorCodeName(error.code)),
-             DiagnosticField::text(QStringLiteral("reason"), error.reason)});
-        const QPointer<BandcampOperation> guard{this};
-        for(const BandcampReleaseRequest& request : m_orchestrator.requests()) {
-            ResolutionError scopedError = error;
-            scopedError.resourceUrl     = QUrl(request.page.url);
-            onReleaseOutcome(request.key, ResolutionFailure{std::move(scopedError)});
-            if(!guard) {
-                return;
-            }
-        }
-        m_resolverCompleted = true;
-        finishIfReady();
-    }
-
     void onReleaseOutcome(const QString& key, const BandcampResolutionOutcome& outcome)
     {
         deliverReady(m_orchestrator.associate(key, outcome));
@@ -343,16 +313,9 @@ private:
         }
         const QPointer<BandcampOperation> guard{this};
         for(const BandcampReleaseRequest& request : m_orchestrator.requests()) {
-            const auto it = outcomes.constFind(request.key);
-            if(it != outcomes.cend()) {
-                onReleaseOutcome(request.key, it.value());
-            }
-            else {
-                onReleaseOutcome(request.key, ResolutionFailure{ResolutionError{
-                                                  ResolutionErrorCode::FetchFailed, ResolutionStage::Publish,
-                                                  QUrl(request.page.url), 0, QStringLiteral("resolver.outcome"),
-                                                  QStringLiteral("resolver omitted a requested outcome")}});
-            }
+            const auto outcome = outcomes.constFind(request.key);
+            Q_ASSERT(outcome != outcomes.cend());
+            onReleaseOutcome(request.key, *outcome);
             if(!guard) {
                 return;
             }
@@ -390,12 +353,7 @@ private:
                      DiagnosticField::text(QStringLiteral("field"), error.field),
                      DiagnosticField::text(QStringLiteral("reason"), error.reason)});
             }
-            try {
-                m_resultHandler(result);
-            }
-            catch(...) {
-                qCWarning(BANDCAMP_RESOLVE) << "A scope result handler threw";
-            }
+            m_resultHandler(result);
             if(!guard) {
                 return;
             }
@@ -425,12 +383,7 @@ private:
         if(!guard) {
             return;
         }
-        try {
-            m_finishedHandler(summary);
-        }
-        catch(...) {
-            qCWarning(BANDCAMP_RESOLVE) << "An operation completion handler threw";
-        }
+        m_finishedHandler(summary);
         if(guard) {
             notifyQuiescent();
         }
@@ -438,20 +391,15 @@ private:
 
     void publishProgress()
     {
-        try {
-            const qsizetype active = m_active + (m_currentListingResolver ? 1 : 0);
-            const BandcampOperationPhase phase
-                = m_finished ? BandcampOperationPhase::Finished
-                             : (m_orchestrator.isDiscoveryComplete() ? BandcampOperationPhase::Resolving
-                                                                    : BandcampOperationPhase::Discovering);
-            const qsizetype totalWork = m_orchestrator.isDiscoveryComplete() ? m_orchestrator.requests().size() : 0;
-            const qsizetype completedWork = m_resolver ? m_resolver->completedOutcomeCount() : 0;
-            m_progressHandler({m_id, m_orchestrator.occurrenceCount(), m_orchestrator.deliveredCount(), active,
-                               phase, completedWork, totalWork});
-        }
-        catch(...) {
-            qCWarning(BANDCAMP_RESOLVE) << "An operation progress handler threw";
-        }
+        const qsizetype active = m_active + (m_currentListingResolver ? 1 : 0);
+        const BandcampOperationPhase phase
+            = m_finished ? BandcampOperationPhase::Finished
+                         : (m_orchestrator.isDiscoveryComplete() ? BandcampOperationPhase::Resolving
+                                                                : BandcampOperationPhase::Discovering);
+        const qsizetype totalWork     = m_orchestrator.isDiscoveryComplete() ? m_orchestrator.requests().size() : 0;
+        const qsizetype completedWork = m_resolver ? m_resolver->completedOutcomeCount() : 0;
+        m_progressHandler({m_id, m_orchestrator.occurrenceCount(), m_orchestrator.deliveredCount(), active, phase,
+                           completedWork, totalWork});
     }
 
     void notifyQuiescent()
@@ -460,12 +408,7 @@ private:
             return;
         }
         m_quietSent = true;
-        try {
-            m_quietHandler();
-        }
-        catch(...) {
-            qCWarning(BANDCAMP_RESOLVE) << "An operation cleanup handler threw";
-        }
+        m_quietHandler();
     }
 
     QPointer<QNetworkAccessManager> m_network;
@@ -539,17 +482,10 @@ struct BandcampService::Impl
                                                               QStringLiteral("operation has no requested scopes"))};
         }
         for(const BandcampPageUrl& page : pages) {
-            if(!page.isValid() || page.url.isEmpty() || page.url.size() > MaxPageUrlBytes
-               || page.url.toUtf8().size() > MaxPageUrlBytes) {
+            if(!page.isValid()) {
                 return BandcampSubmissionRejected{submissionError(ResolutionErrorCode::UnsupportedRequest, {},
                                                                   QStringLiteral("resourceUrl"),
-                                                                  QStringLiteral("invalid or oversized scope URL"))};
-            }
-            const BandcampPageUrl canonical = parseBandcampPageUrl(page.url);
-            if(!canonical.isValid() || canonical.url != page.url || canonical.kind != page.kind) {
-                return BandcampSubmissionRejected{submissionError(ResolutionErrorCode::UnsupportedRequest,
-                                                                  QUrl(page.url), QStringLiteral("resourceUrl"),
-                                                                  QStringLiteral("invalid or oversized scope URL"))};
+                                                                  QStringLiteral("invalid scope URL"))};
             }
         }
 
@@ -562,7 +498,7 @@ struct BandcampService::Impl
                                                 workflowSlots,
                                                 id,
                                                 pages,
-                                                options,
+                                                clampOperationOptions(options),
                                                 dependencies.parseReleasePage,
                                                 dependencies.parseDiscographyPage,
                                                 [guard](const BandcampScopeResult& result) {

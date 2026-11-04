@@ -351,6 +351,26 @@ CandidateField<QUrl> location(const QJsonValue& value, const QUrl& base)
     });
 }
 
+CandidateField<QUrl> location(const QJsonValue& value, const QUrl& base, BandcampPageKind expectedKind)
+{
+    return read<QUrl>(value, [&base, expectedKind](const QJsonValue& v, QUrl& out) {
+        if(!v.isString() || v.toString().isEmpty()) {
+            return false;
+        }
+        const QUrl supplied(v.toString(), QUrl::StrictMode);
+        const QUrl resolved = base.isEmpty() ? supplied : base.resolved(supplied);
+        if(!resolved.isValid()) {
+            return false;
+        }
+        const BandcampPageUrl parsed = parseBandcampPageUrl(resolved.toString(QUrl::FullyEncoded));
+        if(!parsed.isValid() || parsed.kind != expectedKind) {
+            return false;
+        }
+        out = QUrl(parsed.url, QUrl::StrictMode);
+        return out.isValid();
+    });
+}
+
 CandidateField<QString> streamLocator(const QJsonValue& value)
 {
     return read<QString>(value, [](const QJsonValue& input, QString& out) {
@@ -749,9 +769,11 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
         return failure(ResolutionErrorCode::ResourceLimitExceeded, pageUrl, QStringLiteral("members"),
                        QStringLiteral("declared track limit exceeded"));
     }
-    const auto canonical = pageUrl.adjusted(QUrl::RemoveQuery | QUrl::RemoveFragment);
-    auto sourceUrl       = mapper.owned(QStringLiteral("sourceUrl"), location(canonical.toString(), {}),
-                                        QStringLiteral("<page location>"));
+    const BandcampPageKind expectedKind
+        = sourceKind.value == SourceKind::Album ? BandcampPageKind::Album : BandcampPageKind::Track;
+    auto sourceUrl = mapper.owned(QStringLiteral("sourceUrl"),
+                                  location(pageUrl.toString(QUrl::FullyEncoded), {}, expectedKind),
+                                  QStringLiteral("<page location>"));
     sourceUrl.provenance = FieldProvenance::Derived;
     if(sourceKind.value == SourceKind::Album) {
         AlbumCandidate album;
@@ -825,8 +847,10 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
     page.fallbackArtist.provenance = FieldProvenance::Fallback;
 
     const auto parentId  = current.value(u"album_id");
-    page.parent.albumUrl = mapper.owned(QStringLiteral("parent.albumUrl"), location(root.value(u"album_url"), pageUrl),
-                                        QStringLiteral("$.album_url"));
+    page.parent.albumUrl = mapper.owned(
+        QStringLiteral("parent.albumUrl"),
+        location(root.value(u"album_url"), pageUrl, BandcampPageKind::Album),
+        QStringLiteral("$.album_url"));
     if(current.explicitNoParent(u"album_id")) {
         page.parent.declaration = ParentDeclaration::NoParent;
     }
