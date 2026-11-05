@@ -116,7 +116,6 @@ BandcampClient::RequestId BandcampClient::fetch(const QUrl& url, Callback callba
     }
 
     const RequestId id = m_nextRequestId++;
-    context            = context.withRequest(static_cast<qint64>(id));
     PendingRequest pending;
     pending.initialUrl = url;
     pending.currentUrl = url;
@@ -125,8 +124,6 @@ BandcampClient::RequestId BandcampClient::fetch(const QUrl& url, Callback callba
     pending.timer.start();
     m_pending.insert(id, std::move(pending));
 
-    qCDebug(BANDCAMP_TRACE_FETCH).noquote() << formatTraceEvent(context, QStringLiteral("request.started"),
-                                                                {DiagnosticField::url(QStringLiteral("url"), url)});
     startHop(id, url);
     return id;
 }
@@ -267,6 +264,17 @@ void BandcampClient::onFinished(RequestId id, quint64 generation)
                                                     QStringLiteral("unsafe effective response URL"))});
         return;
     }
+    // The correlation prefix already prints `url=` when no entity ID is known, so repeat it only when it differs.
+    const bool urlInPrefix = context.albumId <= 0 && context.trackId <= 0 && context.resourceUrl.isValid()
+                             && cleanUrlForLog(context.resourceUrl) == cleanUrlForLog(effectiveUrl);
+    QList<DiagnosticField> fetchFields;
+    if(!urlInPrefix) {
+        fetchFields.append(DiagnosticField::url(QStringLiteral("url"), effectiveUrl));
+    }
+    fetchFields.append({DiagnosticField::number(QStringLiteral("status"), status),
+                        DiagnosticField::number(QStringLiteral("bytes"), body.size()),
+                        DiagnosticField::number(QStringLiteral("elapsedMs"), elapsed)});
+    qCDebug(BANDCAMP_TRACE_FETCH).noquote() << formatTraceEvent(context, QStringLiteral("fetch"), fetchFields);
     if(status == 0) {
         settle(id, BandcampFetchFailure{clientError(ResolutionErrorCode::FetchFailed, effectiveUrl,
                                                     QStringLiteral("httpStatus"),
@@ -288,12 +296,6 @@ void BandcampClient::onFinished(RequestId id, quint64 generation)
         return;
     }
 
-    qCInfo(BANDCAMP_FETCH) << "HTTP" << status << "in" << elapsed << "ms," << body.size() << "bytes";
-    qCDebug(BANDCAMP_TRACE_FETCH).noquote()
-        << formatTraceEvent(context, QStringLiteral("request.finished"),
-                            {DiagnosticField::number(QStringLiteral("status"), status),
-                             DiagnosticField::number(QStringLiteral("bytes"), body.size()),
-                             DiagnosticField::number(QStringLiteral("elapsedMs"), elapsed)});
     settle(id, ResolutionSuccess<BandcampFetchResponse>{BandcampFetchResponse{effectiveUrl, status, std::move(body)}});
 }
 
@@ -324,12 +326,6 @@ void BandcampClient::settle(RequestId id, BandcampFetchOutcome outcome)
         disconnect(pending.reply, nullptr, this, nullptr);
         pending.reply->deleteLater();
     }
-    if(const auto* failure = std::get_if<BandcampFetchFailure>(&outcome)) {
-        qCDebug(BANDCAMP_TRACE_FETCH).noquote() << formatTraceEvent(
-            pending.context, QStringLiteral("request.failed"),
-            {DiagnosticField::text(QStringLiteral("code"), resolutionErrorCodeName(failure->error.code)),
-             DiagnosticField::number(QStringLiteral("elapsedMs"), pending.timer.elapsed())});
-    }
     Callback callback = std::move(pending.callback);
     const QPointer<BandcampClient> guard{this};
     QMetaObject::invokeMethod(
@@ -350,7 +346,6 @@ void BandcampClient::cancel(RequestId id)
         return;
     }
     it->cancelled = true;
-    qCDebug(BANDCAMP_TRACE_FETCH).noquote() << formatTraceEvent(it->context, QStringLiteral("request.cancelled"), {});
     if(it->reply) {
         it->reply->abort();
     }

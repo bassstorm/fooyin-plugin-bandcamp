@@ -148,7 +148,7 @@ void BandcampPlaybackPreparation::acceptScope(const BandcampScopeResult& result)
 
     m_writePending = true;
     m_gateway = new BandcampLibraryGateway{std::move(m_libraryApi), this};
-    const CorrelationContext context{.jobId = static_cast<qint64>(m_operationId), .trackId = m_trackId};
+    const CorrelationContext context{.albumId = selected->album ? selected->album->id : 0, .trackId = m_trackId};
     m_gateway->refreshTransport(std::move(*selected), this, context,
                                 [this](FooyinTrackCommitOutcome) {
                                     m_writePending = false;
@@ -197,9 +197,9 @@ void BandcampPlaybackPreparation::fail(const QString& reason, bool alreadyLogged
     }
     m_outcomeSent = true;
     if(!alreadyLogged) {
-        const CorrelationContext context{.jobId = static_cast<qint64>(m_operationId), .trackId = m_trackId};
+        const CorrelationContext context{.trackId = m_trackId};
         qCWarning(BANDCAMP_TRACKS).noquote()
-            << formatTraceEvent(context, QStringLiteral("playback.preparation.failed"),
+            << formatTraceEvent(context, QStringLiteral("playback_preparation_failed"),
                                 {DiagnosticField::text(QStringLiteral("reason"), reason)});
     }
     emit failed(reason);

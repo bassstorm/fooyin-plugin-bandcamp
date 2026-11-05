@@ -38,12 +38,6 @@ namespace {
 using Private::decodeHtmlEntities;
 using Private::HtmlAttributes;
 
-enum class SourceKind : quint8
-{
-    Album,
-    Track
-};
-
 QString cleanText(QString text)
 {
     for(QChar& ch : text) {
@@ -194,76 +188,47 @@ struct SourceObject
     }
 };
 
-QJsonValue redactedSnapshot(const QJsonValue& value, const std::atomic_bool* stop, bool sensitive = false,
-                            bool locators = false)
+// Declared IDs correlate the snapshot with later records; the record stays keyed by URL until one is known.
+CorrelationContext snapshotContext(const QJsonValue& root, const CorrelationContext& context)
 {
-    if(stopRequested(stop)) {
-        return {};
+    if(!root.isObject()) {
+        return context;
     }
-    if(value.isObject()) {
-        const auto object = value.toObject();
-        QJsonObject redacted;
-        for(auto it = object.begin(); it != object.end(); ++it) {
-            if(stopRequested(stop)) {
-                return {};
-            }
-            const QString key = it.key().toLower();
-            const bool secret = sensitive || key.contains(u"signature") || key.contains(u"token")
-                             || key.contains(u"password") || key.contains(u"authorization");
-            const bool url = locators || key == u"file" || key == u"url" || key.endsWith(u"_url");
-            redacted.insert(redactDiagnosticText(it.key()), redactedSnapshot(it.value(), stop, secret, url));
-        }
-        return redacted;
+    const SourceObject object{root.toObject()};
+    const SourceObject current{object.value(u"current").toObject()};
+    auto id = current.integer(u"id");
+    if(!id.isUsable()) {
+        id = object.integer(u"id");
     }
-    if(value.isArray()) {
-        QJsonArray array;
-        for(const auto& child : value.toArray()) {
-            if(stopRequested(stop)) {
-                return {};
-            }
-            array.append(redactedSnapshot(child, stop, sensitive, locators));
-        }
-        return array;
+    if(!id.isUsable()) {
+        return context;
     }
-    if(sensitive && !value.isNull()) {
-        return QStringLiteral("<redacted>");
+    const auto typeValue = current.value(u"type").isUndefined() ? object.value(u"item_type")
+                                                                : current.value(u"type");
+    if(typeValue.toString() == u"album" || typeValue.toString() == u"a") {
+        return context.withAlbum(id.value);
     }
-    if(value.isString()) {
-        return locators ? redactUrlForLog(QUrl(value.toString())) : redactDiagnosticText(value.toString());
+    if(typeValue.toString() == u"track" || typeValue.toString() == u"t") {
+        return context.withTrack(id.value);
     }
-    return value;
+    return context;
 }
 
+// Trace snapshots keep the source JSON as-is, stream URLs included; only the record layout is normalized.
 void logSnapshot(const QJsonValue& root, const CorrelationContext& context, const std::atomic_bool* stop)
 {
     if(!BANDCAMP_TRACE_PARSER().isDebugEnabled() || stopRequested(stop)) {
         return;
     }
-    const auto redacted = redactedSnapshot(root, stop);
+    const QByteArray encoded = QJsonDocument(QJsonArray{root}).toJson(QJsonDocument::Compact);
+    const QString snapshot   = QString::fromUtf8(encoded.mid(1, encoded.size() - 2));
     if(stopRequested(stop)) {
         return;
     }
-    const QByteArray encoded = QJsonDocument(QJsonArray{redacted}).toJson(QJsonDocument::Compact);
-    QString snapshot         = QString::fromUtf8(encoded.mid(1, encoded.size() - 2));
-    QString escaped;
-    escaped.reserve(snapshot.size());
-    for(qsizetype i = 0; i < snapshot.size(); ++i) {
-        if((i & 0x3ff) == 0 && stopRequested(stop)) {
-            return;
-        }
-        const QChar ch      = snapshot.at(i);
-        const auto category = ch.category();
-        if(category == QChar::Other_Control || category == QChar::Separator_Line
-           || category == QChar::Separator_Paragraph) {
-            escaped += QStringLiteral("\\u%1").arg(static_cast<uint>(ch.unicode()), 4, 16, QLatin1Char('0'));
-        }
-        else {
-            escaped += ch;
-        }
-    }
     // One bounded-by-input, encoded record; never pass the snapshot through field truncation.
     qCDebug(BANDCAMP_TRACE_PARSER).noquote()
-        << formatTraceEvent(context, QStringLiteral("source_snapshot"), {}) + QStringLiteral(" json=") + escaped;
+        << formatTraceEvent(snapshotContext(root, context), QStringLiteral("source_snapshot"), {})
+               + QStringLiteral(" json=") + escapeControlChars(snapshot);
 }
 
 bool withinFields(const QJsonValue& value, qsizetype& records, const std::atomic_bool* stop)
@@ -416,36 +381,6 @@ CandidateField<SourceKind> kind(const QJsonValue& value)
     });
 }
 
-QString describe(const QString& value)
-{
-    return redactDiagnosticText(value);
-}
-QString describe(const QUrl& value)
-{
-    return redactUrlForLog(value);
-}
-QString describe(const QDate& value)
-{
-    return value.toString(Qt::ISODate);
-}
-QString describe(qint64 value)
-{
-    return QString::number(value);
-}
-QString describe(SourceKind value)
-{
-    return value == SourceKind::Album ? QStringLiteral("album") : QStringLiteral("track");
-}
-
-template <typename T>
-QString describe(const CandidateField<T>& value)
-{
-    if(value.isUsable()) {
-        return describe(value.value);
-    }
-    return value.state == FieldState::Invalid ? QStringLiteral("<invalid>") : QStringLiteral("<unset>");
-}
-
 class Mapper
 {
 public:
@@ -453,80 +388,50 @@ public:
         : m_context{std::move(context)}
     { }
 
+    void albumContext(qint64 id)
+    {
+        m_context = m_context.withAlbum(id);
+    }
+
     void trackContext(qint64 id)
     {
         m_context = m_context.withTrack(id);
     }
 
     template <typename T>
-    CandidateField<T> select(const QString& field, CandidateField<T> primary, const QString& primaryPath,
-                             CandidateField<T> fallback = {}, const QString& fallbackPath = {},
+    CandidateField<T> select(const QString& field, CandidateField<T> primary, CandidateField<T> fallback = {},
                              FieldProvenance fallbackProvenance = FieldProvenance::Fallback,
                              bool identityAliases               = false)
     {
         const bool conflict = primary.isUsable() && fallback.isUsable() && primary.value != fallback.value;
         if(conflict) {
-            qCDebug(BANDCAMP_PARSER).noquote() << formatTraceEvent(
-                m_context, QStringLiteral("source_conflict"),
-                {{QStringLiteral("field"), field},
-                 {QStringLiteral("primary_path"), primaryPath},
-                 {QStringLiteral("primary"), describe(primary)},
-                 {QStringLiteral("alternate_path"), fallbackPath},
-                 {QStringLiteral("alternate"), describe(fallback)},
-                 {QStringLiteral("chosen"), identityAliases ? QStringLiteral("<invalid>") : primaryPath},
-                 {QStringLiteral("reason"), identityAliases ? QStringLiteral("identity aliases disagree")
-                                                            : QStringLiteral("usable primary takes precedence")}});
+            logFieldConflict(BANDCAMP_PARSER(), m_context, field,
+                             identityAliases ? QStringLiteral("<invalid>") : describeCandidateField(primary),
+                             describeCandidateField(fallback));
         }
-        auto chosen  = primary;
-        QString path = primaryPath;
+        auto chosen = primary;
         if(conflict && identityAliases) {
             chosen = CandidateField<T>::invalid();
         }
         else if(!chosen.isUsable() && fallback.isUsable()) {
             chosen            = fallback;
             chosen.provenance = fallbackProvenance;
-            path              = fallbackPath;
+            logFieldFallback(BANDCAMP_PARSER(), m_context, field, describeCandidateField(chosen));
         }
-        if(!chosen.isUsable()) {
-            if(fallback.state == FieldState::Invalid) {
-                chosen.state = FieldState::Invalid;
-            }
-            qCDebug(BANDCAMP_PARSER).noquote() << formatTraceEvent(m_context, QStringLiteral("source_unresolved"),
-                                                                   {{QStringLiteral("field"), field},
-                                                                    {QStringLiteral("primary_path"), primaryPath},
-                                                                    {QStringLiteral("primary"), describe(primary)},
-                                                                    {QStringLiteral("alternate_path"), fallbackPath},
-                                                                    {QStringLiteral("alternate"), describe(fallback)}});
-        }
-        else {
-            qCDebug(BANDCAMP_TRACE_PARSER).noquote() << formatTraceEvent(
-                m_context, QStringLiteral("source_mapping"),
-                {{QStringLiteral("field"), field},
-                 {QStringLiteral("old"), path == primaryPath ? QStringLiteral("<unset>") : describe(primary)},
-                 {QStringLiteral("new"), describe(chosen)},
-                 {QStringLiteral("source"), path},
-                 {QStringLiteral("reason"),
-                  path == primaryPath ? QStringLiteral("local extraction") : QStringLiteral("usable local fallback")}});
+        if(!chosen.isUsable() && fallback.state == FieldState::Invalid) {
+            chosen.state = FieldState::Invalid;
         }
         return chosen;
-    }
-
-    template <typename T>
-    CandidateField<T> owned(const QString& field, CandidateField<T> value, const QString& path)
-    {
-        return select(field, std::move(value), path);
     }
 
     TrackCandidate row(const QJsonValue& value, qsizetype index)
     {
         TrackCandidate track;
         track.declaredIndex = index;
-        const QString path  = QStringLiteral("$.trackinfo[%1]").arg(index);
         Mapper scoped(m_context.withTrack(0));
         if(!value.isObject()) {
             track.recordState = FieldState::Invalid;
             track.id          = CandidateField<qint64>::invalid();
-            scoped.owned(QStringLiteral("member"), track.id, path);
             return track;
         }
         track.recordState = FieldState::Usable;
@@ -534,27 +439,17 @@ public:
         const auto id    = object.integer(u"id");
         const auto alias = object.integer(u"track_id");
         // Contradictory stable aliases do not identify a usable member.
-        track.id = scoped.select(QStringLiteral("track.id"), id, path + QStringLiteral(".id"), alias,
-                                 path + QStringLiteral(".track_id"), FieldProvenance::Explicit, true);
-        if(track.id.isUsable()) {
-            scoped.trackContext(track.id.value);
-        }
-        track.title  = scoped.owned(QStringLiteral("track.title"), text(object.value(u"title")),
-                                    path + QStringLiteral(".title"));
-        track.artist = scoped.owned(QStringLiteral("track.artist"), text(object.value(u"artist")),
-                                    path + QStringLiteral(".artist"));
-        track.trackNumber
-            = scoped.owned(QStringLiteral("track.trackNumber"), object.integer(u"track_num", MaxTrackNumber),
-                           path + QStringLiteral(".track_num"));
-        track.durationMs = scoped.owned(QStringLiteral("track.durationMs"), duration(object.value(u"duration")),
-                                        path + QStringLiteral(".duration"));
-        const auto file  = object.value(u"file");
-        auto stream      = file.isUndefined() ? CandidateField<QString>::missing() : CandidateField<QString>::invalid();
+        track.id = scoped.select(QStringLiteral("track.id"), id, alias, FieldProvenance::Explicit, true);
+        track.title       = text(object.value(u"title"));
+        track.artist      = text(object.value(u"artist"));
+        track.trackNumber = object.integer(u"track_num", MaxTrackNumber);
+        track.durationMs  = duration(object.value(u"duration"));
+        const auto file   = object.value(u"file");
+        auto stream       = file.isUndefined() ? CandidateField<QString>::missing() : CandidateField<QString>::invalid();
         if(file.isObject()) {
             stream = streamLocator(file.toObject().value(u"mp3-128"));
         }
-        track.streamUrl
-            = scoped.owned(QStringLiteral("track.streamUrl"), stream, path + QStringLiteral(".file['mp3-128']"));
+        track.streamUrl = stream;
         return track;
     }
 
@@ -764,45 +659,56 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
     Mapper mapper(context);
     const auto currentKind = kind(current.value(u"type"));
     const auto rootKind    = kind(root.value(u"item_type"));
-    const auto sourceKind  = mapper.select(QStringLiteral("kind"), currentKind, QStringLiteral("$.current.type"),
-                                           rootKind, QStringLiteral("$.item_type"), FieldProvenance::Explicit, true);
+    const auto sourceKind  = mapper.select(QStringLiteral("kind"), currentKind, rootKind, FieldProvenance::Explicit, true);
     const auto currentId   = current.integer(u"id");
     const auto rootId      = root.integer(u"id");
-    const auto id          = mapper.select(QStringLiteral("id"), currentId, QStringLiteral("$.current.id"), rootId,
-                                           QStringLiteral("$.id"), FieldProvenance::Explicit, true);
+    const auto id          = mapper.select(QStringLiteral("id"), currentId, rootId, FieldProvenance::Explicit, true);
     if(!sourceKind.isUsable() || conflicts(currentKind, rootKind) || conflicts(currentId, rootId)) {
         return failure(ResolutionErrorCode::MalformedPage, pageUrl, QStringLiteral("identity"),
                        QStringLiteral("unknown or contradictory release identity"));
     }
+    if(id.isUsable()) {
+        if(sourceKind.value == SourceKind::Album) {
+            mapper.albumContext(id.value);
+        }
+        else {
+            mapper.trackContext(id.value);
+        }
+    }
+    const auto withKnownId = [&](ResolutionFailure result) {
+        if(id.isUsable()) {
+            if(sourceKind.value == SourceKind::Album) {
+                result.error.albumId = id.value;
+            }
+            else {
+                result.error.trackId = id.value;
+            }
+        }
+        return result;
+    };
     const auto infoValue = root.value(u"trackinfo");
     if(!infoValue.isArray()) {
-        return failure(ResolutionErrorCode::MalformedPage, pageUrl, QStringLiteral("members"),
-                       QStringLiteral("trackinfo must be an array"));
+        return withKnownId(failure(ResolutionErrorCode::MalformedPage, pageUrl, QStringLiteral("members"),
+                                   QStringLiteral("trackinfo must be an array")));
     }
     const auto info = infoValue.toArray();
     if(info.size() > MaxDeclaredTracks) {
-        return failure(ResolutionErrorCode::ResourceLimitExceeded, pageUrl, QStringLiteral("members"),
-                       QStringLiteral("declared track limit exceeded"));
+        return withKnownId(failure(ResolutionErrorCode::ResourceLimitExceeded, pageUrl, QStringLiteral("members"),
+                                   QStringLiteral("declared track limit exceeded")));
     }
     const BandcampPageKind expectedKind
         = sourceKind.value == SourceKind::Album ? BandcampPageKind::Album : BandcampPageKind::Track;
-    auto sourceUrl = mapper.owned(QStringLiteral("sourceUrl"),
-                                  location(pageUrl.toString(QUrl::FullyEncoded), {}, expectedKind),
-                                  QStringLiteral("<page location>"));
+    auto sourceUrl       = location(pageUrl.toString(QUrl::FullyEncoded), {}, expectedKind);
     sourceUrl.provenance = FieldProvenance::Derived;
     if(sourceKind.value == SourceKind::Album) {
         AlbumCandidate album;
         album.id        = id;
         album.sourceUrl = sourceUrl;
-        album.title     = mapper.owned(QStringLiteral("album.title"), text(current.value(u"title")),
-                                       QStringLiteral("$.current.title"));
+        album.title     = text(current.value(u"title"));
         album.artist    = mapper.select(QStringLiteral("album.artist"), text(current.value(u"artist")),
-                                        QStringLiteral("$.current.artist"), text(root.value(u"artist")),
-                                        QStringLiteral("$.artist"));
-        album.releaseDate
-            = mapper.select(QStringLiteral("album.releaseDate"), date(current.value(u"release_date")),
-                            QStringLiteral("$.current.release_date"), date(root.value(u"album_release_date")),
-                            QStringLiteral("$.album_release_date"));
+                                        text(root.value(u"artist")));
+        album.releaseDate = mapper.select(QStringLiteral("album.releaseDate"), date(current.value(u"release_date")),
+                                          date(root.value(u"album_release_date")));
         album.tracks.reserve(info.size());
         for(qsizetype i = 0; i < info.size(); ++i) {
             if(stopRequested(stop)) {
@@ -810,18 +716,11 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
             }
             album.tracks.append(mapper.row(info.at(i), i));
         }
-        qCInfo(BANDCAMP_PARSER).noquote()
-            << formatTraceEvent(context, QStringLiteral("parsed_album"),
-                                {DiagnosticField::number(QStringLiteral("declared_tracks"), info.size())});
         return ResolutionSuccess<ReleaseCandidate>{std::move(album)};
     }
 
     TrackPageCandidate page;
     page.sourceUrl = sourceUrl;
-    if(id.isUsable()) {
-        mapper.trackContext(id.value);
-        context = context.withTrack(id.value);
-    }
     TrackCandidate matched;
     for(qsizetype i = 0; i < info.size(); ++i) {
         if(stopRequested(stop)) {
@@ -839,39 +738,27 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
             }
         }
     }
-    mapper.owned(QStringLiteral("matchingRecord"), page.matchingRecord, QStringLiteral("$.trackinfo[*].id/track_id"));
-    page.track            = std::move(matched);
-    page.track.id         = id;
-    const QString rowPath = page.matchingRecord.isUsable()
-                              ? QStringLiteral("$.trackinfo[%1]").arg(page.matchingRecord.value)
-                              : QStringLiteral("$.trackinfo[unmatched]");
+    page.track    = std::move(matched);
+    page.track.id = id;
     page.track.title
-        = mapper.select(QStringLiteral("track.title"), text(current.value(u"title")), QStringLiteral("$.current.title"),
-                        page.track.title, rowPath + QStringLiteral(".title"), FieldProvenance::Explicit);
+        = mapper.select(QStringLiteral("track.title"), text(current.value(u"title")), page.track.title,
+                        FieldProvenance::Explicit);
     page.track.artist = mapper.select(QStringLiteral("track.artist"), text(current.value(u"artist")),
-                                      QStringLiteral("$.current.artist"), page.track.artist,
-                                      rowPath + QStringLiteral(".artist"), FieldProvenance::Explicit);
+                                      page.track.artist, FieldProvenance::Explicit);
     page.track.trackNumber
         = mapper.select(QStringLiteral("track.trackNumber"), current.integer(u"track_number", MaxTrackNumber),
-                        QStringLiteral("$.current.track_number"), page.track.trackNumber,
-                        rowPath + QStringLiteral(".track_num"), FieldProvenance::Explicit);
-    page.track.releaseDate = mapper.owned(QStringLiteral("track.releaseDate"), date(current.value(u"release_date")),
-                                          QStringLiteral("$.current.release_date"));
-    page.fallbackArtist
-        = mapper.owned(QStringLiteral("fallbackArtist"), text(root.value(u"artist")), QStringLiteral("$.artist"));
+                        page.track.trackNumber, FieldProvenance::Explicit);
+    page.track.releaseDate = date(current.value(u"release_date"));
+    page.fallbackArtist    = text(root.value(u"artist"));
     page.fallbackArtist.provenance = FieldProvenance::Fallback;
 
     const auto parentId  = current.value(u"album_id");
-    page.parent.albumUrl = mapper.owned(
-        QStringLiteral("parent.albumUrl"),
-        location(root.value(u"album_url"), pageUrl, BandcampPageKind::Album),
-        QStringLiteral("$.album_url"));
+    page.parent.albumUrl = location(root.value(u"album_url"), pageUrl, BandcampPageKind::Album);
     if(current.explicitNoParent(u"album_id")) {
         page.parent.declaration = ParentDeclaration::NoParent;
     }
     else {
-        page.parent.albumId = mapper.owned(QStringLiteral("parent.albumId"), current.integer(u"album_id"),
-                                           QStringLiteral("$.current.album_id"));
+        page.parent.albumId = current.integer(u"album_id");
         if(page.parent.albumId.isUsable()) {
             page.parent.declaration = ParentDeclaration::AlbumBacked;
         }
@@ -879,21 +766,6 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
             page.parent.declaration = ParentDeclaration::Invalid;
         }
     }
-    qCDebug(BANDCAMP_TRACE_PARSER).noquote() << formatTraceEvent(
-        context, QStringLiteral("source_mapping"),
-        {{QStringLiteral("field"), QStringLiteral("parent.declaration")},
-         {QStringLiteral("old"), QStringLiteral("<unset>")},
-         {QStringLiteral("new"), page.parent.declaration == ParentDeclaration::NoParent ? QStringLiteral("no_parent")
-                                 : page.parent.declaration == ParentDeclaration::AlbumBacked
-                                     ? QStringLiteral("album_backed")
-                                 : page.parent.declaration == ParentDeclaration::Invalid ? QStringLiteral("<invalid>")
-                                                                                         : QStringLiteral("<unset>")},
-         {QStringLiteral("source"), QStringLiteral("$.current.album_id")},
-         {QStringLiteral("reason"),
-          QStringLiteral("declared membership evidence; location does not establish absence")}});
-    qCInfo(BANDCAMP_PARSER).noquote() << formatTraceEvent(
-        context, QStringLiteral("parsed_track"),
-        {DiagnosticField::number(QStringLiteral("matching_record"), page.matchingRecord.isUsable() ? 1 : 0)});
     return ResolutionSuccess<ReleaseCandidate>{std::move(page)};
 }
 
@@ -913,7 +785,6 @@ BandcampListingParseOutcome parseDiscographyPage(const QByteArray& body, const Q
     }
     const auto& source       = std::get<DecodedSource>(decoded);
     const auto& decodedValue = source.value;
-    logSnapshot(decodedValue, context, stop);
     if(stopRequested(stop)) {
         return ResolutionCancelled{};
     }
@@ -941,13 +812,13 @@ BandcampListingParseOutcome parseDiscographyPage(const QByteArray& body, const Q
         listedReferences.insert(key);
         const qsizetype ordinal = batch.references.size();
         batch.references.append({ordinal, id, page});
-        const CorrelationContext itemContext = context.withTrack(page.kind == BandcampPageKind::Track ? id : 0);
+        const CorrelationContext itemContext = page.kind == BandcampPageKind::Track ? CorrelationContext{}.withTrack(id)
+                                                                                     : CorrelationContext{}.withAlbum(id);
         qCDebug(BANDCAMP_TRACE_PARSER).noquote()
             << formatTraceEvent(itemContext, QStringLiteral("listing_reference"),
                                 {DiagnosticField::number(QStringLiteral("ordinal"), ordinal),
                                  DiagnosticField::text(QStringLiteral("kind"), pageKindName(page.kind)),
-                                 DiagnosticField::number(QStringLiteral("id"), id),
-                                 DiagnosticField::text(QStringLiteral("url"), page.url)});
+                                 DiagnosticField::url(QStringLiteral("url"), QUrl(page.url))});
     };
     std::optional<qsizetype> gridDepth;
     std::optional<qsizetype> rowDepth;
@@ -1096,14 +967,10 @@ BandcampListingParseOutcome parseDiscographyPage(const QByteArray& body, const Q
     }
 
     if(batch.continuation) {
-        qCDebug(BANDCAMP_TRACE_PARSER).noquote() << formatTraceEvent(
-            context, QStringLiteral("listing_continuation"),
-            {DiagnosticField::text(QStringLiteral("url"), redactUrlForLog(batch.continuation->locator))});
+        qCDebug(BANDCAMP_TRACE_PARSER).noquote()
+            << formatTraceEvent(context, QStringLiteral("listing_continuation"),
+                                {DiagnosticField::url(QStringLiteral("url"), batch.continuation->locator)});
     }
-    qCInfo(BANDCAMP_PARSER).noquote() << formatTraceEvent(
-        context, QStringLiteral("parsed_discography"),
-        {DiagnosticField::number(QStringLiteral("references"), batch.references.size()),
-         DiagnosticField::number(QStringLiteral("has_continuation"), batch.continuation.has_value() ? 1 : 0)});
     return ResolutionSuccess<BandcampListingBatch>{std::move(batch)};
 }
 } // namespace Fooyin::Bandcamp

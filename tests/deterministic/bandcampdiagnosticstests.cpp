@@ -1,6 +1,8 @@
+#include "bandcampattemptsupervisor.h"
 #include "bandcampdiagnostics.h"
 #include "bandcamplogcapture.h"
 #include "bandcamplogging.h"
+#include "bandcampoutcome.h"
 
 #include <QtTest>
 
@@ -23,9 +25,13 @@ class DiagnosticsTests : public QObject
 private slots:
     void escapesDelimitersAndControls();
     void capsFieldLengthWithoutSplittingSurrogates();
-    void redactsUrlsForLogs();
+    void cleansUrlsForLogs();
+    void keepsRawTextUnscanned();
     void formatsCorrelatedSingleLineRecord();
-    void leadsWithTrackUriWhenTrackIsKnown();
+    void usesAlbumAndTrackKeysWithoutRepeatingUrl();
+    void usesUrlKeyOnlyWhenNoEntityIsKnown();
+    void resolutionRetryIsSingleWarning();
+    void resolutionFailureIsSingleWarningWithKnownAlbum();
     void capsFieldCountAndRecordLength();
     void traceIsFilteredSeparatelyFromDebug();
     void disabledTraceSkipsFormatting();
@@ -54,40 +60,95 @@ void DiagnosticsTests::capsFieldLengthWithoutSplittingSurrogates()
     QVERIFY(!cut.chopped(3).back().isHighSurrogate());
 }
 
-void DiagnosticsTests::redactsUrlsForLogs()
+void DiagnosticsTests::cleansUrlsForLogs()
 {
-    QCOMPARE(redactUrlForLog(QUrl(u"https://user:pw@artist.bandcamp.com/track/y?sig=SECRET#frag"_s)),
+    QCOMPARE(cleanUrlForLog(QUrl(u"https://user:pw@artist.bandcamp.com/track/y?sig=SECRET#frag"_s)),
              u"https://artist.bandcamp.com/track/y"_s);
-    QCOMPARE(redactUrlForLog(QUrl(u"http://[bad"_s)), u"<invalid url>"_s);
+    QCOMPARE(cleanUrlForLog(QUrl(u"http://[bad"_s)), u"<invalid url>"_s);
 
     const DiagnosticField field = DiagnosticField::url(u"url"_s, QUrl(u"https://a.bandcamp.com/t/z?sig=SECRET"_s));
     QCOMPARE(field.value, u"https://a.bandcamp.com/t/z"_s);
-    const auto text
-        = DiagnosticField::text(u"detail"_s, u"failed at https://user:pass@cdn.example.com/song.mp3?sig=SECRET"_s);
-    QCOMPARE(text.value, u"failed at https://cdn.example.com/song.mp3"_s);
+}
+
+void DiagnosticsTests::keepsRawTextUnscanned()
+{
+    // Free-form text is never regex-scanned, so raw source_snapshot JSON keeps its stream URLs verbatim.
+    const QString json = u"{\"file\":{\"mp3-128\":\"https://cdn.example.com/song.mp3?sig=KEEP\"}}"_s;
+    const DiagnosticField field = DiagnosticField::text(u"json"_s, json);
+    QCOMPARE(field.value, json);
 }
 
 void DiagnosticsTests::formatsCorrelatedSingleLineRecord()
 {
-    const CorrelationContext context{
-        .jobId       = 3,
-        .requestId   = 4,
-        .resourceUrl = QUrl(u"https://a.bandcamp.com/album/x?sig=SECRET"_s),
-    };
+    const CorrelationContext context{.albumId = 3};
     const QString record = formatTraceEvent(
-        context, u"request.finished"_s,
-        {DiagnosticField::number(u"status"_s, 200), DiagnosticField::text(u"error"_s, u"line1\nline2"_s)});
+        context, u"fetch"_s,
+        {DiagnosticField::url(u"url"_s, QUrl(u"https://a.bandcamp.com/album/x?sig=SECRET"_s)),
+         DiagnosticField::number(u"status"_s, 200), DiagnosticField::text(u"error"_s, u"line1\nline2"_s)});
 
-    QCOMPARE(record, u"job=\"3\" request=\"4\" release=\"https://a.bandcamp.com/album/x\" request.finished "
-                     u"status=\"200\" error=\"line1\\nline2\""_s);
+    QCOMPARE(record, u"album=3 fetch url=https://a.bandcamp.com/album/x status=200 error=\"line1\\nline2\""_s);
     QVERIFY(!record.contains(u"SECRET"_s));
     QVERIFY(!record.contains(u'\n'));
 }
 
-void DiagnosticsTests::leadsWithTrackUriWhenTrackIsKnown()
+void DiagnosticsTests::usesAlbumAndTrackKeysWithoutRepeatingUrl()
 {
-    const CorrelationContext context{.trackId = 9};
-    QCOMPARE(formatTraceEvent(context, u"probe"_s, {}), u"bandcamp://track/9 probe"_s);
+    QCOMPARE(formatTraceEvent(CorrelationContext{.albumId = 2}, u"probe"_s, {}), u"album=2 probe"_s);
+    QCOMPARE(formatTraceEvent(CorrelationContext{.trackId = 9}, u"probe"_s, {}), u"track=9 probe"_s);
+
+    const CorrelationContext both{
+        .albumId = 2, .trackId = 9, .resourceUrl = QUrl(u"https://a.bandcamp.com/album/x?sig=SECRET"_s)};
+    QCOMPARE(formatTraceEvent(both, u"probe"_s, {}), u"album=2 track=9 probe"_s);
+}
+
+void DiagnosticsTests::usesUrlKeyOnlyWhenNoEntityIsKnown()
+{
+    const CorrelationContext context{.resourceUrl = QUrl(u"https://a.bandcamp.com/music?sig=SECRET#top"_s)};
+    QCOMPARE(formatTraceEvent(context, u"probe"_s, {}), u"url=https://a.bandcamp.com/music probe"_s);
+
+    const CorrelationContext withAlbum = context.withAlbum(7);
+    QCOMPARE(formatTraceEvent(withAlbum, u"probe"_s, {}), u"album=7 probe"_s);
+    QCOMPARE(context.albumId, 0);
+}
+
+void DiagnosticsTests::resolutionRetryIsSingleWarning()
+{
+    LogCapture capture(u"fy.bandcamp.resolve.debug=true"_s);
+    ResolutionError error;
+    error.code   = ResolutionErrorCode::Timeout;
+    error.stage  = ResolutionStage::Fetch;
+    error.reason = u"attempt timed out"_s;
+    BandcampAttemptSupervisor attempts(BandcampAttemptPolicy{.attemptTimeoutMs = 1000, .maxAttempts = 3,
+                                                             .cooldownMs = 250});
+    attempts.resetBudget();
+    attempts.beginRetry();
+    logResolutionRetry(CorrelationContext{.albumId = 5}, error, 0, attempts);
+
+    QCOMPARE(capturedLogs().size(), 1);
+    QCOMPARE(capturedLogs().first().category, u"fy.bandcamp.resolve"_s);
+    QCOMPARE(capturedLogs().first().message,
+             u"album=5 retry attempt=2/3 delayMs=250 code=timeout reason=\"attempt timed out\""_s);
+}
+
+void DiagnosticsTests::resolutionFailureIsSingleWarningWithKnownAlbum()
+{
+    LogCapture capture(u"fy.bandcamp.resolve.debug=true"_s);
+    ResolutionError error;
+    error.code    = ResolutionErrorCode::RequiredFieldMissing;
+    error.stage   = ResolutionStage::Admit;
+    error.albumId = 11;
+    error.trackId = 12;
+    error.field   = u"track.streamUrl"_s;
+    error.value   = u"null"_s;
+    error.reason  = u"stream missing"_s;
+    logResolutionFailure(CorrelationContext{.resourceUrl = QUrl(u"https://a.bandcamp.com/album/x?sig=SECRET"_s)},
+                         error, 0);
+
+    QCOMPARE(capturedLogs().size(), 1);
+    QCOMPARE(capturedLogs().first().category, u"fy.bandcamp.resolve"_s);
+    QCOMPARE(capturedLogs().first().message,
+             u"album=11 track=12 failed stage=admit code=required_field_missing field=track.streamUrl value=null "
+             u"reason=\"stream missing\" url=https://a.bandcamp.com/album/x"_s);
 }
 
 void DiagnosticsTests::capsFieldCountAndRecordLength()
@@ -97,9 +158,9 @@ void DiagnosticsTests::capsFieldCountAndRecordLength()
         fields.append(DiagnosticField::text(u"f%1"_s.arg(i), u"v"_s));
     }
     const QString few = formatTraceEvent(CorrelationContext{}, u"probe"_s, fields);
-    QVERIFY(few.contains(u"f15=\"v\""_s));
+    QVERIFY(few.contains(u"f15=v"_s));
     QVERIFY(!few.contains(u"f16="_s));
-    QVERIFY(few.endsWith(u"fields_omitted=\"4\""_s));
+    QVERIFY(few.endsWith(u"fields_omitted=4"_s));
 
     QList<DiagnosticField> large;
     for(int i = 0; i < MaxDiagnosticFields; ++i) {

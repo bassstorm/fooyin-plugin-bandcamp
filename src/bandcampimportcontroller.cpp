@@ -7,13 +7,6 @@
 #include <utility>
 
 namespace Fooyin::Bandcamp {
-namespace {
-CorrelationContext importCorrelation(BandcampOperationId operationId)
-{
-    return {.jobId = static_cast<qint64>(operationId)};
-}
-} // namespace
-
 BandcampImportController::BandcampImportController(BandcampOperationId operationId,
                                                    QList<BandcampPageUrl> submittedPages,
                                                    bool forceNewPlaylist, Fooyin::UId selectedPlaylistId,
@@ -191,19 +184,22 @@ void BandcampImportController::pump()
         const BandcampResolvedData& data
             = std::get<ResolutionSuccess<BandcampResolvedData>>(scope.outcome).value;
         QList<BandcampResolvedTrack> tracks;
+        CorrelationContext correlation{.resourceUrl = QUrl(scope.page.url)};
         if(const auto* album = std::get_if<BandcampAlbum>(&data)) {
             tracks.reserve(album->tracks.size());
             for(const BandcampTrack& track : album->tracks) {
                 tracks.append({track, album->metadata});
             }
+            correlation.albumId = album->metadata.id;
         }
         else {
-            tracks.append(std::get<BandcampResolvedTrack>(data));
+            const auto& resolvedTrack = std::get<BandcampResolvedTrack>(data);
+            tracks.append(resolvedTrack);
+            correlation.albumId = resolvedTrack.album ? resolvedTrack.album->id : 0;
+            correlation.trackId = resolvedTrack.track.id;
         }
 
         guard->m_handoffPhase = HandoffPhase::Gateway;
-        const CorrelationContext correlation{.jobId = static_cast<qint64>(m_operationId),
-                                             .resourceUrl = QUrl(scope.page.url)};
         guard->m_gateway->commit(std::move(tracks), guard, correlation,
                                  [guard, scope](FooyinTrackCommitOutcome outcome) mutable {
                                      if(guard) {
@@ -286,10 +282,9 @@ void BandcampImportController::failRun(QString reason, bool countCurrentScope, b
     m_stopReason = std::move(reason);
     clearPendingAsCancelled();
     const QString stopReason = m_stopReason;
-    const BandcampOperationId operationId = m_operationId;
     if(logFailure) {
         qCWarning(BANDCAMP_UI).noquote()
-            << formatTraceEvent(importCorrelation(operationId), QStringLiteral("import.stopped"),
+            << formatTraceEvent(CorrelationContext{}, QStringLiteral("import_stopped"),
                                 {DiagnosticField::text(QStringLiteral("reason"), stopReason)});
     }
     const QPointer<BandcampImportController> guard{this};
@@ -336,8 +331,8 @@ void BandcampImportController::finishIfReady()
     m_finished = true;
     const BandcampImportSummary summary{m_operationId, m_added, m_failed, m_cancelled, m_stopReason};
     qCInfo(BANDCAMP_UI).noquote()
-        << formatTraceEvent(importCorrelation(summary.operationId), QStringLiteral("import.completed"),
-                            {DiagnosticField::number(QStringLiteral("added"), summary.added),
+        << formatTraceEvent(CorrelationContext{}, QStringLiteral("import_completed"),
+                            {DiagnosticField::number(QStringLiteral("succeeded"), summary.added),
                              DiagnosticField::number(QStringLiteral("failed"), summary.failed),
                              DiagnosticField::number(QStringLiteral("cancelled"), summary.cancelled)});
     emit finished(summary);

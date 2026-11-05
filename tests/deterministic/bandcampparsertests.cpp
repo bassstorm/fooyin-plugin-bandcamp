@@ -440,7 +440,7 @@ void ParserTests::diagnosticsAreCorrelatedRedactedAndIndependent()
 {
     const QByteArray json =
         R"({"current":{"type":"album","id":1,"title":"T","artist":"Own","release_date":false},
-            "artist":"Other","album_release_date":"2024-01-02","extra":{"long":")"
+            "artist":"Other \"Quoted\"","album_release_date":"2024-01-02","extra":{"long":")"
         + QByteArray(1200, 'x') +
         R"(","url":"https:\/\/user:password@cdn.example/path?token=secret#fragment",
              "bad_url":"not-a-url?token=secret","authorization":{"headers":["Bearer secret"]},
@@ -449,47 +449,40 @@ void ParserTests::diagnosticsAreCorrelatedRedactedAndIndependent()
                 "mp3-v0":"invalid?token=secret"}}]})";
     const auto body = tralbumPage(json);
     LogCapture capture(u"fy.bandcamp.parser.debug=true\nfy.trace.bandcamp.parser.debug=true"_s);
-    const auto result = parseReleasePage(body, PageUrl, {.jobId = 4, .requestId = 8});
+    const auto result = parseReleasePage(body, PageUrl);
     QVERIFY(value<AlbumCandidate>(result));
-    QVERIFY(!capturedLogs().isEmpty());
-    QVERIFY(capturedLogs().first().message.contains(u"source_snapshot"_s));
-    QVERIFY(hasEvent(u"fy.bandcamp.parser"_s, u"source_conflict"_s, u"$.current.artist"_s));
-    QVERIFY(hasEvent(u"fy.bandcamp.parser"_s, u"source_conflict"_s, u"$.artist"_s));
-    QVERIFY(hasEvent(u"fy.bandcamp.parser"_s, u"source_unresolved"_s, u"$.trackinfo[0].artist"_s));
-    QVERIFY(hasEvent(u"fy.trace.bandcamp.parser"_s, u"source_mapping"_s, u"old=\"<invalid>\""_s));
+    QVERIFY(hasEvent(u"fy.trace.bandcamp.parser"_s, u"album=1 source_snapshot"_s));
+    QVERIFY(hasEvent(u"fy.bandcamp.parser"_s, u"conflict"_s, u"field=album.artist chosen=Own ignored=\"Other \\\"Quoted\\\"\""_s));
+    QVERIFY(hasEvent(u"fy.bandcamp.parser"_s, u"fallback"_s, u"field=album.releaseDate"_s));
     int snapshots = 0;
     for(const auto& log : capturedLogs()) {
-        QVERIFY(!log.message.contains(u"secret"_s));
-        QVERIFY(!log.message.contains(u"password"_s));
-        QVERIFY(!log.message.contains(u"?from="_s));
-        QVERIFY(log.message.contains(u"job=\"4\""_s));
-        QVERIFY(log.message.contains(u"request=\"8\""_s));
+        if(!log.message.contains(u"source_snapshot"_s)) {
+            continue;
+        }
         QVERIFY(!log.message.contains(u'\n'));
         QVERIFY(!log.message.contains(QChar(0x2028)));
-        if(log.message.contains(u"source_snapshot"_s)) {
-            ++snapshots;
-            const auto offset = log.message.indexOf(u" json="_s);
-            QVERIFY(offset > 0);
-            const auto snapshot = QJsonDocument::fromJson(log.message.mid(offset + 6).toUtf8());
-            QVERIFY(snapshot.isObject());
-            QCOMPARE(snapshot.object().value(u"extra").toObject().value(u"long").toString().size(), 1200);
-            QCOMPARE(snapshot.object().value(u"extra").toObject().value(u"url").toString(),
-                     u"https://cdn.example/path"_s);
-            QCOMPARE(snapshot.object().value(u"trackinfo").toArray().size(), qsizetype{1});
-            const auto extra = snapshot.object().value(u"extra").toObject();
-            QCOMPARE(extra.value(u"bad_url").toString(), u"not-a-url"_s);
-            QCOMPARE(extra.value(u"authorization").toObject().value(u"headers").toArray().size(), qsizetype{1});
-            QCOMPARE(extra.value(u"multiline").toString(), u"one\ninjected\u2028line"_s);
-        }
+        ++snapshots;
+        const auto offset = log.message.indexOf(u" json="_s);
+        QVERIFY(offset > 0);
+        const auto snapshot = QJsonDocument::fromJson(log.message.mid(offset + 6).toUtf8());
+        QVERIFY(snapshot.isObject());
+        QCOMPARE(snapshot.object().value(u"extra").toObject().value(u"long").toString().size(), 1200);
+        // Snapshots keep raw source JSON, including signed stream URLs, without regex redaction.
+        QCOMPARE(snapshot.object().value(u"extra").toObject().value(u"url").toString(),
+                 u"https://user:password@cdn.example/path?token=secret#fragment"_s);
+        QCOMPARE(snapshot.object().value(u"trackinfo").toArray().size(), qsizetype{1});
+        const auto extra = snapshot.object().value(u"extra").toObject();
+        QCOMPARE(extra.value(u"bad_url").toString(), u"not-a-url?token=secret"_s);
+        QCOMPARE(extra.value(u"authorization").toObject().value(u"headers").toArray().size(), qsizetype{1});
+        QCOMPARE(extra.value(u"multiline").toString(), u"one\ninjected\u2028line"_s);
     }
     QCOMPARE(snapshots, 1);
-    QVERIFY(hasEvent(u"fy.trace.bandcamp.parser"_s, u"bandcamp://track/9"_s));
     capturedLogs().clear();
-    const auto rejected = parseReleasePage(tralbumPage("[1,2]"), PageUrl, {.requestId = 9});
+    const auto rejected = parseReleasePage(tralbumPage("[1,2]"), PageUrl);
     QVERIFY(!isSuccess(rejected));
     QVERIFY(hasEvent(u"fy.trace.bandcamp.parser"_s, u"source_snapshot"_s, u"json=[1,2]"_s));
     capturedLogs().clear();
-    QVERIFY(!isSuccess(parseReleasePage(tralbumPage("null"), PageUrl, {.requestId = 10})));
+    QVERIFY(!isSuccess(parseReleasePage(tralbumPage("null"), PageUrl)));
     QVERIFY(hasEvent(u"fy.trace.bandcamp.parser"_s, u"source_snapshot"_s, u"json=null"_s));
     capturedLogs().clear();
     QLoggingCategory::setFilterRules(u"fy.bandcamp.parser.debug=false\nfy.trace.bandcamp.parser.debug=false"_s);
@@ -501,6 +494,7 @@ void ParserTests::diagnosticsAreCorrelatedRedactedAndIndependent()
 
 void ParserTests::extractsOrderedStructuredListingReferences()
 {
+    LogCapture capture(u"fy.trace.bandcamp.parser.debug=true"_s);
     const QByteArray listing
         = R"(<ol id="music-grid"><li data-item-id="album-3493169048"><a href="/album/lp8"><p class="title">ignored</p></a></li>)"
           R"(<li class="music-grid-item" data-item-id="track-3734052618"><a href="/track/ride-with-me">ignored</a></li></ol>)";
@@ -519,6 +513,10 @@ void ParserTests::extractsOrderedStructuredListingReferences()
     QCOMPARE(success->value.references.at(1).page.kind, BandcampPageKind::Track);
     QCOMPARE(success->value.references.at(1).page.url, u"https://artist.bandcamp.com/track/ride-with-me"_s);
     QVERIFY(!success->value.continuation);
+
+    QVERIFY(hasEvent(u"fy.trace.bandcamp.parser"_s, u"album=3493169048 listing_reference"_s));
+    QVERIFY(hasEvent(u"fy.trace.bandcamp.parser"_s, u"track=3734052618 listing_reference"_s));
+    QCOMPARE(capturedLogs().size(), 2);
 }
 
 void ParserTests::htmlRecoveryPreservesStructuredSelection()

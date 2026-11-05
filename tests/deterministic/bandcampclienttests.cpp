@@ -407,33 +407,50 @@ private slots:
         BandcampClient client{&network};
 
         CorrelationContext context;
-        context.jobId         = 7;
+        context.albumId       = 7;
         context.resourceUrl   = AlbumUrl;
         const Fetched fetched = fetchAndWait(client, AlbumUrl, context);
         QVERIFY(fetched.response.has_value());
         QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampFetchResponse>>(*fetched.response));
         QCOMPARE(fetched.id, BandcampClient::RequestId{1});
 
-        const QStringList started  = traceLines(u"request.started"_s);
-        const QStringList finished = traceLines(u"request.finished"_s);
-        QCOMPARE(started.size(), 1);
-        QCOMPARE(finished.size(), 1);
-
-        for(const QString& line : {started.first(), finished.first()}) {
-            QVERIFY(line.contains(u"job=\"7\""_s));
-            QVERIFY(line.contains(u"request=\"1\""_s));
-            QVERIFY(!line.contains(u"SECRET"_s));
-            QVERIFY(!line.contains(u"fragment"_s));
-            QVERIFY(!line.contains(u'\n'));
-        }
-        QVERIFY(finished.first().contains(u"status=\"200\""_s));
+        // One completion-time metric replaces the old started/finished pair and carries the album key.
+        const QStringList fetches = traceLines(u"fetch"_s);
+        QCOMPARE(fetches.size(), 1);
+        const QString& line = fetches.first();
+        QVERIFY(line.startsWith(u"album=7 fetch "_s));
+        QVERIFY(line.contains(u"url=https://artist.bandcamp.com/album/record "_s));
+        QVERIFY(line.contains(u"status=200"_s));
+        QVERIFY(!line.contains(u"SECRET"_s));
+        QVERIFY(!line.contains(u"fragment"_s));
+        QVERIFY(!line.contains(u'\n'));
 
         for(const CapturedLog& log : capturedLogs()) {
             QVERIFY(!log.message.contains(u"SECRET"_s));
         }
     }
 
-    void traceRecordsCancellation()
+    void resourceOnlyFetchLogsUrlOnce()
+    {
+        LogCapture capture(u"fy.trace.bandcamp.*.debug=true"_s);
+
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) { return FakeResponse{.status = 200, .body = "ok"}; });
+        BandcampClient client{&network};
+
+        CorrelationContext context;
+        context.resourceUrl   = AlbumUrl;
+        const Fetched fetched = fetchAndWait(client, AlbumUrl, context);
+        QVERIFY(fetched.response.has_value());
+
+        const QStringList fetches = traceLines(u"fetch"_s);
+        QCOMPARE(fetches.size(), 1);
+        const QString& line = fetches.first();
+        QVERIFY(line.startsWith(u"url=https://artist.bandcamp.com/album/record fetch "_s));
+        QCOMPARE(line.count(u"url="_s), 1);
+    }
+
+    void cancellationIsSilent()
     {
         LogCapture capture(u"fy.trace.bandcamp.*.debug=true"_s);
 
@@ -441,16 +458,14 @@ private slots:
         BandcampClient client{&network};
 
         CorrelationContext context;
-        context.jobId = 9;
-        const auto id = client.fetch(AlbumUrl, [](BandcampFetchOutcome) { }, context);
+        context.albumId = 9;
+        const auto id   = client.fetch(AlbumUrl, [](BandcampFetchOutcome) { }, context);
         client.cancel(id);
 
-        const QStringList cancelled = traceLines(u"request.cancelled"_s);
-        QCOMPARE(cancelled.size(), 1);
-        QVERIFY(cancelled.first().contains(u"job=\"9\""_s));
-        QVERIFY(cancelled.first().contains(u"request=\"1\""_s));
+        QCOMPARE(traceLines(u"fetch"_s).size(), 0);
     }
 };
+
 
 int runClientTests(int argc, char** argv)
 {

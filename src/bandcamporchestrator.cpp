@@ -1,6 +1,12 @@
 #include "bandcamporchestrator.h"
 
+#include "bandcamplogging.h"
+#include "bandcampdiagnostics.h"
+
+#include <QUrl>
+
 #include <algorithm>
+
 #include <limits>
 #include <type_traits>
 #include <utility>
@@ -167,7 +173,7 @@ std::optional<ResolutionError> BandcampOrchestrator::appendListingBatch(qsizetyp
                                QStringLiteral("discography listing ordinal overflow")};
     }
     for(const BandcampListingReference& reference : batch.references) {
-        const QString key = addRequest(reference.page);
+        const QString key = addRequest(reference.page, reference.id);
         group.occurrences.append({key, reference.page, reference.id, std::nullopt});
         registerRequest(inputOrdinal, key);
     }
@@ -257,12 +263,12 @@ QString BandcampOrchestrator::requestKey(const BandcampPageUrl& page)
     return QString::number(static_cast<unsigned int>(page.kind)) + QChar(u':') + page.url;
 }
 
-QString BandcampOrchestrator::addRequest(const BandcampPageUrl& page)
+QString BandcampOrchestrator::addRequest(const BandcampPageUrl& page, qint64 id)
 {
     const QString key = requestKey(page);
     if(!m_requestKeys.contains(key)) {
         m_requestKeys.insert(key);
-        m_requests.append({key, page});
+        m_requests.append({key, page, id});
     }
     return key;
 }
@@ -362,7 +368,8 @@ BandcampResolutionOutcome BandcampOrchestrator::validateListingIdentity(const Oc
     return ResolutionFailure{ResolutionError{
         ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Publish, QUrl(occurrence.page.url),
         occurrence.page.kind == BandcampPageKind::Track ? occurrence.expectedId : 0, QStringLiteral("listing.itemId"),
-        QStringLiteral("resolved release identity disagrees with its listing ID")}};
+        QStringLiteral("resolved release identity disagrees with its listing ID"),
+        occurrence.page.kind == BandcampPageKind::Album ? occurrence.expectedId : 0}};
 }
 
 QDate BandcampOrchestrator::releaseDate(const BandcampResolutionOutcome& outcome) const
@@ -460,6 +467,36 @@ QVector<BandcampAssociatedOutcome> BandcampOrchestrator::drain()
         }
         if(group.nextOutput != group.outputOrder.size()) {
             break;
+        }
+        if(group.discography) {
+            // The synthetic listing-level entry has no key and is not a release reference.
+            qsizetype references = 0;
+            qsizetype admitted   = 0;
+            qsizetype failed     = 0;
+            qsizetype cancelled  = 0;
+            for(const Occurrence& occurrence : std::as_const(group.occurrences)) {
+                if(!occurrence.key.isEmpty()) {
+                    ++references;
+                }
+                const auto outcome = outcomeFor(occurrence);
+                if(outcome && std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(*outcome)) {
+                    ++admitted;
+                }
+                else if(outcome && std::holds_alternative<ResolutionFailure>(*outcome)) {
+                    ++failed;
+                }
+                else if(!outcome || std::holds_alternative<ResolutionCancelled>(*outcome)) {
+                    ++cancelled;
+                }
+            }
+            QList<DiagnosticField> fields{DiagnosticField::number(QStringLiteral("references"), references),
+                                          DiagnosticField::number(QStringLiteral("admitted"), admitted),
+                                          DiagnosticField::number(QStringLiteral("failed"), failed)};
+            if(cancelled > 0) {
+                fields.append(DiagnosticField::number(QStringLiteral("cancelled"), cancelled));
+            }
+            qCInfo(BANDCAMP_RESOLVE).noquote() << formatTraceEvent(
+                CorrelationContext{.resourceUrl = QUrl(group.inputPage.url)}, QStringLiteral("discography"), fields);
         }
         ++m_nextGroup;
     }

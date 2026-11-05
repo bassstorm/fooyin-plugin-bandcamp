@@ -58,6 +58,16 @@ int BandcampAttemptSupervisor::retriesLeft() const
     return m_retriesLeft;
 }
 
+int BandcampAttemptSupervisor::attemptsMade() const
+{
+    return m_policy.maxAttempts - m_retriesLeft;
+}
+
+int BandcampAttemptSupervisor::maxAttempts() const
+{
+    return m_policy.maxAttempts;
+}
+
 int BandcampAttemptSupervisor::cooldownMs() const
 {
     return m_policy.cooldownMs;

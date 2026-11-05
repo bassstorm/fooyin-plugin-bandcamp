@@ -2,7 +2,9 @@
 #include "bandcampresolutionservice.h"
 #include "bandcampurl.h"
 
+#include <QCoreApplication>
 #include <QEventLoop>
+#include <QLoggingCategory>
 #include <QMetaObject>
 #include <QNetworkAccessManager>
 #include <QTimer>
@@ -17,6 +19,10 @@ using namespace Fooyin::Bandcamp;
 namespace {
 // Backstop for one operation. The service's own item timeouts are the primary limit.
 constexpr int OperationWatchdogMs = 120'000;
+
+// Plugin logs (fy.bandcamp.*) are echoed to stderr. Trace categories (fy.trace.*) stay off because
+// source_snapshot lines for full Bandcamp pages are very large.
+const QString LiveLogRules{u"*.debug=false\nfy.bandcamp.*=true"_s};
 
 const QString ArtistUrl{u"https://dither.bandcamp.com"_s};
 const QString LabelUrl{u"https://breakbeatrebelz.bandcamp.com/"_s};
@@ -257,6 +263,12 @@ void BandcampLiveTests::standaloneTrackResolves()
     verifyResolvedTrack(*resolved);
 }
 
-QTEST_MAIN(BandcampLiveTests)
+int main(int argc, char* argv[])
+{
+    QCoreApplication app(argc, argv);
+    QLoggingCategory::setFilterRules(LiveLogRules);
+    BandcampLiveTests test;
+    return QTest::qExec(&test, argc, argv);
+}
 
 #include "bandcamplivetests.moc"

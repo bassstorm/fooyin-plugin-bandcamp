@@ -73,6 +73,7 @@ Do not split a single state machine across layers or mix UI batch workflows with
 - **Track facts vs. album facts:** Explicit album-child values (`title`, `artist`, `trackNumber`, `duration`) precede conflicting track-page equivalents, while missing child fields may fall back to explicit track-page values. Track-owned `releaseDate` preserves explicit track values and inherits the album date only when missing.
 - **Provenance precedence:** Derived, fallback, or inherited values never overwrite explicit facts.
 - **Narrow normalization:** Post-processors refine optional metadata (artist inference, dirty-title prefix stripping, track-number repair) only when preconditions hold across the stable sibling set, preserving required fields and legitimate artist/title differences.
+- **One-field-one-postprocessor:** Each post-processor owns and mutates a single metadata field, so its name uniquely identifies the field it changes.
 
 ### Scope & Atomicity
 
@@ -93,9 +94,11 @@ Do not split a single state machine across layers or mix UI batch workflows with
 
 ### Logging & Redaction
 
-- Outcomes drive control flow; logs (`fy.bandcamp.<area>` and `fy.trace.bandcamp.<area>` in [bandcamplogging.h](src/bandcamplogging.h)) explain source observations, field conflicts, effective mutations, and terminal failures.
-- Processors log only effective field changes (no-ops are silent). Propagating an already-logged failure does not log duplicate warnings.
-- Never log signed stream URLs, query signatures, or secrets at any level. Keep disabled TRACE instrumentation near-zero cost.
+- **Diagnostic sufficiency & signal over noise:** Logs (`fy.bandcamp.<area>` and `fy.trace.bandcamp.<area>` in [bandcamplogging.h](src/bandcamplogging.h)) reconstruct why an operation reached its outcome and why admitted metadata has its values (anomalies, conflicts, effective mutations, resilience actions, terminal failures). Direct primary-source mappings, implicit album-to-track inheritance, and no-ops are silent.
+- **Severity by signal role:** `Warning` for degraded execution (retries, clamps) and terminal failures; `Info` for coarse lifecycle milestones and batch summaries; `Debug` for admitted entity summaries and metadata deltas; `Trace` for raw source snapshots, wire-level fetch metrics, and per-item enumerations. Keep disabled `Trace` instrumentation near-zero cost.
+- **Entity correlation without repetition:** Correlate records by stable domain entity ID (`album`, `track`), falling back to the full canonical URL only before an entity ID is established. Never invent synthetic job/request counters or repeat the URL once an entity ID is known.
+- **Single-record failures and retries:** Log each retry and terminal failure once at `Warning` at its deciding boundary; upstream propagation and user cancellation are silent.
+- **Lightweight URL cleanup:** Log full canonical URLs (preserving custom domains) with query, fragment, and userinfo stripped at `QUrl` formatting boundaries. Never regex-scan free text or raw JSON; signed stream locators may appear only inside raw `Trace` source snapshots.
 
 ### Testing & Build Verification
 

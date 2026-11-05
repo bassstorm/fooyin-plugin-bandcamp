@@ -232,7 +232,7 @@ void BandcampLibraryGateway::enqueue(QList<BandcampResolvedTrack> incoming, int 
     if(m_active || !m_pending.isEmpty() || m_nextScheduled) {
         if(BANDCAMP_TRACE_TRACKS().isDebugEnabled()) {
             qCDebug(BANDCAMP_TRACE_TRACKS).noquote()
-                << formatTraceEvent(request.correlation, QStringLiteral("track.commit.queued"),
+                << formatTraceEvent(request.correlation, QStringLiteral("track_commit_queued"),
                                     {DiagnosticField::number(QStringLiteral("occurrences"),
                                                              static_cast<qint64>(request.incoming.size()))});
         }
@@ -380,7 +380,6 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
         if(resident != residentsByTrackId.cend() && !loggedTrackIds.contains(id)) {
             loggedTrackIds.insert(id);
             CorrelationContext trackCorrelation = request.correlation.withTrack(id);
-            trackCorrelation.resourceUrl = QUrl{trackProperty(updated, BandcampSourceUrlProperty)};
             traceTransportChange(trackCorrelation, previous, updated);
         }
         m_active->output.push_back(std::move(updated));
@@ -394,7 +393,7 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
 
     if(BANDCAMP_TRACE_TRACKS().isDebugEnabled()) {
         qCDebug(BANDCAMP_TRACE_TRACKS).noquote()
-            << formatTraceEvent(request.correlation, QStringLiteral("track.commit.started"),
+            << formatTraceEvent(request.correlation, QStringLiteral("track_commit_started"),
                                 {DiagnosticField::number(QStringLiteral("occurrences"),
                                                          static_cast<qint64>(request.incoming.size())),
                                  DiagnosticField::number(QStringLiteral("write_targets"),
@@ -403,8 +402,8 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
 
     if(m_active->writeTargets.empty()) {
         FooyinTrackCommitSuccess result{std::move(m_active->output), 0, m_active->newIdentityCount};
-        qCInfo(BANDCAMP_TRACKS).noquote()
-            << formatTraceEvent(request.correlation, QStringLiteral("track.commit.completed"),
+        qCDebug(BANDCAMP_TRACKS).noquote()
+            << formatTraceEvent(request.correlation, QStringLiteral("track_commit_completed"),
                                 {DiagnosticField::number(QStringLiteral("occurrences"),
                                                          static_cast<qint64>(result.tracks.size())),
                                  DiagnosticField::number(QStringLiteral("updated_residents"), 0),
@@ -445,7 +444,7 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
     }
     if(BANDCAMP_TRACE_TRACKS().isDebugEnabled()) {
         qCDebug(BANDCAMP_TRACE_TRACKS).noquote()
-            << formatTraceEvent(writeContext, QStringLiteral("track.write.started"),
+            << formatTraceEvent(writeContext, QStringLiteral("track_write_started"),
                                 {DiagnosticField::number(QStringLiteral("targets"),
                                                          static_cast<qint64>(m_active->writeTargets.size()))});
     }
@@ -497,11 +496,11 @@ void BandcampLibraryGateway::onWriteFinished(quint64 token)
     FooyinTrackCommitSuccess success{std::move(m_active->output), expected, m_active->newIdentityCount};
     if(BANDCAMP_TRACE_TRACKS().isDebugEnabled()) {
         qCDebug(BANDCAMP_TRACE_TRACKS).noquote()
-            << formatTraceEvent(m_active->request.correlation, QStringLiteral("track.write.completed"),
+            << formatTraceEvent(m_active->request.correlation, QStringLiteral("track_write_completed"),
                                 {DiagnosticField::number(QStringLiteral("targets"), expected)});
     }
-    qCInfo(BANDCAMP_TRACKS).noquote()
-        << formatTraceEvent(m_active->request.correlation, QStringLiteral("track.commit.completed"),
+    qCDebug(BANDCAMP_TRACKS).noquote()
+        << formatTraceEvent(m_active->request.correlation, QStringLiteral("track_commit_completed"),
                             {DiagnosticField::number(QStringLiteral("occurrences"),
                                                      static_cast<qint64>(success.tracks.size())),
                              DiagnosticField::number(QStringLiteral("updated_residents"), expected),
@@ -632,7 +631,7 @@ void BandcampLibraryGateway::deliver(QObject* context, Completion completion, Fo
         Qt::QueuedConnection);
     if(!queued) {
         qCWarning(BANDCAMP_TRACKS).noquote()
-            << formatTraceEvent(correlation, QStringLiteral("track.completion.dispatch_failed"), {});
+            << formatTraceEvent(correlation, QStringLiteral("track_completion_dispatch_failed"), {});
     }
 }
 
@@ -648,7 +647,7 @@ void BandcampLibraryGateway::traceTransportChange(const CorrelationContext& cont
     }
 
     qCDebug(BANDCAMP_TRACE_TRACKS).noquote()
-        << formatTraceEvent(context, QStringLiteral("transport.updated"),
+        << formatTraceEvent(context, QStringLiteral("transport_updated"),
                             {DiagnosticField::text(QStringLiteral("properties"), changed.join(u","_s)),
                              DiagnosticField::text(QStringLiteral("reason"),
                                                    QStringLiteral("transport-only resident snapshot merge")),
@@ -671,7 +670,7 @@ void BandcampLibraryGateway::logFailure(const CorrelationContext& context,
 {
     const CorrelationContext failureContext = error.trackId > 0 ? context.withTrack(error.trackId) : context;
     qCWarning(BANDCAMP_TRACKS).noquote()
-        << formatTraceEvent(failureContext, QStringLiteral("track.commit.failed"),
+        << formatTraceEvent(failureContext, QStringLiteral("track_commit_failed"),
                             {DiagnosticField::text(QStringLiteral("code"), errorCodeName(error.code)),
                              DiagnosticField::text(QStringLiteral("reason"), error.reason)});
 }

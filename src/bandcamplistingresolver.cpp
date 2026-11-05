@@ -2,8 +2,10 @@
 
 #include "bandcampattemptsupervisor.h"
 #include "bandcampclient.h"
+#include "bandcampdiagnostics.h"
 #include "bandcamplogging.h"
 
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QNetworkAccessManager>
 #include <QPointer>
@@ -25,6 +27,8 @@ struct BandcampListingResolver::Impl
     std::shared_ptr<std::atomic_bool> stop{std::make_shared<std::atomic_bool>(false)};
     CorrelationContext context;
     BandcampClient::RequestId requestId{0};
+    int lastHttpStatus{0};
+    QElapsedTimer elapsed;
     bool started{false};
     bool slotHeld{false};
     bool workerActive{false};
@@ -43,7 +47,6 @@ struct BandcampListingResolver::Impl
         , callback{std::move(outcomeCallback)}
         , attempts{policy}
     {
-        context.jobId       = static_cast<qint64>(operationId);
         context.resourceUrl = pageUrl;
         QObject::connect(&attempts, &BandcampAttemptSupervisor::attemptTimedOut, owner,
                          [this]() { onAttemptTimedOut(); });
@@ -58,6 +61,7 @@ struct BandcampListingResolver::Impl
             return;
         }
         started = true;
+        elapsed.start();
         tryStart();
     }
 
@@ -83,13 +87,10 @@ struct BandcampListingResolver::Impl
                             context);
     }
 
-    void scheduleRetry()
+    void scheduleRetry(const ResolutionError& error, int httpStatus)
     {
         attempts.beginRetry();
-        qCDebug(BANDCAMP_TRACE_RESOLVE).noquote()
-            << formatTraceEvent(context, QStringLiteral("request.retry"),
-                                {DiagnosticField::number(QStringLiteral("retriesLeft"), attempts.retriesLeft()),
-                                 DiagnosticField::number(QStringLiteral("delayMs"), attempts.cooldownMs())});
+        logResolutionRetry(context, error, httpStatus, attempts);
     }
 
     // Detaches the in-flight attempt: its late callback is stale, and the client cancels the underlying reply.
@@ -127,7 +128,9 @@ struct BandcampListingResolver::Impl
         }
         if(attempts.attemptActive() && attempts.canRetry()) {
             abandonFetch();
-            scheduleRetry();
+            scheduleRetry(makeResolutionError(ResolutionErrorCode::Timeout, ResolutionStage::Fetch, pageUrl, 0,
+                                              QString{}, QStringLiteral("attempt timed out")),
+                          0);
             return;
         }
         stop->store(true, std::memory_order_relaxed);
@@ -162,8 +165,9 @@ struct BandcampListingResolver::Impl
             return;
         }
         if(const auto* failure = std::get_if<BandcampFetchFailure>(&outcome)) {
+            lastHttpStatus = failure->httpStatus;
             if(attempts.canRetry() && isRetriableFetchFailure(*failure)) {
-                scheduleRetry();
+                scheduleRetry(failure->error, failure->httpStatus);
                 return;
             }
             const QPointer<BandcampListingResolver> guard{owner};
@@ -249,6 +253,13 @@ struct BandcampListingResolver::Impl
             return;
         }
         reported = true;
+        if(const auto* failure = std::get_if<ResolutionFailure>(&outcome)) {
+            if(started) {
+                logResolutionFailure(context, failure->error, lastHttpStatus, attempts, elapsed.elapsed());
+            } else {
+                logResolutionFailure(context, failure->error, lastHttpStatus);
+            }
+        }
         attempts.stop();
         const QPointer<BandcampListingResolver> guard{owner};
         callback(std::move(outcome));

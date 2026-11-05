@@ -41,6 +41,9 @@ public:
     bool attemptActive() const;
     bool canRetry() const;
     int retriesLeft() const;
+    // Attempts started in the current chain, counting the first one.
+    int attemptsMade() const;
+    int maxAttempts() const;
     int cooldownMs() const;
     void beginRetry();
     void stop();

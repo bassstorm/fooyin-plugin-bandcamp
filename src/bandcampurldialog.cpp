@@ -1,6 +1,7 @@
 #include "bandcampurldialog.h"
 
 #include "bandcamplogging.h"
+#include "bandcampdiagnostics.h"
 
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -43,7 +44,6 @@ BandcampUrlDialog::BandcampUrlDialog(QWidget* parent)
 {
     setWindowTitle(tr("Add Bandcamp URLs"));
     setMinimumWidth(560);
-    qCInfo(BANDCAMP_UI) << "Add Bandcamp URL dialog opened";
 
     auto* hint = new QLabel(
         tr("Paste one Bandcamp URL per line. Album, track, and discography pages are accepted on any domain."), this);
@@ -117,15 +117,20 @@ void BandcampUrlDialog::submit()
     for(const InputLine& line : parseInput(m_input->toPlainText())) {
         if(line.url.isValid()) {
             qCDebug(BANDCAMP_UI).noquote()
-                << "line" << line.number << "accepted:" << pageKindName(line.url.kind) << line.url.url;
+                << formatTraceEvent(CorrelationContext{.resourceUrl = QUrl(line.url.url)},
+                                    QStringLiteral("input_accepted"),
+                                    {DiagnosticField::number(QStringLiteral("line"), line.number),
+                                     DiagnosticField::text(QStringLiteral("kind"), pageKindName(line.url.kind))});
             urls.append(line.url);
         }
         else {
-            qCDebug(BANDCAMP_UI).noquote() << "line" << line.number << "rejected:" << line.url.error;
+            qCDebug(BANDCAMP_UI).noquote()
+                << formatTraceEvent(CorrelationContext{}, QStringLiteral("input_rejected"),
+                                    {DiagnosticField::number(QStringLiteral("line"), line.number),
+                                     DiagnosticField::text(QStringLiteral("reason"), line.url.error)});
         }
     }
 
-    qCInfo(BANDCAMP_UI).noquote() << "Submitted" << urls.size() << "URL(s)";
     if(urls.isEmpty()) {
         return;
     }

@@ -113,17 +113,19 @@ void ContractTests::clampsOperationOptions()
 
 void ContractTests::correlationContextIsImmutable()
 {
-    const CorrelationContext base{.jobId = 1};
-    const CorrelationContext withRequest = base.withRequest(5);
-    const CorrelationContext withTrack   = withRequest.withTrack(9);
+    const CorrelationContext base{.albumId = 1};
+    const CorrelationContext withTrackScope = base.withTrack(9);
+    const CorrelationContext withUrl        = base.withResourceUrl(QUrl(u"https://artist.bandcamp.com/track/t?x=1"_s));
 
-    QCOMPARE(base.requestId, 0);
+    QCOMPARE(base.albumId, 1);
     QCOMPARE(base.trackId, 0);
-    QCOMPARE(withRequest.jobId, 1);
-    QCOMPARE(withRequest.requestId, 5);
-    QCOMPARE(withRequest.trackId, 0);
-    QCOMPARE(withTrack.requestId, 5);
-    QCOMPARE(withTrack.trackId, 9);
+    QCOMPARE(base.resourceUrl.isValid(), false);
+    QCOMPARE(withTrackScope.albumId, 1);
+    QCOMPARE(withTrackScope.trackId, 9);
+    QCOMPARE(withUrl.albumId, 1);
+    QCOMPARE(withUrl.resourceUrl, QUrl(u"https://artist.bandcamp.com/track/t?x=1"_s));
+    QCOMPARE(base.withAlbum(4).albumId, 4);
+    QCOMPARE(base.albumId, 1);
 }
 
 } // namespace

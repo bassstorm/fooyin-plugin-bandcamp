@@ -286,17 +286,6 @@ private:
             }
             else {
                 ++m_failed;
-                const auto& error      = std::get<ResolutionFailure>(result.outcome).error;
-                const QUrl resourceUrl = error.resourceUrl.isEmpty() ? QUrl(associated.page.url) : error.resourceUrl;
-                const CorrelationContext context{
-                    .jobId = static_cast<qint64>(m_id), .resourceUrl = resourceUrl, .trackId = error.trackId};
-                qCWarning(BANDCAMP_RESOLVE).noquote() << formatTraceEvent(
-                    context, QStringLiteral("scope_failed"),
-                    {DiagnosticField::number(QStringLiteral("ordinal"), associated.ordinal),
-                     DiagnosticField::text(QStringLiteral("code"), resolutionErrorCodeName(error.code)),
-                     DiagnosticField::text(QStringLiteral("stage"), resolutionStageName(error.stage)),
-                     DiagnosticField::text(QStringLiteral("field"), error.field),
-                     DiagnosticField::text(QStringLiteral("reason"), error.reason)});
             }
             m_resultHandler(result);
             if(!guard) {
@@ -321,8 +310,6 @@ private:
         m_finished = true;
         const BandcampOperationSummary summary{m_id, m_orchestrator.occurrenceCount(), m_succeeded, m_failed,
                                                m_cancelled};
-        qCInfo(BANDCAMP_RESOLVE) << "Operation" << m_id << "finished:" << summary.succeeded << "succeeded,"
-                                 << summary.failed << "failed," << summary.cancelled << "cancelled";
         const QPointer<BandcampOperation> guard{this};
         publishProgress();
         if(!guard) {

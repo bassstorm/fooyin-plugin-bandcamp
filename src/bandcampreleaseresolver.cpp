@@ -3,10 +3,11 @@
 #include "bandcampassembly.h"
 #include "bandcampattemptsupervisor.h"
 #include "bandcampclient.h"
+#include "bandcampdiagnostics.h"
 #include "bandcamplogging.h"
 #include "bandcamppostprocessor.h"
-#include "bandcamptrackuri.h"
 
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QHash>
 #include <QNetworkAccessManager>
@@ -32,6 +33,48 @@ ResolutionError parentFailure(const ResolutionError& cause, const QUrl& parentUr
     return makeResolutionError(ResolutionErrorCode::ParentUnavailable, stage, parentUrl, trackId,
                                cause.field.isEmpty() ? QStringLiteral("parent") : cause.field,
                                QStringLiteral("required album parent failed: %1").arg(cause.reason));
+}
+
+// The artist is shown only when it differs from the album artist, or when the track has no album.
+void logAdmittedTrack(const BandcampTrack& track, const QString& albumArtist, bool standalone,
+                      const CorrelationContext& context)
+{
+    if(!BANDCAMP_TRACKS().isDebugEnabled()) {
+        return;
+    }
+    QList<DiagnosticField> fields;
+    if(track.trackNumber > 0) {
+        fields.append(DiagnosticField::number(QStringLiteral("num"), track.trackNumber));
+    }
+    fields.append(DiagnosticField::text(QStringLiteral("title"), track.title));
+    if(standalone || track.artist != albumArtist) {
+        fields.append(DiagnosticField::text(QStringLiteral("artist"), track.artist));
+    }
+    fields.append(DiagnosticField::number(QStringLiteral("durationMs"), track.durationMs));
+    qCDebug(BANDCAMP_TRACKS).noquote() << formatTraceEvent(context, QStringLiteral("admitted"), fields);
+}
+
+void logResolvedAlbum(const BandcampAlbumMetadata& album, qsizetype trackCount, const CorrelationContext& context)
+{
+    qCInfo(BANDCAMP_RESOLVE).noquote()
+        << formatTraceEvent(context, QStringLiteral("resolved"),
+                            {DiagnosticField::text(QStringLiteral("title"), album.title),
+                             DiagnosticField::text(QStringLiteral("artist"), album.artist),
+                             DiagnosticField::number(QStringLiteral("tracks"), static_cast<qint64>(trackCount)),
+                             DiagnosticField::text(QStringLiteral("releaseDate"),
+                                                   album.releaseDate.toString(Qt::ISODate)),
+                             DiagnosticField::url(QStringLiteral("url"), QUrl(album.sourceUrl))});
+}
+
+void logResolvedTrack(const BandcampTrack& track, const CorrelationContext& context)
+{
+    qCInfo(BANDCAMP_RESOLVE).noquote()
+        << formatTraceEvent(context, QStringLiteral("resolved"),
+                            {DiagnosticField::text(QStringLiteral("title"), track.title),
+                             DiagnosticField::text(QStringLiteral("artist"), track.artist),
+                             DiagnosticField::text(QStringLiteral("releaseDate"),
+                                                   track.releaseDate.toString(Qt::ISODate)),
+                             DiagnosticField::url(QStringLiteral("url"), QUrl(track.sourceUrl))});
 }
 
 BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const ReleaseCandidate& primary,
@@ -60,6 +103,11 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
         if(stop && stop->load(std::memory_order_relaxed)) {
             return ResolutionCancelled{};
         }
+        const CorrelationContext albumContext = context.withAlbum(refined.album.metadata.id);
+        for(const BandcampTrack& track : std::as_const(refined.album.tracks)) {
+            logAdmittedTrack(track, refined.album.metadata.artist, false, albumContext.withTrack(track.id));
+        }
+        logResolvedAlbum(refined.album.metadata, refined.album.tracks.size(), albumContext);
         return ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(refined.album)}};
     }
 
@@ -70,8 +118,7 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
             QStringLiteral("identity"), QStringLiteral("parsed resource is not a track"))};
     }
     if(track->track.id.isUsable()) {
-        context.trackId     = track->track.id.value;
-        context.resourceUrl = QUrl(bandcampTrackUri(track->track.id.value));
+        context.trackId = track->track.id.value;
     }
 
     // The workflow classified parent evidence and fetched the parent when required, so the parent's presence is the decision.
@@ -100,7 +147,25 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
     if(stop && stop->load(std::memory_order_relaxed)) {
         return ResolutionCancelled{};
     }
+    CorrelationContext resolvedContext = context;
+    if(refined.result.album) {
+        resolvedContext = resolvedContext.withAlbum(refined.result.album->id);
+        logAdmittedTrack(refined.result.track, refined.result.album->artist, false, resolvedContext);
+    }
+    else {
+        logAdmittedTrack(refined.result.track, {}, true, resolvedContext);
+    }
+    logResolvedTrack(refined.result.track, resolvedContext);
     return ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(refined.result)}};
+}
+
+CorrelationContext releaseRequestContext(const BandcampReleaseRequest& request)
+{
+    const CorrelationContext context = CorrelationContext{}.withResourceUrl(QUrl(request.page.url));
+    if(request.id <= 0) {
+        return context;
+    }
+    return request.page.kind == BandcampPageKind::Track ? context.withTrack(request.id) : context.withAlbum(request.id);
 }
 
 enum class WorkflowPhase : quint8
@@ -112,25 +177,6 @@ enum class WorkflowPhase : quint8
     ParsingParent,
     Resolving
 };
-
-QString workflowPhaseName(WorkflowPhase phase)
-{
-    switch(phase) {
-        case WorkflowPhase::Created:
-            return QStringLiteral("created");
-        case WorkflowPhase::FetchingPrimary:
-            return QStringLiteral("fetch_primary");
-        case WorkflowPhase::ParsingPrimary:
-            return QStringLiteral("parse_primary");
-        case WorkflowPhase::FetchingParent:
-            return QStringLiteral("fetch_parent");
-        case WorkflowPhase::ParsingParent:
-            return QStringLiteral("parse_parent");
-        case WorkflowPhase::Resolving:
-            return QStringLiteral("resolve");
-    }
-    return QStringLiteral("unknown");
-}
 
 class BandcampReleaseWorkflow : public QObject
 {
@@ -151,8 +197,7 @@ public:
         , m_outcomeCallback{std::move(outcomeCallback)}
         , m_settledCallback{std::move(settledCallback)}
     {
-        m_context.jobId       = static_cast<qint64>(m_operationId);
-        m_context.resourceUrl = QUrl(m_request.page.url);
+        m_context = releaseRequestContext(m_request);
         QObject::connect(&m_attempts, &BandcampAttemptSupervisor::attemptTimedOut, this,
                          [this]() { onAttemptTimedOut(); });
         QObject::connect(&m_attempts, &BandcampAttemptSupervisor::retryReady, this,
@@ -170,6 +215,8 @@ public:
 
     void start()
     {
+        m_started = true;
+        m_elapsed.start();
         fetchPage(m_request.page, false);
     }
 
@@ -179,7 +226,6 @@ public:
             return;
         }
         m_stop->store(true, std::memory_order_relaxed);
-        trace(QStringLiteral("workflow_cancelled"));
         const QPointer<BandcampReleaseWorkflow> guard{this};
         if(m_attempts.attemptActive() && m_client && m_requestId != 0) {
             m_client->cancel(m_requestId);
@@ -220,9 +266,6 @@ private:
                 }
             },
             m_context);
-        if(!m_currentParent) {
-            m_primaryRequestId = m_requestId;
-        }
     }
 
     // Bumps the attempt id so the callback of the abandoned request is ignored whenever it is delivered.
@@ -237,12 +280,10 @@ private:
         }
     }
 
-    void scheduleRetry()
+    void scheduleRetry(const ResolutionError& error, int httpStatus)
     {
         m_attempts.beginRetry();
-        trace(QStringLiteral("request.retry"),
-              {DiagnosticField::number(QStringLiteral("retriesLeft"), m_attempts.retriesLeft()),
-               DiagnosticField::number(QStringLiteral("delayMs"), m_attempts.cooldownMs())});
+        logResolutionRetry(m_context, error, httpStatus, m_attempts);
     }
 
     void onFetch(quint64 attempt, BandcampFetchOutcome outcome)
@@ -251,9 +292,8 @@ private:
             settleIfIdle();
             return;
         }
-        const bool parent                                = m_currentParent;
-        const BandcampClient::RequestId completedRequest = m_requestId;
-        m_requestId                                      = 0;
+        const bool parent = m_currentParent;
+        m_requestId       = 0;
         if(m_reported) {
             settleIfIdle();
             return;
@@ -265,8 +305,9 @@ private:
             return;
         }
         if(const auto* failure = std::get_if<BandcampFetchFailure>(&outcome)) {
+            m_lastHttpStatus = failure->httpStatus;
             if(m_attempts.canRetry() && isRetriableFetchFailure(*failure)) {
-                scheduleRetry();
+                scheduleRetry(failure->error, failure->httpStatus);
                 return;
             }
             if(parent) {
@@ -287,16 +328,10 @@ private:
         BandcampFetchResponse response = std::get<ResolutionSuccess<BandcampFetchResponse>>(std::move(outcome)).value;
         m_currentUrl                   = response.url;
         m_context.resourceUrl          = response.url;
-        if(parent) {
-            m_context.requestId = static_cast<qint64>(completedRequest);
-            setPhase(WorkflowPhase::ParsingParent);
-        }
-        else {
-            m_context.requestId = static_cast<qint64>(m_primaryRequestId);
-            setPhase(WorkflowPhase::ParsingPrimary);
-        }
+        setPhase(parent ? WorkflowPhase::ParsingParent : WorkflowPhase::ParsingPrimary);
         parsePage(std::move(response.body), response.url, parent);
     }
+
 
     void parsePage(QByteArray body, QUrl effectiveUrl, bool parent)
     {
@@ -391,12 +426,14 @@ private:
                     QStringLiteral("parent.resource"), QStringLiteral("parent response did not identify an album"))});
                 return;
             }
+            adoptAlbumId(candidate);
             m_parentCandidate = std::move(candidate);
             resolve();
             return;
         }
 
         if(m_request.page.kind == BandcampPageKind::Album) {
+            adoptAlbumId(candidate);
             m_primaryCandidate = std::move(candidate);
             resolve();
             return;
@@ -409,8 +446,7 @@ private:
             return;
         }
         if(track->track.id.isUsable()) {
-            m_context.trackId     = track->track.id.value;
-            m_context.resourceUrl = QUrl(bandcampTrackUri(track->track.id.value));
+            m_context.trackId = track->track.id.value;
         }
         const ParentRequirement requirement = classifyParentEvidence(*track, m_context);
         if(const auto* failure = std::get_if<ResolutionFailure>(&requirement)) {
@@ -424,6 +460,9 @@ private:
         }
 
         const auto& required = std::get<RequiredAlbumParent>(requirement);
+        if(required.albumId) {
+            m_context = m_context.withAlbum(*required.albumId);
+        }
         fetchPage(BandcampPageUrl{BandcampPageKind::Album, required.url.toString(QUrl::FullyEncoded), {}}, true);
     }
 
@@ -443,8 +482,7 @@ private:
             context.trackId     = 0;
         }
         else if(primaryTrackId() > 0) {
-            context.resourceUrl = QUrl(bandcampTrackUri(primaryTrackId()));
-            context.trackId     = primaryTrackId();
+            context.trackId = primaryTrackId();
         }
         m_currentUrl = context.resourceUrl;
 
@@ -513,6 +551,13 @@ private:
         }
     }
 
+    void adoptAlbumId(const ReleaseCandidate& candidate)
+    {
+        if(const auto* album = std::get_if<AlbumCandidate>(&candidate); album && album->id.isUsable()) {
+            m_context = m_context.withAlbum(album->id.value);
+        }
+    }
+
     qint64 primaryTrackId() const
     {
         if(m_primaryCandidate) {
@@ -529,12 +574,6 @@ private:
         if(m_reported) {
             return;
         }
-        if(m_attempts.attemptActive() && m_attempts.canRetry()) {
-            abandonFetch();
-            scheduleRetry();
-            return;
-        }
-        m_stop->store(true, std::memory_order_relaxed);
         ResolutionStage stage = ResolutionStage::Fetch;
         switch(m_phase) {
             case WorkflowPhase::FetchingPrimary:
@@ -552,20 +591,25 @@ private:
                 stage = ResolutionStage::Refine;
                 break;
         }
-        const qint64 trackId = primaryTrackId();
-        trace(QStringLiteral("workflow_timeout"),
-              {DiagnosticField::text(QStringLiteral("stage"), resolutionStageName(stage))});
+        const ResolutionError error = makeResolutionError(ResolutionErrorCode::Timeout, stage, m_currentUrl,
+                                                          primaryTrackId(), QStringLiteral("resource"),
+                                                          QStringLiteral("page attempt timed out"));
+        if(m_attempts.attemptActive() && m_attempts.canRetry()) {
+            abandonFetch();
+            scheduleRetry(error, 0);
+            return;
+        }
+        m_stop->store(true, std::memory_order_relaxed);
         const QPointer<BandcampReleaseWorkflow> guard{this};
         abandonFetch();
         if(!guard) {
             return;
         }
-        if(report(ResolutionFailure{makeResolutionError(
-               ResolutionErrorCode::Timeout, stage, m_currentUrl, trackId, QStringLiteral("resource"),
-               QStringLiteral("page attempt timed out"))})) {
+        if(report(ResolutionFailure{error})) {
             settleIfIdle();
         }
     }
+
 
     bool report(BandcampResolutionOutcome outcome)
     {
@@ -574,22 +618,13 @@ private:
         }
         m_reported = true;
         m_attempts.stop();
-        CorrelationContext context = m_context;
-        QList<DiagnosticField> fields;
-        if(std::holds_alternative<ResolutionCancelled>(outcome)) {
-            fields.append(DiagnosticField::text(QStringLiteral("outcome"), QStringLiteral("cancelled")));
+        if(const auto* failure = std::get_if<ResolutionFailure>(&outcome)) {
+            if(m_started) {
+                logResolutionFailure(m_context, failure->error, m_lastHttpStatus, m_attempts, m_elapsed.elapsed());
+            } else {
+                logResolutionFailure(m_context, failure->error, m_lastHttpStatus);
+            }
         }
-        else if(const auto* failure = std::get_if<ResolutionFailure>(&outcome)) {
-            context.trackId = failure->error.trackId;
-            fields.append(DiagnosticField::text(QStringLiteral("outcome"), QStringLiteral("failure")));
-            fields.append(DiagnosticField::text(QStringLiteral("code"), resolutionErrorCodeName(failure->error.code)));
-            fields.append(DiagnosticField::text(QStringLiteral("stage"), resolutionStageName(failure->error.stage)));
-        }
-        else {
-            fields.append(DiagnosticField::text(QStringLiteral("outcome"), QStringLiteral("success")));
-        }
-        qCDebug(BANDCAMP_TRACE_RESOLVE).noquote()
-            << formatTraceEvent(context, QStringLiteral("workflow_outcome"), fields);
         const QPointer<BandcampReleaseWorkflow> guard{this};
         m_outcomeCallback(m_request.key, std::move(outcome));
         return guard;
@@ -617,17 +652,7 @@ private:
 
     void setPhase(WorkflowPhase phase)
     {
-        if(m_phase == phase) {
-            return;
-        }
         m_phase = phase;
-        trace(QStringLiteral("workflow_stage"),
-              {DiagnosticField::text(QStringLiteral("stage"), workflowPhaseName(phase))});
-    }
-
-    void trace(const QString& event, const QList<DiagnosticField>& fields = {}) const
-    {
-        qCDebug(BANDCAMP_TRACE_RESOLVE).noquote() << formatTraceEvent(m_context, event, fields);
     }
 
     QPointer<BandcampClient> m_client;
@@ -644,8 +669,10 @@ private:
     QUrl m_currentUrl;
     bool m_currentParent{false};
     BandcampClient::RequestId m_requestId{0};
-    BandcampClient::RequestId m_primaryRequestId{0};
     WorkflowPhase m_phase{WorkflowPhase::Created};
+    int m_lastHttpStatus{0};
+    QElapsedTimer m_elapsed;
+    bool m_started{false};
     bool m_workerActive{false};
     bool m_reported{false};
     bool m_settled{false};
@@ -738,8 +765,7 @@ struct BandcampReleaseResolver::Impl
             const QString identity               = cacheIdentity(request.page);
             if(cache.contains(identity)) {
                 qCDebug(BANDCAMP_TRACE_RESOLVE).noquote() << formatTraceEvent(
-                    CorrelationContext{.jobId       = static_cast<qint64>(operationId),
-                                       .resourceUrl = QUrl(request.page.url)},
+                    releaseRequestContext(request),
                     QStringLiteral("domain_cache_hit"),
                     {DiagnosticField::text(QStringLiteral("scope"), pageKindName(request.page.kind))});
                 ++nextRequest;

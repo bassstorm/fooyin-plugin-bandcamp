@@ -47,6 +47,10 @@ struct ResolutionError
     QString field;
     // Concise and safe. It must not contain page content.
     QString reason;
+    // Zero when the album identity is unknown.
+    qint64 albumId{0};
+    // Short offending value (for example `null` or a rejected URL). Empty when not applicable.
+    QString value;
 };
 
 ResolutionError makeResolutionError(ResolutionErrorCode code, ResolutionStage stage, const QUrl& url, qint64 trackId,

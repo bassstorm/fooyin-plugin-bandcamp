@@ -73,6 +73,43 @@ struct CandidateField
     }
 };
 
+enum class SourceKind : quint8
+{
+    Album,
+    Track
+};
+
+// Values are returned unescaped; formatTraceEvent escapes them once.
+inline QString describeCandidateValue(const QString& value)
+{
+    return value;
+}
+inline QString describeCandidateValue(const QUrl& value)
+{
+    return cleanUrlForLog(value);
+}
+inline QString describeCandidateValue(const QDate& value)
+{
+    return value.toString(Qt::ISODate);
+}
+inline QString describeCandidateValue(qint64 value)
+{
+    return QString::number(value);
+}
+inline QString describeCandidateValue(SourceKind value)
+{
+    return value == SourceKind::Album ? QStringLiteral("album") : QStringLiteral("track");
+}
+
+template <typename T>
+QString describeCandidateField(const CandidateField<T>& field)
+{
+    if(field.isUsable()) {
+        return describeCandidateValue(field.value);
+    }
+    return field.state == FieldState::Invalid ? QStringLiteral("<invalid>") : QStringLiteral("<unset>");
+}
+
 struct TrackCandidate
 {
     // List order is preserved, even when the declared record is malformed.

@@ -208,20 +208,16 @@ void postProcessTrack(TrackAdmission& admission, const std::atomic_bool* stop)
 }
 
 namespace {
-void logProcessorChange(const QString& processor, const QString& field, const QString& oldValue,
-                        const QString& newValue, const QString& reason, FieldProvenance provenance,
-                        const CorrelationContext& correlation)
+void logMutation(const QString& processor, const QString& oldValue, const QString& newValue,
+                 const CorrelationContext& correlation)
 {
-    if(!BANDCAMP_TRACE_TRACKS().isDebugEnabled()) {
+    if(!BANDCAMP_TRACKS().isDebugEnabled()) {
         return;
     }
-    qCDebug(BANDCAMP_TRACE_TRACKS).noquote() << formatTraceEvent(
-        correlation, QStringLiteral("processor_change"),
+    qCDebug(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+        correlation, QStringLiteral("mutated"),
         {DiagnosticField::text(QStringLiteral("processor"), processor),
-         DiagnosticField::text(QStringLiteral("field"), field), DiagnosticField::text(QStringLiteral("old"), oldValue),
-         DiagnosticField::text(QStringLiteral("new"), newValue),
-         DiagnosticField::text(QStringLiteral("provenance"), provenanceName(provenance)),
-         DiagnosticField::text(QStringLiteral("reason"), reason)});
+         DiagnosticField::text(QStringLiteral("old"), oldValue), DiagnosticField::text(QStringLiteral("new"), newValue)});
 }
 
 std::optional<QString> sharedTrackArtist(const QList<BandcampTrack>& siblings, bool complete,
@@ -261,9 +257,7 @@ int AlbumArtistInferenceProcessor::process(BandcampAlbumMetadata& album, AlbumPr
 
     album.artist              = *inferred;
     context.provenance.artist = FieldProvenance::Derived;
-    logProcessorChange(name(), QStringLiteral("album.artist"), QStringLiteral("<unset>"), album.artist,
-                   QStringLiteral("all complete sibling tracks share the same artist"), context.provenance.artist,
-                   context.correlation);
+    logMutation(name(), QStringLiteral("<unset>"), album.artist, context.correlation);
     return 1;
 }
 
@@ -282,9 +276,7 @@ int AlbumTitlePrefixProcessor::process(BandcampAlbumMetadata& album, AlbumProces
     const QString old        = album.title;
     album.title              = parts.title;
     context.provenance.title = FieldProvenance::Derived;
-    logProcessorChange(name(), QStringLiteral("album.title"), old, album.title,
-                   QStringLiteral("matching album-artist prefix removed"), context.provenance.title,
-                   context.correlation);
+    logMutation(name(), old, album.title, context.correlation);
     return 1;
 }
 
@@ -298,12 +290,14 @@ int TrackArtistInferenceProcessor::process(BandcampTrack& track, TrackProcessorC
     if(!track.artist.isEmpty() || !context.facts.inferredArtist) {
         return 0;
     }
+    // Inferred artist equal to the parent album artist is inherited by the fallback processor instead.
+    if(context.parent && sameArtist(*context.facts.inferredArtist, context.parent->artist)) {
+        return 0;
+    }
 
     track.artist              = *context.facts.inferredArtist;
     context.provenance.artist = FieldProvenance::Derived;
-    logProcessorChange(name(), QStringLiteral("track.artist"), QStringLiteral("<unset>"), track.artist,
-                   QStringLiteral("all complete sibling titles are shaped and have no explicit artists"),
-                   context.provenance.artist, context.correlation);
+    logMutation(name(), QStringLiteral("<unset>"), track.artist, context.correlation);
     return 1;
 }
 
@@ -333,11 +327,9 @@ int TrackArtistFallbackProcessor::process(BandcampTrack& track, TrackProcessorCo
 
     track.artist              = fallback;
     context.provenance.artist = source;
-    logProcessorChange(name(), QStringLiteral("track.artist"), QStringLiteral("<unset>"), track.artist,
-                   context.parent && !context.parent->artist.isEmpty()
-                       ? QStringLiteral("missing track artist inherited from its album")
-                       : QStringLiteral("missing track artist filled from page fallback context"),
-                   source, context.correlation);
+    if(source == FieldProvenance::Fallback) {
+        logMutation(name(), QStringLiteral("<unset>"), track.artist, context.correlation);
+    }
     return 1;
 }
 
@@ -351,12 +343,8 @@ int TrackDateInheritanceProcessor::process(BandcampTrack& track, TrackProcessorC
     if(!context.parent || track.releaseDate.isValid() || !context.parent->releaseDate.isValid()) {
         return 0;
     }
-    const QString value            = context.parent->releaseDate.toString(Qt::ISODate);
     track.releaseDate              = context.parent->releaseDate;
     context.provenance.releaseDate = FieldProvenance::Inherited;
-    logProcessorChange(name(), QStringLiteral("track.releaseDate"), QStringLiteral("<unset>"), value,
-                   QStringLiteral("track has no owned release date; album release date inherited"),
-                   context.provenance.releaseDate, context.correlation);
     return 1;
 }
 
@@ -374,9 +362,7 @@ int TrackTitlePrefixProcessor::process(BandcampTrack& track, TrackProcessorConte
     const QString old        = track.title;
     track.title              = parts.title;
     context.provenance.title = FieldProvenance::Derived;
-    logProcessorChange(name(), QStringLiteral("track.title"), old, track.title,
-                   QStringLiteral("matching track-artist prefix removed"), context.provenance.title,
-                   context.correlation);
+    logMutation(name(), old, track.title, context.correlation);
     return 1;
 }
 
@@ -393,10 +379,8 @@ int TrackNumberRepairProcessor::process(BandcampTrack& track, TrackProcessorCont
     const int old                  = track.trackNumber;
     track.trackNumber              = *context.facts.repairedTrackNumber;
     context.provenance.trackNumber = FieldProvenance::Derived;
-    logProcessorChange(name(), QStringLiteral("track.trackNumber"),
-                   old > 0 ? QString::number(old) : QStringLiteral("<unset>"), QString::number(track.trackNumber),
-                   QStringLiteral("missing number filled without changing valid supplied numbers"),
-                   context.provenance.trackNumber, context.correlation);
+    logMutation(name(), old > 0 ? QString::number(old) : QStringLiteral("<unset>"),
+                QString::number(track.trackNumber), context.correlation);
     return 1;
 }
 } // namespace Fooyin::Bandcamp

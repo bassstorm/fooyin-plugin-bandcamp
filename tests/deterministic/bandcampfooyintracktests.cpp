@@ -1,6 +1,7 @@
 #include "bandcampfooyintrack.h"
 #include "bandcamplibrarygateway.h"
 #include "bandcampimportcontroller.h"
+#include "bandcamplogcapture.h"
 #include "bandcamplogging.h"
 #include "bandcamptrackuri.h"
 
@@ -292,47 +293,6 @@ void submit(BandcampLibraryGateway& gateway, QList<BandcampResolvedTrack> incomi
     gateway.commit(std::move(incoming), context, std::move(correlation), std::move(completion), timeoutMs);
 }
 
-struct CapturedMessage
-{
-    QString category;
-    QString text;
-};
-
-QList<CapturedMessage>* activeMessages{nullptr};
-
-void captureMessage(QtMsgType, const QMessageLogContext& context, const QString& message)
-{
-    if(activeMessages) {
-        activeMessages->append({QString::fromUtf8(context.category), message});
-    }
-}
-
-class MessageCapture
-{
-public:
-    MessageCapture()
-        : m_previousHandler{qInstallMessageHandler(captureMessage)}
-    {
-        activeMessages = &messages;
-        m_traceWasEnabled = BANDCAMP_TRACE_TRACKS().isDebugEnabled();
-        QLoggingCategory::setFilterRules(QStringLiteral("fy.trace.bandcamp.tracks.debug=true"));
-    }
-
-    ~MessageCapture()
-    {
-        if(!m_traceWasEnabled) {
-            QLoggingCategory::setFilterRules(QStringLiteral("fy.trace.bandcamp.tracks.debug=false"));
-        }
-        activeMessages = nullptr;
-        qInstallMessageHandler(m_previousHandler);
-    }
-
-    QList<CapturedMessage> messages;
-
-private:
-    QtMessageHandler m_previousHandler{nullptr};
-    bool m_traceWasEnabled{false};
-};
 } // namespace
 
 class FooyinTrackTests : public QObject
@@ -535,8 +495,7 @@ void FooyinTrackTests::mergesOnlyTransportAndPreservesResidentMetadata()
     bool completed = false;
     FooyinTrackCommitOutcome outcome;
     CorrelationContext correlation;
-    correlation.jobId     = 9;
-    correlation.requestId = 14;
+    correlation.albumId = 9;
     submit(gateway, std::move(incoming), &receiver, [&](FooyinTrackCommitOutcome result) {
         outcome   = std::move(result);
         completed = true;
@@ -650,13 +609,12 @@ void FooyinTrackTests::rejectsConflictingPersistedTrackIdMirror()
     }
     BandcampLibraryGateway gateway{library.api};
     QObject receiver;
-    MessageCapture capture;
+    LogCapture capture(u"fy.trace.bandcamp.tracks.debug=true"_s);
 
     bool completed = false;
     FooyinTrackCommitOutcome outcome;
     CorrelationContext correlation;
-    correlation.jobId     = 31;
-    correlation.requestId = 7;
+    correlation.albumId = 31;
     submit(gateway, {memberTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
         outcome   = std::move(result);
         completed = true;
@@ -670,13 +628,12 @@ void FooyinTrackTests::rejectsConflictingPersistedTrackIdMirror()
     QCOMPARE(library.writeCalls, 0);
 
     bool foundFailure = false;
-    for(const CapturedMessage& message : capture.messages) {
+    for(const CapturedLog& message : capturedLogs()) {
         if(message.category == u"fy.bandcamp.tracks"_s
-           && message.text.contains(u"track.commit.failed"_s)) {
+           && message.message.contains(u"track_commit_failed"_s)) {
             foundFailure = true;
-            QVERIFY(message.text.startsWith(u"bandcamp://track/42 "_s));
-            QVERIFY(message.text.contains(u"job=\"31\""_s));
-            QVERIFY(message.text.contains(u"request=\"7\""_s));
+            QVERIFY(message.message.startsWith(u"album=31 track=42 "_s));
+            QVERIFY(message.message.contains(u"track_commit_failed "_s));
         }
     }
     QVERIFY(foundFailure);
@@ -980,13 +937,12 @@ void FooyinTrackTests::correlatesAndRedactsEffectiveTransportChanges()
     library.makeWriteAvailable();
     BandcampLibraryGateway gateway{library.api};
     QObject receiver;
-    MessageCapture capture;
+    LogCapture capture(u"fy.trace.bandcamp.tracks.debug=true"_s);
 
     bool completed = false;
     FooyinTrackCommitOutcome outcome;
     CorrelationContext correlation;
-    correlation.jobId = 9;
-    correlation.requestId = 14;
+    correlation.albumId = 9;
     submit(gateway, {memberTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
         outcome = std::move(result);
         completed = true;
@@ -997,15 +953,13 @@ void FooyinTrackTests::correlatesAndRedactsEffectiveTransportChanges()
     QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(outcome));
 
     bool found = false;
-    for(const CapturedMessage& message : capture.messages) {
+    for(const CapturedLog& message : capturedLogs()) {
         if(message.category == u"fy.trace.bandcamp.tracks"_s
-           && message.text.contains(u"transport.updated"_s)) {
+           && message.message.contains(u"transport_updated"_s)) {
             found = true;
-            QVERIFY(message.text.startsWith(u"bandcamp://track/42 "_s));
-            QVERIFY(message.text.contains(u"job=\"9\""_s));
-            QVERIFY(message.text.contains(u"request=\"14\""_s));
-            QVERIFY(!message.text.contains(u"secret-old"_s));
-            QVERIFY(!message.text.contains(u"token=one"_s));
+            QVERIFY(message.message.startsWith(u"album=9 track=42 transport_updated "_s));
+            QVERIFY(!message.message.contains(u"secret-old"_s));
+            QVERIFY(!message.message.contains(u"token=one"_s));
         }
     }
     QVERIFY(found);

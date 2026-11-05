@@ -7,6 +7,7 @@
 #include "bandcampsettings.h"
 #include "bandcampsettingsdialog.h"
 #include "bandcampurldialog.h"
+#include "bandcampdiagnostics.h"
 
 #include <core/coresettings.h>
 #include <core/network/remoteioservice.h>
@@ -187,7 +188,9 @@ void BandcampPlugin::showAddUrlDialog()
 
 void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool forceNewPlaylist)
 {
-    qCInfo(BANDCAMP_UI) << "Submitted" << urls.size() << "Bandcamp URL(s)";
+    qCInfo(BANDCAMP_UI).noquote()
+        << formatTraceEvent(CorrelationContext{}, QStringLiteral("import_started"),
+                            {DiagnosticField::number(QStringLiteral("urls"), urls.size())});
     if(!m_service) {
         qCWarning(BANDCAMP_UI) << "Bandcamp service is not available; URLs were not resolved";
         return;
@@ -195,12 +198,16 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
 
     FySettings fySettings;
     const BandcampSettings settings = loadBandcampSettings(fySettings);
-    qCInfo(BANDCAMP_SETTINGS) << "parallelism" << settings.parallelism << "attempt timeout"
-                              << settings.attemptTimeoutMs / 1000.0 << "s"
-                              << "max attempts" << settings.maxAttempts << "cooldown"
-                              << settings.attemptCooldownMs / 1000.0 << "s"
-                              << "discography order" << static_cast<int>(settings.discographyOrder)
-                              << "pre-playback refresh window" << settings.prePlaybackRefreshWindowMinutes << "min";
+    qCDebug(BANDCAMP_SETTINGS).noquote()
+        << formatTraceEvent(CorrelationContext{}, QStringLiteral("settings"),
+                            {DiagnosticField::number(QStringLiteral("parallelism"), settings.parallelism),
+                             DiagnosticField::number(QStringLiteral("timeoutMs"), settings.attemptTimeoutMs),
+                             DiagnosticField::number(QStringLiteral("maxAttempts"), settings.maxAttempts),
+                             DiagnosticField::number(QStringLiteral("cooldownMs"), settings.attemptCooldownMs),
+                             DiagnosticField::number(QStringLiteral("discographyOrder"),
+                                                     static_cast<qint64>(settings.discographyOrder)),
+                             DiagnosticField::number(QStringLiteral("refreshWindowMin"),
+                                                     settings.prePlaybackRefreshWindowMinutes)});
 
     const Fooyin::UId selectedPlaylistId
         = m_playlistSelection ? m_playlistSelection->currentPlaylistId() : Fooyin::UId{};

@@ -180,6 +180,27 @@ private slots:
         QCOMPARE(network.requested.size(), 4);
     }
 
+    void standaloneTrackAdmittedLogUsesExactFields()
+    {
+        LogCapture logs{u"fy.bandcamp.tracks.debug=true"_s};
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = StandaloneTrackDocument}; });
+        BandcampResolutionService service{&network};
+
+        const ServiceRun run = resolve(service, {page(StandaloneUrl)});
+
+        QVERIFY(run.finished);
+        QCOMPARE(run.summary.succeeded, 1);
+        QStringList admittedLines;
+        for(const auto& log : capturedLogs()) {
+            if(log.category == u"fy.bandcamp.tracks"_s && log.message.contains(u"admitted"_s)) {
+                admittedLines.append(log.message);
+            }
+        }
+        QCOMPARE(admittedLines,
+                 QStringList{u"track=9 admitted title=\"Solo title\" artist=\"Solo artist\" durationMs=0"_s});
+    }
+
     void serverErrorProducesOneOutcome()
     {
         LogCapture logs{u"fy.bandcamp.resolve.warning=true\nfy.trace.bandcamp.resolve.debug=true"_s};
@@ -197,25 +218,19 @@ private slots:
         QVERIFY(failure);
         QCOMPARE(failure->error.code, ResolutionErrorCode::FetchFailed);
         QCOMPARE(network.requested.size(), 2);
-        QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
-            return log.category == u"fy.trace.bandcamp.resolve"_s
-                && log.message.contains(u"job=\"1\""_s)
-                && log.message.contains(u"release=\"https://artist.bandcamp.com/album/parent\""_s)
-                && log.message.contains(u"workflow_outcome"_s)
-                && log.message.contains(u"outcome=\"failure\""_s)
-                && log.message.contains(u"code=\"fetch_failed\""_s)
-                && log.message.contains(u"stage=\"fetch\""_s);
-        }));
+        const auto failedLines = std::count_if(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
+            return log.category == u"fy.bandcamp.resolve"_s && log.message.contains(u" failed "_s);
+        });
+        QCOMPARE(static_cast<int>(failedLines), 1);
         QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
             return log.category == u"fy.bandcamp.resolve"_s
-                && log.message.contains(u"job=\"1\""_s)
-                && log.message.contains(u"release=\"https://artist.bandcamp.com/album/parent\""_s)
-                && log.message.contains(u"scope_failed"_s)
-                && log.message.contains(u"ordinal=\"0\""_s)
-                && log.message.contains(u"code=\"fetch_failed\""_s)
-                && log.message.contains(u"stage=\"fetch\""_s)
-                && log.message.contains(u"field=\"httpStatus\""_s)
-                && log.message.contains(u"reason=\"HTTP 503\""_s);
+                && log.message.startsWith(u"url=https://artist.bandcamp.com/album/parent failed "_s)
+                && log.message.contains(u"stage=fetch"_s)
+                && log.message.contains(u"code=fetch_failed"_s)
+                && log.message.contains(u"httpStatus=503"_s);
+        }));
+        QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
+            return log.category == u"fy.bandcamp.resolve"_s && log.message.contains(u" retry attempt="_s);
         }));
     }
 
@@ -666,10 +681,9 @@ private slots:
         QCOMPARE(network.requested.size(), 1);
         QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
             return log.category == u"fy.trace.bandcamp.resolve"_s
-                && log.message.contains(u"job=\"1\""_s)
-                && log.message.contains(u"release=\"https://artist.bandcamp.com/album/parent\""_s)
+                && log.message.contains(u"url=https://artist.bandcamp.com/album/parent "_s)
                 && log.message.contains(u"domain_cache_hit"_s)
-                && log.message.contains(u"scope=\"album\""_s);
+                && log.message.contains(u"scope=album"_s);
         }));
     }
 
@@ -1092,6 +1106,53 @@ private slots:
         QCOMPARE(network.requested.size(), 6);
         QCOMPARE(network.requested.at(0).path(), u"/music"_s);
         QCOMPARE(network.requested.at(1).query(), u"page=2"_s);
+    }
+
+    void discographyLogsSummaryAndCorrelatesListedReleaseFailures()
+    {
+        LogCapture logs{u"fy.bandcamp.resolve.info=true\nfy.bandcamp.resolve.warning=true\n"
+                        "fy.trace.bandcamp.parser.debug=true"_s};
+        const QByteArray listing = discographyPage(
+            R"(<li data-item-id="album-40"><a href="/album/parent"></a></li><li data-item-id="album-41"><a href="/album/broken"></a></li>)");
+        const QByteArray parent = albumPage(
+            R"({"type":"album","id":40,"title":"Parent album","artist":"Parent artist","release_date":"2020-01-01"})",
+            {streamEntry(R"("id":7,"title":"Parent child title","artist":"Parent artist","track_num":1,"duration":90)")});
+
+        FakeNetworkManager network;
+        network.setResponder([&](const QNetworkRequest& request) {
+            if(request.url().path() == u"/music"_s) {
+                return FakeResponse{.body = listing};
+            }
+            if(request.url().path() == u"/album/parent"_s) {
+                return FakeResponse{.body = parent};
+            }
+            return FakeResponse{.status = 404, .error = QNetworkReply::ContentNotFoundError};
+        });
+        BandcampResolutionService service{&network};
+        OperationOptions options;
+        options.maxAttempts       = 1;
+        options.attemptCooldownMs = 0;
+
+        const ServiceRun run = resolve(service, {page(u"https://artist.bandcamp.com/music"_s)}, options);
+
+        QVERIFY(run.finished);
+        QCOMPARE(run.summary.requested, 2);
+        QCOMPARE(run.summary.succeeded, 1);
+        QCOMPARE(run.summary.failed, 1);
+        const auto& logged = capturedLogs();
+        QVERIFY(std::any_of(logged.cbegin(), logged.cend(), [](const CapturedLog& log) {
+            return log.category == u"fy.bandcamp.resolve"_s
+                && log.message.startsWith(u"url=https://artist.bandcamp.com/music discography "_s)
+                && log.message.contains(u"references=2 admitted=1 failed=1"_s);
+        }));
+        QVERIFY(std::any_of(logged.cbegin(), logged.cend(), [](const CapturedLog& log) {
+            return log.category == u"fy.trace.bandcamp.parser"_s
+                && log.message.startsWith(u"album=41 listing_reference ordinal=1 kind=album "_s)
+                && log.message.contains(u"url=https://artist.bandcamp.com/album/broken"_s);
+        }));
+        QVERIFY(std::any_of(logged.cbegin(), logged.cend(), [](const CapturedLog& log) {
+            return log.category == u"fy.bandcamp.resolve"_s && log.message.startsWith(u"album=41 failed "_s);
+        }));
     }
 
     void accumulatesMultipleListingPagesBeyondThePerPageValueLimit()

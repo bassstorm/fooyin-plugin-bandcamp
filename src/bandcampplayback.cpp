@@ -436,7 +436,7 @@ public:
             return inner->isSeekable();
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.seekability.failed"));
+            reportDelegateFailure(QStringLiteral("playback_seekability_failed"));
             return false;
         }
     }
@@ -451,7 +451,7 @@ public:
             return inner->allowsConcurrentDecoding();
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.decoder-policy.failed"));
+            reportDelegateFailure(QStringLiteral("playback_decoder_policy_failed"));
             return false;
         }
     }
@@ -466,7 +466,7 @@ public:
             return inner->playbackPrebufferMs();
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.prebuffer.failed"));
+            reportDelegateFailure(QStringLiteral("playback_prebuffer_failed"));
             return 0;
         }
     }
@@ -481,7 +481,7 @@ public:
             return inner->needsMoreInput();
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.input-state.failed"));
+            reportDelegateFailure(QStringLiteral("playback_input_state_failed"));
             return false;
         }
     }
@@ -496,7 +496,7 @@ public:
             return inner->takeWarnings();
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.decoder-warning.failed"));
+            reportDelegateFailure(QStringLiteral("playback_decoder_warning_failed"));
             return {};
         }
     }
@@ -511,7 +511,7 @@ public:
             return inner->repeatHandling();
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.repeat-policy.failed"));
+            reportDelegateFailure(QStringLiteral("playback_repeat_policy_failed"));
             return RepeatHandling::EngineTransition;
         }
     }
@@ -526,7 +526,7 @@ public:
             return inner->bitrate();
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.bitrate.failed"));
+            reportDelegateFailure(QStringLiteral("playback_bitrate_failed"));
             return 0;
         }
     }
@@ -537,7 +537,7 @@ public:
         stop();
         const auto id = parseBandcampTrackUri(track.filepath());
         if(!id || source.filepath != track.filepath()) {
-            playbackDiagnostic(id.value_or(0), QStringLiteral("playback.identity.failed"),
+            playbackDiagnostic(id.value_or(0), QStringLiteral("playback_identity_failed"),
                                QStringLiteral("The virtual track identity is invalid."));
             return {};
         }
@@ -545,7 +545,7 @@ public:
         m_delegateFailureLogged.store(false, std::memory_order_release);
         m_delegateFault.store(false, std::memory_order_release);
         if(!m_bridge) {
-            playbackDiagnostic(*id, QStringLiteral("playback.prepare.failed"),
+            playbackDiagnostic(*id, QStringLiteral("playback_prepare_failed"),
                                QStringLiteral("The playback bridge is unavailable."));
             return {};
         }
@@ -553,7 +553,7 @@ public:
         const auto shutdownToken = m_bridge->shutdownToken();
         std::stop_callback shutdownWake{shutdownToken, [this]() { requestAbort(); }};
         if(shutdownToken.stop_requested()) {
-            playbackDiagnostic(*id, QStringLiteral("playback.prepare.failed"),
+            playbackDiagnostic(*id, QStringLiteral("playback_prepare_failed"),
                                QStringLiteral("Playback is shutting down."));
             return {};
         }
@@ -561,13 +561,13 @@ public:
         try {
             auto prepared = m_bridge->prepare(track, abortToken());
             if(const auto* failure = std::get_if<BandcampPlaybackBridge::Failure>(&prepared)) {
-                playbackDiagnostic(*id, QStringLiteral("playback.prepare.failed"), failure->reason);
+                playbackDiagnostic(*id, QStringLiteral("playback_prepare_failed"), failure->reason);
                 return {};
             }
             const auto& transport = std::get<BandcampPlaybackBridge::PreparedTransport>(prepared);
             m_deadline = transport.deadline;
             if(attemptStopped()) {
-                playbackDiagnostic(*id, QStringLiteral("playback.prepare.failed"),
+                playbackDiagnostic(*id, QStringLiteral("playback_prepare_failed"),
                                    QStringLiteral("The playback deadline expired."));
                 return {};
             }
@@ -582,7 +582,7 @@ public:
             decoderTrack.removeExtraProperty(BandcampTrackIdProperty);
             Fooyin::AudioSource decoderSource;
             if(!openRemoteSource(transport.streamUrl, m_deadline)) {
-                playbackDiagnostic(*id, QStringLiteral("playback.stream.open.failed"),
+                playbackDiagnostic(*id, QStringLiteral("playback_stream_open_failed"),
                                    QStringLiteral("The Bandcamp stream could not be opened."));
                 return {};
             }
@@ -592,7 +592,7 @@ public:
 
             auto candidates = m_bridge->audioLoader()->decodersForFile(safeUrl);
             if(candidates.empty()) {
-                playbackDiagnostic(*id, QStringLiteral("playback.decoder.unavailable"),
+                playbackDiagnostic(*id, QStringLiteral("playback_decoder_unavailable"),
                                    QStringLiteral("No Fooyin MP3 decoder is available."));
                 stop();
                 return {};
@@ -647,7 +647,7 @@ public:
                     inner->stop();
                 }
                 catch(...) {
-                    reportDelegateFailure(QStringLiteral("playback.stop.failed"));
+                    reportDelegateFailure(QStringLiteral("playback_stop_failed"));
                 }
                 (void)takeInnerDecoder();
                 if(attemptStopped()) {
@@ -666,13 +666,13 @@ public:
                 stop();
                 return {};
             }
-            playbackDiagnostic(*id, QStringLiteral("playback.decoder.open.failed"),
+            playbackDiagnostic(*id, QStringLiteral("playback_decoder_open_failed"),
                                QStringLiteral("No ordered Fooyin decoder could initialize the stream."));
             stop();
             return {};
         }
         catch(...) {
-            playbackDiagnostic(*id, QStringLiteral("playback.init.failed"),
+            playbackDiagnostic(*id, QStringLiteral("playback_init_failed"),
                                QStringLiteral("Initialising Bandcamp playback failed."));
             stop();
             return {};
@@ -687,7 +687,7 @@ public:
                 inner->start();
             }
             catch(...) {
-                reportDelegateFailure(QStringLiteral("playback.start.failed"));
+                reportDelegateFailure(QStringLiteral("playback_start_failed"));
             }
         }
     }
@@ -700,7 +700,7 @@ public:
                 inner->stop();
             }
             catch(...) {
-                reportDelegateFailure(QStringLiteral("playback.stop.failed"));
+                reportDelegateFailure(QStringLiteral("playback_stop_failed"));
             }
         }
         m_remoteDevice = nullptr;
@@ -721,7 +721,7 @@ public:
             }
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.seek.failed"));
+            reportDelegateFailure(QStringLiteral("playback_seek_failed"));
         }
     }
 
@@ -742,7 +742,7 @@ public:
             return result;
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.read.failed"));
+            reportDelegateFailure(QStringLiteral("playback_read_failed"));
             return ReadResult::errorResult(QStringLiteral("Bandcamp stream decoding failed."));
         }
     }
@@ -760,7 +760,7 @@ public:
             return inner->readBuffer(bytes);
         }
         catch(...) {
-            reportDelegateFailure(QStringLiteral("playback.read.failed"));
+            reportDelegateFailure(QStringLiteral("playback_read_failed"));
             return {};
         }
     }
@@ -789,7 +789,7 @@ protected:
                 inner->setPlaybackHints(hints);
             }
             catch(...) {
-                reportDelegateFailure(QStringLiteral("playback.hints.failed"));
+                reportDelegateFailure(QStringLiteral("playback_hints_failed"));
             }
         }
     }
@@ -802,7 +802,7 @@ protected:
                 inner->requestAbort();
             }
             catch(...) {
-                reportDelegateFailure(QStringLiteral("playback.abort.failed"));
+                reportDelegateFailure(QStringLiteral("playback_abort_failed"));
             }
         }
     }

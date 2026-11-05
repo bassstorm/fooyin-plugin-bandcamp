@@ -311,38 +311,39 @@ private slots:
         QVERIFY(isSuccess(result));
         QCOMPARE(std::get<ResolutionSuccess<TrackAdmission>>(result).value.result.track.title, u"Page title"_s);
 
-        bool sawTitleChoice = false;
+        QCOMPARE(capturedLogs().size(), 4);
+        QStringList messages;
         for(const auto& log : capturedLogs()) {
-            QVERIFY(!log.message.contains(u"sig=child"_s));
-            QVERIFY(!log.message.contains(u"sig=page"_s));
-            if(log.category == u"fy.trace.bandcamp.resolve"_s && log.message.contains(u"assembly_field"_s)
-               && log.message.contains(u"field=\"track.title\""_s)) {
-                sawTitleChoice = true;
-                QVERIFY(log.message.contains(u"bandcamp://track/1"_s));
-                QVERIFY(log.message.contains(u"old=\"Inferred child title\""_s));
-                QVERIFY(log.message.contains(u"new=\"Page title\""_s));
-                QVERIFY(log.message.contains(u"provenance=\"explicit\""_s));
-                QVERIFY(log.message.contains(u"source=\"selected_track_page\""_s));
-            }
-            if(log.category == u"fy.bandcamp.resolve"_s && log.message.contains(u"semantic_conflict"_s)
-               && log.message.contains(u"field=\"track.title\""_s)) {
-                QVERIFY(log.message.contains(u"album_child_value=\"Inferred child title\""_s));
-                QVERIFY(log.message.contains(u"selected_page_value=\"Page title\""_s));
-                QVERIFY(log.message.contains(u"decision=\"selected_track_page\""_s));
-            }
-            if(log.category == u"fy.trace.bandcamp.resolve"_s && log.message.contains(u"assembly_field"_s)) {
-                if(log.message.contains(u"field=\"album.sourceUrl\""_s)) {
-                    QVERIFY(log.message.contains(u"bandcamp://track/1"_s));
-                    QVERIFY(log.message.contains(u"old=\"https://artist.bandcamp.com/album/release\""_s));
-                    QVERIFY(log.message.contains(u"new=\"https://artist.bandcamp.com/album/release\""_s));
-                }
-                if(log.message.contains(u"field=\"album.trackTotal\""_s)) {
-                    QVERIFY(log.message.contains(u"new=\"1\""_s));
-                    QVERIFY(log.message.contains(u"source=\"declared album membership\""_s));
-                }
+            messages.append(log.message);
+        }
+        QCOMPARE(messages,
+                 (QStringList{
+                     u"album=40 track=1 conflict field=track.artist chosen=\"Album artist\" ignored=\"Page artist\""_s,
+                     u"album=40 track=1 conflict field=track.trackNumber chosen=1 ignored=7"_s,
+                     u"album=40 track=1 conflict field=track.durationMs chosen=120000 ignored=150000"_s,
+                     u"album=40 track=1 conflict field=track.streamUrl chosen=https://cdn.example.com/parent-stream.mp3 ignored=https://cdn.example.com/page-stream.mp3"_s}));
+    }
+
+    void assemblyLogsExplicitConflictOnlyForDeclaredValues()
+    {
+        LogCapture capture(u"fy.bandcamp.resolve.debug=true"_s);
+        const auto result = admitAlbumTrack(trackPage(1), albumCandidate(40, u"Parent"_s, {child(1, u"Album \"Child\""_s)}));
+        QVERIFY(isSuccess(result));
+        QCOMPARE(std::get<ResolutionSuccess<TrackAdmission>>(result).value.result.track.title, u"Album \"Child\""_s);
+
+        bool sawConflict = false;
+        for(const auto& log : capturedLogs()) {
+            if(log.category == u"fy.bandcamp.resolve"_s && log.message.contains(u" conflict "_s)
+               && log.message.contains(u"field=track.title"_s)) {
+                sawConflict = true;
+                QVERIFY(log.message.startsWith(u"album=40 track=1 conflict "_s));
+                // Quotes are escaped exactly once; a double-escaped `\\\"` must never appear.
+                QVERIFY(log.message.contains(u"chosen=\"Album \\\"Child\\\"\""_s));
+                QVERIFY(!log.message.contains(u"\\\\\\\""_s));
+                QVERIFY(log.message.contains(u"ignored=\"Page title\""_s));
             }
         }
-        QVERIFY(sawTitleChoice);
+        QVERIFY(sawConflict);
     }
 
     void childStreamCannotBeBypassedByTrackPage()
@@ -613,6 +614,38 @@ private slots:
         QCOMPARE(explicitAdmission.album.tracks.at(1).artist, u"Owned artist"_s);
     }
 
+    void trackArtistMatchingParentIsInheritedNotInferred()
+    {
+        LogCapture capture(u"fy.bandcamp.tracks.debug=true"_s);
+        auto first    = child(1, u"Album artist - One"_s);
+        auto second   = child(2, u"Album artist - Two"_s);
+        first.artist  = CandidateField<QString>::missing();
+        second.artist = CandidateField<QString>::missing();
+        auto result   = admitAlbum(albumCandidate(40, u"Album"_s, {first, second}));
+        QVERIFY(isSuccess(result));
+        auto admitted = std::get<ResolutionSuccess<AlbumAdmission>>(result).value;
+        postProcessAlbum(admitted);
+
+        QCOMPARE(admitted.album.tracks.at(0).artist, u"Album artist"_s);
+        QCOMPARE(admitted.album.tracks.at(0).title, u"One"_s);
+        QCOMPARE(admitted.album.tracks.at(1).artist, u"Album artist"_s);
+        QCOMPARE(admitted.album.tracks.at(1).title, u"Two"_s);
+        QCOMPARE(admitted.trackProvenance.at(0).artist, FieldProvenance::Inherited);
+        QCOMPARE(admitted.trackProvenance.at(1).artist, FieldProvenance::Inherited);
+
+        QStringList trackMessages;
+        for(const auto& log : capturedLogs()) {
+            if(log.category == u"fy.bandcamp.tracks"_s) {
+                trackMessages.append(log.message);
+            }
+        }
+        QCOMPARE(trackMessages,
+                 (QStringList{
+                     u"album=40 track=1 mutated processor=track-title-prefix old=\"Album artist - One\" new=One"_s,
+                     u"album=40 track=2 mutated processor=track-title-prefix old=\"Album artist - Two\" new=Two"_s,
+                 }));
+    }
+
     void maximumAlbumMembershipUsesPreparedSiblingFacts()
     {
         QList<TrackCandidate> children;
@@ -746,32 +779,32 @@ private slots:
 
     void processorsEmitOldNewProvenanceAndNoNoopEvents()
     {
-        LogCapture capture(u"fy.trace.bandcamp.tracks.debug=true"_s);
+        LogCapture capture(u"fy.bandcamp.tracks.debug=true"_s);
         TrackAdmission admission;
         admission.result.track = trackValue(77, u"Artist - Song"_s, u"Artist"_s);
-        admission.correlation  = {.jobId = 5, .resourceUrl = AlbumUrl, .trackId = 77};
+        admission.correlation  = {.albumId = 5, .trackId = 77};
         postProcessTrack(admission);
         QCOMPARE(admission.result.track.title, u"Song"_s);
-        bool sawChange = false;
+        bool sawMutation = false;
         for(const auto& log : capturedLogs()) {
-            if(log.category == u"fy.trace.bandcamp.tracks"_s && log.message.contains(u"processor_change"_s)) {
-                sawChange = true;
-                QVERIFY(log.message.contains(u"bandcamp://track/77"_s));
-                QVERIFY(log.message.contains(u"old=\"Artist - Song\""_s));
-                QVERIFY(log.message.contains(u"new=\"Song\""_s));
-                QVERIFY(log.message.contains(u"provenance=\"derived\""_s));
-                QVERIFY(log.message.contains(u"reason="_s));
+            if(log.category != u"fy.bandcamp.tracks"_s || !log.message.contains(u"mutated"_s)) {
+                continue;
             }
+            sawMutation = true;
+            QVERIFY(log.message.startsWith(u"album=5 track=77 mutated"_s));
+            QVERIFY(log.message.contains(u"processor=track-title-prefix"_s));
+            QVERIFY(log.message.contains(u"old=\"Artist - Song\""_s));
+            QVERIFY(log.message.contains(u"new=Song"_s));
         }
-        QVERIFY(sawChange);
+        QVERIFY(sawMutation);
 
         capturedLogs().clear();
         TrackAdmission noop;
         noop.result.track = trackValue(78, u"Song"_s, u"Artist"_s);
-        noop.correlation  = {.jobId = 5, .resourceUrl = TrackUrl, .trackId = 78};
+        noop.correlation  = {.albumId = 5, .trackId = 78};
         postProcessTrack(noop);
         for(const auto& log : capturedLogs()) {
-            QVERIFY(!log.message.contains(u"processor_change"_s));
+            QVERIFY(!log.message.contains(u"mutated"_s));
         }
     }
 

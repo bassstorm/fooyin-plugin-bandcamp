@@ -812,7 +812,7 @@ void PlaybackTests::delegateExceptionLatchesPlaybackFailure()
     QCOMPARE(inner->startCalls, 1);
     QCOMPARE(inner->readCalls, 0);
     QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
-        return log.message.contains(u"playback.start.failed"_s);
+        return log.message.contains(u"playback_start_failed"_s);
     }));
     QVERIFY(std::none_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
         return log.message.contains(u"signature=private"_s) || log.message.contains(u"private decoder error"_s);

@@ -558,7 +558,7 @@ void RefreshTests::localFailuresAreObservableAndLaterRefreshSucceeds()
     QCOMPARE(std::get<BandcampRefreshFailure>(absentResult.outcomes.back()).code,
              BandcampRefreshError::SourceUnavailable);
     QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const auto& log) {
-        return log.message.contains(u"refresh.operation.failed"_s)
+        return log.message.contains(u"refresh_operation_failed"_s)
             && log.message.contains(u"The release service is unavailable."_s);
     }));
 
