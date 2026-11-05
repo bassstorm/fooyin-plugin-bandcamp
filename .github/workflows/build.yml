@@ -1,6 +1,6 @@
 name: Build
 
-# Reusable build: runs the sanitized deterministic suite and packages a bundle
+# Reusable build: checks formatting, runs the sanitized deterministic suite, and packages a bundle
 # inside the dev container, so CI matches .devcontainer/ (and its pinned Fooyin).
 on:
   workflow_call:
@@ -60,6 +60,8 @@ jobs:
           eventFilterForPush: push
           runCmd: |
             set -euo pipefail
+            cmake --preset dev
+            cmake --build --preset format-check
             cmake --preset tests-sanitize
             cmake --build --preset tests-sanitize
             ctest --preset tests-ci

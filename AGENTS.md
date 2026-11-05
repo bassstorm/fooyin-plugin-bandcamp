@@ -104,6 +104,7 @@ Do not split a single state machine across layers or mix UI batch workflows with
 
 - **Deterministic suite (`tests/deterministic/`):** Covers parser extraction, assembly/authority, post-processors, orchestration/resolution, identity/transport persistence, playback bridging, logging/redaction, and resource/lifecycle bounds using synthetic inputs and contract-valid internal inputs.
 - **Live suite (`tests/live/`):** Happy-path smoke tests against real Bandcamp URLs (`ctest --preset tests-live`), excluded from CI (`tests-ci`).
+- **Formatting:** Format C++ with `cmake --preset dev && cmake --build --preset format` (clang-format 22 from the dev container, using the repository `.clang-format`). CI fails on violations via `format-check`.
 - Validate code changes with the sanitized deterministic suite:
 
 ```sh

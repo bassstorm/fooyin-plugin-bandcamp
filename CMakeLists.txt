@@ -156,3 +156,26 @@ if(BANDCAMP_PLUGIN_BUILD_TESTS)
     add_subdirectory(tests/deterministic)
     add_subdirectory(tests/live)
 endif()
+
+# The dev container pins this clang-format major; builds elsewhere skip the targets.
+find_program(BANDCAMP_CLANG_FORMAT NAMES clang-format-22)
+if(BANDCAMP_CLANG_FORMAT)
+    file(GLOB_RECURSE _bandcamp_format_sources CONFIGURE_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.h
+    )
+    add_custom_target(
+        clang-format
+        COMMAND ${BANDCAMP_CLANG_FORMAT} -i ${_bandcamp_format_sources}
+        VERBATIM
+    )
+    add_custom_target(
+        clang-format-check
+        COMMAND ${BANDCAMP_CLANG_FORMAT} --dry-run --Werror ${_bandcamp_format_sources}
+        VERBATIM
+    )
+else()
+    message(STATUS "clang-format-22 not found; clang-format and clang-format-check targets are unavailable")
+endif()

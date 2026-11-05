@@ -52,6 +52,16 @@
       "configurePreset": "dev"
     },
     {
+      "name": "format",
+      "configurePreset": "dev",
+      "targets": [ "clang-format" ]
+    },
+    {
+      "name": "format-check",
+      "configurePreset": "dev",
+      "targets": [ "clang-format-check" ]
+    },
+    {
       "name": "tests",
       "configurePreset": "tests",
       "targets": [ "bandcamp_deterministic_tests", "bandcamp_live_tests", "bandcamp_plugin_input_tests", "bandcamp_progress_dialog_tests" ]
