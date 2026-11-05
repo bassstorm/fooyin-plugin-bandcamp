@@ -1,7 +1,7 @@
 #include "bandcampurldialog.h"
 
-#include "bandcamplogging.h"
 #include "bandcampdiagnostics.h"
+#include "bandcamplogging.h"
 
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -116,11 +116,10 @@ void BandcampUrlDialog::submit()
     QList<BandcampPageUrl> urls;
     for(const InputLine& line : parseInput(m_input->toPlainText())) {
         if(line.url.isValid()) {
-            qCDebug(BANDCAMP_UI).noquote()
-                << formatTraceEvent(CorrelationContext{.resourceUrl = QUrl(line.url.url)},
-                                    QStringLiteral("input_accepted"),
-                                    {DiagnosticField::number(QStringLiteral("line"), line.number),
-                                     DiagnosticField::text(QStringLiteral("kind"), pageKindName(line.url.kind))});
+            qCDebug(BANDCAMP_UI).noquote() << formatTraceEvent(
+                CorrelationContext{.resourceUrl = QUrl(line.url.url)}, QStringLiteral("input_accepted"),
+                {DiagnosticField::number(QStringLiteral("line"), line.number),
+                 DiagnosticField::text(QStringLiteral("kind"), pageKindName(line.url.kind))});
             urls.append(line.url);
         }
         else {

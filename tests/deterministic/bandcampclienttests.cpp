@@ -466,7 +466,6 @@ private slots:
     }
 };
 
-
 int runClientTests(int argc, char** argv)
 {
     ClientTests tests;

@@ -111,8 +111,8 @@ std::optional<qint64> bandcampStreamExpiryMs(const QString& streamUrl)
         }
     }
 
-    bool ok = false;
-    const qint64 seconds = timestamp->toLongLong(&ok);
+    bool ok                     = false;
+    const qint64 seconds        = timestamp->toLongLong(&ok);
     constexpr qint64 MaxSeconds = std::numeric_limits<qint64>::max() / 1000;
     if(!ok || seconds <= 0 || seconds > MaxSeconds) {
         return std::nullopt;
@@ -130,7 +130,7 @@ BandcampPersistedTransportResult readBandcampPersistedTransport(const Fooyin::Tr
             QStringLiteral("The selected track has inconsistent Bandcamp identity or provider state.")};
     }
     const QString sourceText = properties.value(BandcampSourceUrlProperty);
-    const auto source = parseBandcampPageUrl(sourceText);
+    const auto source        = parseBandcampPageUrl(sourceText);
     if(!source.isValid() || source.kind == BandcampPageKind::Discography || source.url != sourceText) {
         return BandcampTransportFailure{QStringLiteral("The selected track has no canonical release source.")};
     }
@@ -141,11 +141,11 @@ BandcampPersistedTransportResult readBandcampPersistedTransport(const Fooyin::Tr
     BandcampStreamExpiry expiry;
     const QString expiryText = properties.value(BandcampExpiresAtProperty);
     if(!expiryText.isEmpty()) {
-        bool ok = false;
+        bool ok                   = false;
         const qint64 milliseconds = expiryText.size() <= 19 ? expiryText.toLongLong(&ok) : 0;
-        const auto observed = bandcampStreamExpiryMs(streamText);
-        if(ok && milliseconds > 0 && QString::number(milliseconds) == expiryText
-           && observed && *observed == milliseconds) {
+        const auto observed       = bandcampStreamExpiryMs(streamText);
+        if(ok && milliseconds > 0 && QString::number(milliseconds) == expiryText && observed
+           && *observed == milliseconds) {
             expiry = {BandcampExpiryState::Valid, milliseconds};
         }
         else {

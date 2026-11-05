@@ -1,8 +1,8 @@
 #include "bandcamptrackuri.h"
 
-#include <core/network/networkaccessmanager.h>
 #include <core/engine/audioloader.h>
 #include <core/engine/inputplugin.h>
+#include <core/network/networkaccessmanager.h>
 #include <core/plugins/coreplugin.h>
 #include <core/plugins/coreplugincontext.h>
 #include <core/plugins/plugin.h>
@@ -26,8 +26,8 @@ int main(int argc, char** argv)
     QPluginLoader pluginLoader{QString::fromLocal8Bit(argv[1])};
     QObject* root = pluginLoader.instance();
     if(!root) {
-        std::cerr << "Could not load the production Bandcamp plugin: "
-                  << pluginLoader.errorString().toStdString() << '\n';
+        std::cerr << "Could not load the production Bandcamp plugin: " << pluginLoader.errorString().toStdString()
+                  << '\n';
         return 1;
     }
 
@@ -48,16 +48,17 @@ int main(int argc, char** argv)
     }
 
     {
-        const QString settingsPath = QCoreApplication::applicationDirPath()
+        const QString settingsPath
+            = QCoreApplication::applicationDirPath()
             + QStringLiteral("/bandcamp-plugin-input-settings-%1.ini").arg(QCoreApplication::applicationPid());
         QFile::remove(settingsPath);
         {
             Fooyin::SettingsManager settings{settingsPath};
-            auto network = std::make_shared<Fooyin::NetworkAccessManager>(&settings);
+            auto network     = std::make_shared<Fooyin::NetworkAccessManager>(&settings);
             auto audioLoader = std::make_shared<Fooyin::AudioLoader>();
             {
-                Fooyin::CorePluginContext context{nullptr, nullptr, nullptr, nullptr, nullptr, &settings,
-                                                  audioLoader, {}, nullptr, network, {}, nullptr};
+                Fooyin::CorePluginContext context{nullptr,     nullptr, nullptr, nullptr, nullptr, &settings,
+                                                  audioLoader, {},      nullptr, network, {},      nullptr};
                 corePlugin->initialise(context);
 
                 const auto creator = inputPlugin->inputCreator();

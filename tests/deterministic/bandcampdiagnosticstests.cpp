@@ -73,7 +73,7 @@ void DiagnosticsTests::cleansUrlsForLogs()
 void DiagnosticsTests::keepsRawTextUnscanned()
 {
     // Free-form text is never regex-scanned, so raw source_snapshot JSON keeps its stream URLs verbatim.
-    const QString json = u"{\"file\":{\"mp3-128\":\"https://cdn.example.com/song.mp3?sig=KEEP\"}}"_s;
+    const QString json          = u"{\"file\":{\"mp3-128\":\"https://cdn.example.com/song.mp3?sig=KEEP\"}}"_s;
     const DiagnosticField field = DiagnosticField::text(u"json"_s, json);
     QCOMPARE(field.value, json);
 }
@@ -118,8 +118,8 @@ void DiagnosticsTests::resolutionRetryIsSingleWarning()
     error.code   = ResolutionErrorCode::Timeout;
     error.stage  = ResolutionStage::Fetch;
     error.reason = u"attempt timed out"_s;
-    BandcampAttemptSupervisor attempts(BandcampAttemptPolicy{.attemptTimeoutMs = 1000, .maxAttempts = 3,
-                                                             .cooldownMs = 250});
+    BandcampAttemptSupervisor attempts(
+        BandcampAttemptPolicy{.attemptTimeoutMs = 1000, .maxAttempts = 3, .cooldownMs = 250});
     attempts.resetBudget();
     attempts.beginRetry();
     logResolutionRetry(CorrelationContext{.albumId = 5}, error, 0, attempts);
@@ -141,8 +141,8 @@ void DiagnosticsTests::resolutionFailureIsSingleWarningWithKnownAlbum()
     error.field   = u"track.streamUrl"_s;
     error.value   = u"null"_s;
     error.reason  = u"stream missing"_s;
-    logResolutionFailure(CorrelationContext{.resourceUrl = QUrl(u"https://a.bandcamp.com/album/x?sig=SECRET"_s)},
-                         error, 0);
+    logResolutionFailure(CorrelationContext{.resourceUrl = QUrl(u"https://a.bandcamp.com/album/x?sig=SECRET"_s)}, error,
+                         0);
 
     QCOMPARE(capturedLogs().size(), 1);
     QCOMPARE(capturedLogs().first().category, u"fy.bandcamp.resolve"_s);

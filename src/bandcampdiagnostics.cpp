@@ -58,11 +58,10 @@ void dropLoneHighSurrogate(QString& text)
 // Simple tokens stay bare (`album=1`, `code=timeout`, `url=https://host/path`); anything else is quoted.
 QString formatValue(const QString& value)
 {
-    const bool bare = !value.isEmpty()
-                   && std::none_of(value.cbegin(), value.cend(), [](QChar ch) {
-                          return ch.isSpace() || ch == u'"' || ch == u'\\' || ch.category() == QChar::Other_Control
-                              || ch.category() == QChar::Separator_Line || ch.category() == QChar::Separator_Paragraph;
-                      });
+    const bool bare = !value.isEmpty() && std::none_of(value.cbegin(), value.cend(), [](QChar ch) {
+        return ch.isSpace() || ch == u'"' || ch == u'\\' || ch.category() == QChar::Other_Control
+            || ch.category() == QChar::Separator_Line || ch.category() == QChar::Separator_Paragraph;
+    });
     if(bare) {
         return value;
     }
@@ -245,10 +244,10 @@ void logFieldConflict(const QLoggingCategory& category, const CorrelationContext
     if(!category.isDebugEnabled()) {
         return;
     }
-    qCDebug(category).noquote() << formatTraceEvent(
-        context, QStringLiteral("conflict"),
-        {DiagnosticField::text(QStringLiteral("field"), field), DiagnosticField::text(QStringLiteral("chosen"), chosen),
-         DiagnosticField::text(QStringLiteral("ignored"), ignored)});
+    qCDebug(category).noquote() << formatTraceEvent(context, QStringLiteral("conflict"),
+                                                    {DiagnosticField::text(QStringLiteral("field"), field),
+                                                     DiagnosticField::text(QStringLiteral("chosen"), chosen),
+                                                     DiagnosticField::text(QStringLiteral("ignored"), ignored)});
 }
 
 void logFieldFallback(const QLoggingCategory& category, const CorrelationContext& context, const QString& field,
@@ -295,4 +294,3 @@ void logResolutionFailure(const CorrelationContext& context, const ResolutionErr
     logFailureRecord(context, error, httpStatus, attempts.attemptsMade(), attempts.maxAttempts(), elapsedMs);
 }
 } // namespace Fooyin::Bandcamp
-

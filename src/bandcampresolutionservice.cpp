@@ -116,20 +116,20 @@ private:
             }
             return;
         }
-        const auto id  = static_cast<BandcampOperationId>(m_id);
-        auto* resolver = new BandcampListingResolver{
-            m_network,
-            id,
-            url,
-            m_options.attemptTimeoutMs,
-            m_options.maxAttempts,
-            m_options.attemptCooldownMs,
-            m_listingParser,
-            m_workflowSlots,
-            [this, input = m_activeDiscoveryInput](BandcampListingParseOutcome outcome) {
-                onListingOutcome(input, std::move(outcome));
-            },
-            this};
+        const auto id = static_cast<BandcampOperationId>(m_id);
+        auto* resolver
+            = new BandcampListingResolver{m_network,
+                                          id,
+                                          url,
+                                          m_options.attemptTimeoutMs,
+                                          m_options.maxAttempts,
+                                          m_options.attemptCooldownMs,
+                                          m_listingParser,
+                                          m_workflowSlots,
+                                          [this, input = m_activeDiscoveryInput](BandcampListingParseOutcome outcome) {
+                                              onListingOutcome(input, std::move(outcome));
+                                          },
+                                          this};
         m_listingResolvers.insert(resolver);
         m_currentListingResolver = resolver;
         const QPointer<BandcampOperation> guard{this};
@@ -231,19 +231,18 @@ private:
         if(m_resolver) {
             return;
         }
-        m_resolver = new BandcampReleaseResolver{m_network, m_id, m_orchestrator.requests(), m_options,
-                                                 m_releaseParser, m_workflowSlots, this};
-        QObject::connect(
-            m_resolver, &BandcampReleaseResolver::keyedOutcomeReady, this,
-            [this](const QString& key, const BandcampResolutionOutcome& outcome) {
-                const QString keyCopy = key;
-                const BandcampResolutionOutcome outcomeCopy = outcome;
-                const QPointer<BandcampOperation> guard{this};
-                publishProgress();
-                if(guard) {
-                    guard->onReleaseOutcome(keyCopy, outcomeCopy);
-                }
-            });
+        m_resolver = new BandcampReleaseResolver{
+            m_network, m_id, m_orchestrator.requests(), m_options, m_releaseParser, m_workflowSlots, this};
+        QObject::connect(m_resolver, &BandcampReleaseResolver::keyedOutcomeReady, this,
+                         [this](const QString& key, const BandcampResolutionOutcome& outcome) {
+                             const QString keyCopy                       = key;
+                             const BandcampResolutionOutcome outcomeCopy = outcome;
+                             const QPointer<BandcampOperation> guard{this};
+                             publishProgress();
+                             if(guard) {
+                                 guard->onReleaseOutcome(keyCopy, outcomeCopy);
+                             }
+                         });
         QObject::connect(m_resolver, &BandcampReleaseResolver::activeCountChanged, this, [this](qsizetype active) {
             m_active = active;
             publishProgress();
@@ -327,7 +326,7 @@ private:
         const BandcampOperationPhase phase
             = m_finished ? BandcampOperationPhase::Finished
                          : (m_orchestrator.isDiscoveryComplete() ? BandcampOperationPhase::Resolving
-                                                                : BandcampOperationPhase::Discovering);
+                                                                 : BandcampOperationPhase::Discovering);
         const qsizetype totalWork     = m_orchestrator.isDiscoveryComplete() ? m_orchestrator.requests().size() : 0;
         const qsizetype completedWork = m_resolver ? m_resolver->completedOutcomeCount() : 0;
         m_progressHandler({m_id, m_orchestrator.occurrenceCount(), m_orchestrator.deliveredCount(), active, phase,

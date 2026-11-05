@@ -316,18 +316,20 @@ private slots:
         for(const auto& log : capturedLogs()) {
             messages.append(log.message);
         }
-        QCOMPARE(messages,
-                 (QStringList{
-                     u"album=40 track=1 conflict field=track.artist chosen=\"Album artist\" ignored=\"Page artist\""_s,
-                     u"album=40 track=1 conflict field=track.trackNumber chosen=1 ignored=7"_s,
-                     u"album=40 track=1 conflict field=track.durationMs chosen=120000 ignored=150000"_s,
-                     u"album=40 track=1 conflict field=track.streamUrl chosen=https://cdn.example.com/parent-stream.mp3 ignored=https://cdn.example.com/page-stream.mp3"_s}));
+        QCOMPARE(
+            messages,
+            (QStringList{
+                u"album=40 track=1 conflict field=track.artist chosen=\"Album artist\" ignored=\"Page artist\""_s,
+                u"album=40 track=1 conflict field=track.trackNumber chosen=1 ignored=7"_s,
+                u"album=40 track=1 conflict field=track.durationMs chosen=120000 ignored=150000"_s,
+                u"album=40 track=1 conflict field=track.streamUrl chosen=https://cdn.example.com/parent-stream.mp3 ignored=https://cdn.example.com/page-stream.mp3"_s}));
     }
 
     void assemblyLogsExplicitConflictOnlyForDeclaredValues()
     {
         LogCapture capture(u"fy.bandcamp.resolve.debug=true"_s);
-        const auto result = admitAlbumTrack(trackPage(1), albumCandidate(40, u"Parent"_s, {child(1, u"Album \"Child\""_s)}));
+        const auto result
+            = admitAlbumTrack(trackPage(1), albumCandidate(40, u"Parent"_s, {child(1, u"Album \"Child\""_s)}));
         QVERIFY(isSuccess(result));
         QCOMPARE(std::get<ResolutionSuccess<TrackAdmission>>(result).value.result.track.title, u"Album \"Child\""_s);
 

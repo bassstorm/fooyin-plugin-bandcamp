@@ -228,8 +228,8 @@ private slots:
         const auto path = m_dir.filePath(u"roundtrip.ini"_s);
         {
             QSettings settings(path, QSettings::IniFormat);
-            saveBandcampSettings(settings, {5, 25000, BandcampDiscographyOrder::Descending, MinRefreshWindowMinutes,
-                                            7, 1500});
+            saveBandcampSettings(settings,
+                                 {5, 25000, BandcampDiscographyOrder::Descending, MinRefreshWindowMinutes, 7, 1500});
         }
         QSettings settings(path, QSettings::IniFormat);
         const auto values = loadBandcampSettings(settings);

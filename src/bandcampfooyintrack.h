@@ -13,7 +13,7 @@
 #include <variant>
 
 namespace Fooyin::Bandcamp {
-inline constexpr auto StreamProviderProperty   = "_STREAM_PROVIDER";
+inline constexpr auto StreamProviderProperty    = "_STREAM_PROVIDER";
 inline constexpr auto BandcampSourceUrlProperty = "_BANDCAMP_SOURCE_URL";
 inline constexpr auto BandcampStreamUrlProperty = "_BANDCAMP_STREAM_URL";
 inline constexpr auto BandcampExpiresAtProperty = "_BANDCAMP_EXPIRES_AT";
@@ -57,9 +57,8 @@ private:
     const BandcampAlbumMetadata* m_album{nullptr};
 };
 
-[[nodiscard]] Fooyin::Track makeFooyinTrack(
-    const BandcampResolvedTrack& resolved,
-    std::shared_ptr<Fooyin::TrackMetadataStore> metadataStore = {});
+[[nodiscard]] Fooyin::Track makeFooyinTrack(const BandcampResolvedTrack& resolved,
+                                            std::shared_ptr<Fooyin::TrackMetadataStore> metadataStore = {});
 void setBandcampTransport(Fooyin::Track& track, const BandcampTrack& source);
 [[nodiscard]] std::optional<qint64> bandcampStreamExpiryMs(const QString& streamUrl);
 [[nodiscard]] BandcampPersistedTransportResult readBandcampPersistedTransport(const Fooyin::Track& track, qint64 id);

@@ -266,7 +266,7 @@ void BandcampClient::onFinished(RequestId id, quint64 generation)
     }
     // The correlation prefix already prints `url=` when no entity ID is known, so repeat it only when it differs.
     const bool urlInPrefix = context.albumId <= 0 && context.trackId <= 0 && context.resourceUrl.isValid()
-                             && cleanUrlForLog(context.resourceUrl) == cleanUrlForLog(effectiveUrl);
+                          && cleanUrlForLog(context.resourceUrl) == cleanUrlForLog(effectiveUrl);
     QList<DiagnosticField> fetchFields;
     if(!urlInPrefix) {
         fetchFields.append(DiagnosticField::url(QStringLiteral("url"), effectiveUrl));
@@ -283,9 +283,10 @@ void BandcampClient::onFinished(RequestId id, quint64 generation)
     }
     // Qt also sets networkError for HTTP error statuses (for example 404), so classify those by status first.
     if(status < 200 || status > 299) {
-        settle(id, BandcampFetchFailure{clientError(ResolutionErrorCode::FetchFailed, effectiveUrl,
-                                                    QStringLiteral("httpStatus"), QStringLiteral("HTTP %1").arg(status)),
-                                        status});
+        settle(id,
+               BandcampFetchFailure{clientError(ResolutionErrorCode::FetchFailed, effectiveUrl,
+                                                QStringLiteral("httpStatus"), QStringLiteral("HTTP %1").arg(status)),
+                                    status});
         return;
     }
     if(networkError != QNetworkReply::NoError) {

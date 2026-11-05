@@ -8,9 +8,8 @@
 
 namespace Fooyin::Bandcamp {
 BandcampImportController::BandcampImportController(BandcampOperationId operationId,
-                                                   QList<BandcampPageUrl> submittedPages,
-                                                   bool forceNewPlaylist, Fooyin::UId selectedPlaylistId,
-                                                   FooyinLibraryApi libraryApi,
+                                                   QList<BandcampPageUrl> submittedPages, bool forceNewPlaylist,
+                                                   Fooyin::UId selectedPlaylistId, FooyinLibraryApi libraryApi,
                                                    BandcampPlaylistApi playlistApi, CancelOperation cancelOperation,
                                                    QObject* parent)
     : QObject{parent}
@@ -26,7 +25,7 @@ BandcampImportController::BandcampImportController(BandcampOperationId operation
     if(m_initialFailure || !ownersAvailable || !m_playlistApi.inspect || !m_playlistApi.createNew
        || !m_playlistApi.insert) {
         m_initialFailure = true;
-        m_stopReason = tr("The playlist service is unavailable.");
+        m_stopReason     = tr("The playlist service is unavailable.");
     }
     else if(forceNewPlaylist || !m_destinationId.isValid()) {
         m_pendingNewPlaylist = true;
@@ -37,7 +36,7 @@ BandcampImportController::BandcampImportController(BandcampOperationId operation
                 break;
             case BandcampPlaylistAvailability::OwnerUnavailable:
                 m_initialFailure = true;
-                m_stopReason = tr("The playlist service is unavailable.");
+                m_stopReason     = tr("The playlist service is unavailable.");
                 break;
             case BandcampPlaylistAvailability::Missing:
             case BandcampPlaylistAvailability::Temporary:
@@ -52,8 +51,8 @@ BandcampImportController::BandcampImportController(BandcampOperationId operation
 BandcampImportController::~BandcampImportController()
 {
     const bool withdrawResolution = !m_resolutionFinished && !m_resolutionCancellationIssued;
-    m_finished = true;
-    m_stopping = true;
+    m_finished                    = true;
+    m_stopping                    = true;
     m_pendingScopes.clear();
     m_handoffPhase = HandoffPhase::None;
     if(m_gateway) {
@@ -181,8 +180,7 @@ void BandcampImportController::pump()
             }
         }
 
-        const BandcampResolvedData& data
-            = std::get<ResolutionSuccess<BandcampResolvedData>>(scope.outcome).value;
+        const BandcampResolvedData& data = std::get<ResolutionSuccess<BandcampResolvedData>>(scope.outcome).value;
         QList<BandcampResolvedTrack> tracks;
         CorrelationContext correlation{.resourceUrl = QUrl(scope.page.url)};
         if(const auto* album = std::get_if<BandcampAlbum>(&data)) {
@@ -253,7 +251,7 @@ void BandcampImportController::onCommit(const BandcampScopeResult& scope, Fooyin
         return;
     }
 
-    const auto insert = guard->m_playlistApi.insert;
+    const auto insert     = guard->m_playlistApi.insert;
     guard->m_handoffPhase = HandoffPhase::Inserting;
     insert(destination, prepared.tracks);
     if(!guard) {
@@ -278,14 +276,14 @@ void BandcampImportController::failRun(QString reason, bool countCurrentScope, b
     if(countCurrentScope) {
         ++m_failed;
     }
-    m_stopping = true;
+    m_stopping   = true;
     m_stopReason = std::move(reason);
     clearPendingAsCancelled();
     const QString stopReason = m_stopReason;
     if(logFailure) {
-        qCWarning(BANDCAMP_UI).noquote()
-            << formatTraceEvent(CorrelationContext{}, QStringLiteral("import_stopped"),
-                                {DiagnosticField::text(QStringLiteral("reason"), stopReason)});
+        qCWarning(BANDCAMP_UI).noquote() << formatTraceEvent(
+            CorrelationContext{}, QStringLiteral("import_stopped"),
+            {DiagnosticField::text(QStringLiteral("reason"), stopReason)});
     }
     const QPointer<BandcampImportController> guard{this};
     m_gateway->cancel();
@@ -308,7 +306,7 @@ void BandcampImportController::requestResolutionCancellation()
         return;
     }
 
-    m_resolutionCancellationIssued = true;
+    m_resolutionCancellationIssued        = true;
     const BandcampOperationId operationId = m_operationId;
     const CancelOperation cancelOperation = m_cancelOperation;
     if(!cancelOperation) {
@@ -330,11 +328,11 @@ void BandcampImportController::finishIfReady()
     }
     m_finished = true;
     const BandcampImportSummary summary{m_operationId, m_added, m_failed, m_cancelled, m_stopReason};
-    qCInfo(BANDCAMP_UI).noquote()
-        << formatTraceEvent(CorrelationContext{}, QStringLiteral("import_completed"),
-                            {DiagnosticField::number(QStringLiteral("succeeded"), summary.added),
-                             DiagnosticField::number(QStringLiteral("failed"), summary.failed),
-                             DiagnosticField::number(QStringLiteral("cancelled"), summary.cancelled)});
+    qCInfo(BANDCAMP_UI).noquote() << formatTraceEvent(
+        CorrelationContext{}, QStringLiteral("import_completed"),
+        {DiagnosticField::number(QStringLiteral("succeeded"), summary.added),
+         DiagnosticField::number(QStringLiteral("failed"), summary.failed),
+         DiagnosticField::number(QStringLiteral("cancelled"), summary.cancelled)});
     emit finished(summary);
 }
 
@@ -377,7 +375,7 @@ bool BandcampImportController::prepareDestination(const BandcampScopeResult& sco
             guard->failRun(tr("A writable playlist could not be created."), true);
             return false;
         }
-        guard->m_destinationId = *created;
+        guard->m_destinationId      = *created;
         guard->m_pendingNewPlaylist = false;
     }
     const bool writable = guard->destinationWritable(guard->m_destinationId);

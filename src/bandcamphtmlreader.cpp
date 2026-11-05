@@ -27,9 +27,9 @@ bool nameChar(char ch)
 
 bool isVoid(const QString& name)
 {
-    return name == u"area" || name == u"base" || name == u"br" || name == u"col" || name == u"embed"
-        || name == u"hr" || name == u"img" || name == u"input" || name == u"link" || name == u"meta"
-        || name == u"param" || name == u"source" || name == u"track" || name == u"wbr";
+    return name == u"area" || name == u"base" || name == u"br" || name == u"col" || name == u"embed" || name == u"hr"
+        || name == u"img" || name == u"input" || name == u"link" || name == u"meta" || name == u"param"
+        || name == u"source" || name == u"track" || name == u"wbr";
 }
 
 bool isRaw(const QString& name)
@@ -111,7 +111,8 @@ HtmlReader::HtmlReader(QByteArrayView body, HtmlLimits limits, const std::atomic
     // Validate even ignored text, without copying large opaque attributes.
     QStringDecoder decoder(QStringDecoder::Utf8);
     for(qsizetype offset = 0; offset < body.size() && !cancelled(); offset += 4096) {
-        [[maybe_unused]] const QString chunk = decoder(body.sliced(offset, qMin(qsizetype{4096}, body.size() - offset)));
+        [[maybe_unused]] const QString chunk
+            = decoder(body.sliced(offset, qMin(qsizetype{4096}, body.size() - offset)));
         if(decoder.hasError()) {
             setError(HtmlError::Malformed);
             return;
@@ -166,8 +167,8 @@ bool HtmlReader::skipRawText()
 {
     const QByteArray name = m_rawText.toLatin1();
     while(m_cursor < m_body.size()) {
-        if(m_rawText != u"plaintext" && m_body.at(m_cursor) == '<'
-           && m_body.size() - m_cursor > name.size() + 2 && m_body.at(m_cursor + 1) == '/') {
+        if(m_rawText != u"plaintext" && m_body.at(m_cursor) == '<' && m_body.size() - m_cursor > name.size() + 2
+           && m_body.at(m_cursor + 1) == '/') {
             bool matches = true;
             for(qsizetype i = 0; i < name.size(); ++i) {
                 if(lower(m_body.at(m_cursor + 2 + i)) != name.at(i)) {
@@ -279,7 +280,7 @@ HtmlRead HtmlReader::readTag()
             if(m_cursor == m_body.size()) {
                 return malformed();
             }
-            const char quote = m_body.at(m_cursor);
+            const char quote  = m_body.at(m_cursor);
             const bool quoted = quote == '"' || quote == '\'';
             if(quoted) {
                 ++m_cursor;
@@ -355,8 +356,7 @@ HtmlRead HtmlReader::readTag()
             while(index >= 0 && m_open.at(index) != u"ol" && m_open.at(index) != u"ul") {
                 --index;
             }
-            if(index >= 0 && m_open.at(index) == u"ol" && index + 1 < m_open.size()
-               && m_open.at(index + 1) == u"li") {
+            if(index >= 0 && m_open.at(index) == u"ol" && index + 1 < m_open.size() && m_open.at(index + 1) == u"li") {
                 m_open.resize(index + 1);
             }
         }
@@ -413,8 +413,8 @@ HtmlRead HtmlReader::next()
             continue;
         }
         const auto remaining = m_body.sliced(m_cursor);
-        const bool comment = remaining.startsWith("<!--");
-        const bool cdata = remaining.startsWith("<![CDATA[");
+        const bool comment   = remaining.startsWith("<!--");
+        const bool cdata     = remaining.startsWith("<![CDATA[");
         if(comment || cdata) {
             if(!record()) {
                 return *m_error;

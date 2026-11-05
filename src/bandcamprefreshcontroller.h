@@ -34,9 +34,9 @@ enum class BandcampRefreshSuccess : quint8
     Updated,
     Unchanged,
 };
-struct BandcampRefreshCancelled { };
-using BandcampRefreshOutcome
-    = std::variant<BandcampRefreshSuccess, BandcampRefreshFailure, BandcampRefreshCancelled>;
+struct BandcampRefreshCancelled
+{ };
+using BandcampRefreshOutcome = std::variant<BandcampRefreshSuccess, BandcampRefreshFailure, BandcampRefreshCancelled>;
 
 struct BandcampRefreshSummary
 {

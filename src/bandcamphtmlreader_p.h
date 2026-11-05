@@ -32,11 +32,17 @@ struct HtmlTag
     bool closing{false};
 };
 
-struct HtmlEnd {};
-struct HtmlCancelled {};
+struct HtmlEnd
+{ };
+struct HtmlCancelled
+{ };
 struct HtmlError
 {
-    enum Kind : quint8 { Malformed, ResourceLimit };
+    enum Kind : quint8
+    {
+        Malformed,
+        ResourceLimit
+    };
     Kind kind;
     qsizetype offset;
 };

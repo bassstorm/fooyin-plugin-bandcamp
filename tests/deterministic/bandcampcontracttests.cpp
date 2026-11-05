@@ -49,9 +49,9 @@ void ContractTests::outcomeReportsSuccessOnly()
     QVERIFY(isSuccess(success));
 
     ResolutionError error;
-    error.code   = ResolutionErrorCode::Timeout;
-    error.stage  = ResolutionStage::Fetch;
-    error.reason = u"deadline"_s;
+    error.code                           = ResolutionErrorCode::Timeout;
+    error.stage                          = ResolutionStage::Fetch;
+    error.reason                         = u"deadline"_s;
     const ResolutionOutcome<int> failure = ResolutionFailure{error};
     QVERIFY(!isSuccess(failure));
     QVERIFY(std::holds_alternative<ResolutionFailure>(failure));

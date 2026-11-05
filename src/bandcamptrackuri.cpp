@@ -2,10 +2,10 @@
 
 namespace Fooyin::Bandcamp {
 namespace {
-constexpr char UriPrefix[]          = "bandcamp://track/";
-constexpr qsizetype UriPrefixLength = sizeof(UriPrefix) - 1;
+constexpr char UriPrefix[]           = "bandcamp://track/";
+constexpr qsizetype UriPrefixLength  = sizeof(UriPrefix) - 1;
 constexpr qsizetype MaxTrackIdDigits = 19;
-constexpr qsizetype MaxUriLength = UriPrefixLength + MaxTrackIdDigits;
+constexpr qsizetype MaxUriLength     = UriPrefixLength + MaxTrackIdDigits;
 } // namespace
 
 QString bandcampTrackUri(qint64 trackId)
@@ -19,8 +19,7 @@ QString bandcampTrackUri(qint64 trackId)
 
 std::optional<qint64> parseBandcampTrackUri(const QString& uri)
 {
-    if(uri.size() <= UriPrefixLength || uri.size() > MaxUriLength
-       || !uri.startsWith(QLatin1StringView{UriPrefix})) {
+    if(uri.size() <= UriPrefixLength || uri.size() > MaxUriLength || !uri.startsWith(QLatin1StringView{UriPrefix})) {
         return std::nullopt;
     }
 
@@ -34,9 +33,9 @@ std::optional<qint64> parseBandcampTrackUri(const QString& uri)
         }
     }
 
-    bool ok  = false;
+    bool ok              = false;
     const QString idText = digits.toString();
-    const auto id         = idText.toLongLong(&ok);
+    const auto id        = idText.toLongLong(&ok);
     if(!ok || id <= 0 || QString::number(id) != idText) {
         return std::nullopt;
     }

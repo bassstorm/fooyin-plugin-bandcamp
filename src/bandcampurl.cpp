@@ -12,8 +12,8 @@ bool isSupportedBandcampStreamUrl(const QString& text)
         return false;
     }
     const QUrl url{text, QUrl::StrictMode};
-    return url.isValid() && url.scheme() == QStringLiteral("https")
-        && !url.host().isEmpty() && url.userInfo().isEmpty() && !url.hasFragment();
+    return url.isValid() && url.scheme() == QStringLiteral("https") && !url.host().isEmpty() && url.userInfo().isEmpty()
+        && !url.hasFragment();
 }
 
 namespace {

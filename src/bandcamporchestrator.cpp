@@ -1,7 +1,7 @@
 #include "bandcamporchestrator.h"
 
-#include "bandcamplogging.h"
 #include "bandcampdiagnostics.h"
+#include "bandcamplogging.h"
 
 #include <QUrl>
 
@@ -115,7 +115,7 @@ std::optional<BandcampListingRequest> BandcampOrchestrator::nextDiscography()
 {
     while(m_nextDiscovery < m_groups.size()) {
         const qsizetype ordinal = m_nextDiscovery++;
-        const Group& group = m_groups.at(ordinal);
+        const Group& group      = m_groups.at(ordinal);
         if(group.discography && !group.discoveryComplete) {
             return BandcampListingRequest{ordinal, QUrl(group.inputPage.url)};
         }
@@ -130,7 +130,10 @@ std::optional<ResolutionError> BandcampOrchestrator::beginListingPage(qsizetype 
     Q_ASSERT(group.discography && !group.discoveryComplete);
     const QString key = listingPageKey(url);
     if(key.isEmpty() || group.seenListingPages.contains(key)) {
-        return ResolutionError{ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Acquire, url, 0,
+        return ResolutionError{ResolutionErrorCode::RelationshipUnresolved,
+                               ResolutionStage::Acquire,
+                               url,
+                               0,
                                QStringLiteral("listing.continuation"),
                                QStringLiteral("discography continuation repeated a page")};
     }
@@ -140,19 +143,22 @@ std::optional<ResolutionError> BandcampOrchestrator::beginListingPage(qsizetype 
 }
 
 std::optional<ResolutionError> BandcampOrchestrator::appendListingBatch(qsizetype inputOrdinal,
-                                                                       const BandcampListingBatch& batch)
+                                                                        const BandcampListingBatch& batch)
 {
     Q_ASSERT(inputOrdinal >= 0 && inputOrdinal < m_groups.size());
     Group& group = m_groups[inputOrdinal];
     Q_ASSERT(group.discography && !group.discoveryComplete);
-    const QUrl requestedUrl = group.requestedListingPage.isEmpty() ? QUrl(group.inputPage.url)
-                                                                   : group.requestedListingPage;
-    const QUrl effectiveUrl = batch.effectiveUrl.isValid() ? batch.effectiveUrl : requestedUrl;
+    const QUrl requestedUrl
+        = group.requestedListingPage.isEmpty() ? QUrl(group.inputPage.url) : group.requestedListingPage;
+    const QUrl effectiveUrl    = batch.effectiveUrl.isValid() ? batch.effectiveUrl : requestedUrl;
     const QString effectiveKey = listingPageKey(effectiveUrl);
     if(effectiveKey != listingPageKey(requestedUrl)) {
         if(group.seenListingPages.contains(effectiveKey)) {
-            return ResolutionError{ResolutionErrorCode::RelationshipUnresolved, ResolutionStage::Acquire,
-                                   effectiveUrl, 0, QStringLiteral("listing.continuation"),
+            return ResolutionError{ResolutionErrorCode::RelationshipUnresolved,
+                                   ResolutionStage::Acquire,
+                                   effectiveUrl,
+                                   0,
+                                   QStringLiteral("listing.continuation"),
                                    QStringLiteral("discography redirect repeated a previously visited page")};
         }
         group.seenListingPages.insert(effectiveKey);
@@ -161,14 +167,20 @@ std::optional<ResolutionError> BandcampOrchestrator::appendListingBatch(qsizetyp
     constexpr qsizetype maxCount = std::numeric_limits<qsizetype>::max();
     const qsizetype previousSize = group.occurrences.size();
     if(batch.references.size() > maxCount - previousSize) {
-        return ResolutionError{ResolutionErrorCode::ResourceLimitExceeded, ResolutionStage::Parse, effectiveUrl, 0,
+        return ResolutionError{ResolutionErrorCode::ResourceLimitExceeded,
+                               ResolutionStage::Parse,
+                               effectiveUrl,
+                               0,
                                QStringLiteral("listing.ordinal"),
                                QStringLiteral("discography listing ordinal overflow")};
     }
     const qsizetype previousCount = std::max<qsizetype>(1, group.occurrences.size());
-    const qsizetype addedCount = std::max<qsizetype>(1, previousSize + batch.references.size()) - previousCount;
+    const qsizetype addedCount    = std::max<qsizetype>(1, previousSize + batch.references.size()) - previousCount;
     if(addedCount > maxCount - m_occurrenceCount) {
-        return ResolutionError{ResolutionErrorCode::ResourceLimitExceeded, ResolutionStage::Parse, effectiveUrl, 0,
+        return ResolutionError{ResolutionErrorCode::ResourceLimitExceeded,
+                               ResolutionStage::Parse,
+                               effectiveUrl,
+                               0,
                                QStringLiteral("listing.ordinal"),
                                QStringLiteral("discography listing ordinal overflow")};
     }
@@ -310,11 +322,10 @@ void BandcampOrchestrator::removeGroupRequests(qsizetype groupIndex)
         m_requests.removeLast();
     }
     if(!removed.isEmpty()) {
-        m_requests.erase(std::remove_if(m_requests.begin(), m_requests.end(),
-                                        [&removed](const BandcampReleaseRequest& request) {
-                                            return removed.contains(request.key);
-                                        }),
-                         m_requests.end());
+        m_requests.erase(
+            std::remove_if(m_requests.begin(), m_requests.end(),
+                           [&removed](const BandcampReleaseRequest& request) { return removed.contains(request.key); }),
+            m_requests.end());
     }
 }
 

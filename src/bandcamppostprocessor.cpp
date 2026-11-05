@@ -217,7 +217,8 @@ void logMutation(const QString& processor, const QString& oldValue, const QStrin
     qCDebug(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
         correlation, QStringLiteral("mutated"),
         {DiagnosticField::text(QStringLiteral("processor"), processor),
-         DiagnosticField::text(QStringLiteral("old"), oldValue), DiagnosticField::text(QStringLiteral("new"), newValue)});
+         DiagnosticField::text(QStringLiteral("old"), oldValue),
+         DiagnosticField::text(QStringLiteral("new"), newValue)});
 }
 
 std::optional<QString> sharedTrackArtist(const QList<BandcampTrack>& siblings, bool complete,
@@ -379,8 +380,8 @@ int TrackNumberRepairProcessor::process(BandcampTrack& track, TrackProcessorCont
     const int old                  = track.trackNumber;
     track.trackNumber              = *context.facts.repairedTrackNumber;
     context.provenance.trackNumber = FieldProvenance::Derived;
-    logMutation(name(), old > 0 ? QString::number(old) : QStringLiteral("<unset>"),
-                QString::number(track.trackNumber), context.correlation);
+    logMutation(name(), old > 0 ? QString::number(old) : QStringLiteral("<unset>"), QString::number(track.trackNumber),
+                context.correlation);
     return 1;
 }
 } // namespace Fooyin::Bandcamp

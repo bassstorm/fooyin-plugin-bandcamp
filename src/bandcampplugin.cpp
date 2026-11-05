@@ -1,5 +1,6 @@
 #include "bandcampplugin.h"
 
+#include "bandcampdiagnostics.h"
 #include "bandcampimportcontroller.h"
 #include "bandcamplogging.h"
 #include "bandcampprogressdialog.h"
@@ -7,19 +8,18 @@
 #include "bandcampsettings.h"
 #include "bandcampsettingsdialog.h"
 #include "bandcampurldialog.h"
-#include "bandcampdiagnostics.h"
 
 #include <core/coresettings.h>
-#include <core/network/remoteioservice.h>
 #include <core/network/networkaccessmanager.h>
-#include <core/playlist/playlisthandler.h>
+#include <core/network/remoteioservice.h>
 #include <core/playlist/playlist.h>
+#include <core/playlist/playlisthandler.h>
 
 #include <core/plugins/coreplugincontext.h>
 #include <gui/guiconstants.h>
-#include <gui/plugins/guiplugincontext.h>
 #include <gui/playlist/currentplaylistcontroller.h>
 #include <gui/playlist/playlistinteractor.h>
+#include <gui/plugins/guiplugincontext.h>
 #include <gui/trackselectioncontroller.h>
 #include <utils/actions/actioncontainer.h>
 #include <utils/actions/actionmanager.h>
@@ -27,9 +27,9 @@
 #include <utils/utils.h>
 
 #include <QAction>
+#include <QDateTime>
 #include <QMainWindow>
 #include <QMenu>
-#include <QDateTime>
 
 #include <utility>
 
@@ -49,12 +49,12 @@ protected:
 
 void BandcampPlugin::initialise(const CorePluginContext& context)
 {
-    m_network = context.networkAccess;
-    m_service = new BandcampResolutionService(m_network.get(), this);
+    m_network  = context.networkAccess;
+    m_service  = new BandcampResolutionService(m_network.get(), this);
     m_remoteIo = new Fooyin::RemoteIoService(context.networkAccess, context.settingsManager, this);
-    m_playbackBridge = std::make_shared<BandcampPlaybackBridge>(
-        m_service, context.audioLoader, m_remoteIo, context.settingsManager,
-        fooyinLibraryApi(context.library, context.playlistHandler));
+    m_playbackBridge
+        = std::make_shared<BandcampPlaybackBridge>(m_service, context.audioLoader, m_remoteIo, context.settingsManager,
+                                                   fooyinLibraryApi(context.library, context.playlistHandler));
 }
 
 BandcampPlugin::~BandcampPlugin()
@@ -96,9 +96,7 @@ void BandcampPlugin::shutdown()
 void BandcampPlugin::trackDialog(QDialog* dialog)
 {
     m_dialogs.append(dialog);
-    QObject::connect(dialog, &QObject::destroyed, this, [this, dialog]() {
-        m_dialogs.removeAll(dialog);
-    });
+    QObject::connect(dialog, &QObject::destroyed, this, [this, dialog]() { m_dialogs.removeAll(dialog); });
 }
 
 QString BandcampPlugin::inputName() const
@@ -118,7 +116,7 @@ std::unique_ptr<PluginSettingsProvider> BandcampPlugin::settingsProvider() const
 
 void BandcampPlugin::initialise(const GuiPluginContext& context)
 {
-    m_playlistSelection = context.playlistSelection;
+    m_playlistSelection  = context.playlistSelection;
     m_playlistInteractor = context.playlistInteractor;
 
     auto* addUrlAction = new QAction(tr("Add &Bandcamp URL…"), this);
@@ -130,14 +128,13 @@ void BandcampPlugin::initialise(const GuiPluginContext& context)
     QObject::connect(addUrlAction, &QAction::triggered, this, &BandcampPlugin::showAddUrlDialog);
     if(context.trackSelection) {
         const bool registered = context.trackSelection->registerTrackContextAction(
-            this, TrackContextMenuArea::Track, Constants::Menus::Context::TrackSelection,
-            "Bandcamp.RefreshStreams", tr("Refresh Bandcamp streams"),
+            this, TrackContextMenuArea::Track, Constants::Menus::Context::TrackSelection, "Bandcamp.RefreshStreams",
+            tr("Refresh Bandcamp streams"),
             [this](QMenu* menu, const Fooyin::TrackSelection& selection) {
                 auto* action = menu->addAction(tr("Refresh Bandcamp streams"));
                 action->setEnabled(hasSelectedBandcampTracks(selection.tracks));
-                connect(action, &QAction::triggered, this, [this, tracks = selection.tracks]() {
-                    refreshSelectedTracks(tracks);
-                });
+                connect(action, &QAction::triggered, this,
+                        [this, tracks = selection.tracks]() { refreshSelectedTracks(tracks); });
             },
             Constants::Menus::Context::TrackFinalSeparator);
         if(!registered) {
@@ -159,17 +156,14 @@ void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
     const QPointer<Fooyin::PlaylistInteractor> interactor{m_playlistInteractor};
     auto* operation = new BandcampRefreshController{
         m_service, tracks, makeOperationOptions(settings),
-        fooyinLibraryApi(interactor ? interactor->library() : nullptr,
-                        interactor ? interactor->handler() : nullptr), this};
+        fooyinLibraryApi(interactor ? interactor->library() : nullptr, interactor ? interactor->handler() : nullptr),
+        this};
     m_refreshes.append(operation);
-    QObject::connect(operation, &QObject::destroyed, this, [this, operation]() {
-        m_refreshes.removeAll(operation);
-    });
+    QObject::connect(operation, &QObject::destroyed, this, [this, operation]() { m_refreshes.removeAll(operation); });
     auto* dialog = new BandcampProgressDialog(BandcampDialogMode::Refresh, Utils::getMainWindow());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     trackDialog(dialog);
-    connect(operation, &BandcampRefreshController::progressChanged, dialog,
-            &BandcampProgressDialog::updateProgress);
+    connect(operation, &BandcampRefreshController::progressChanged, dialog, &BandcampProgressDialog::updateProgress);
     connect(operation, &BandcampRefreshController::finished, dialog, &BandcampProgressDialog::finishRefresh);
     connect(operation, &BandcampRefreshController::finished, operation, &QObject::deleteLater);
     connect(dialog, &QDialog::finished, operation, &BandcampRefreshController::cancel);
@@ -188,9 +182,8 @@ void BandcampPlugin::showAddUrlDialog()
 
 void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool forceNewPlaylist)
 {
-    qCInfo(BANDCAMP_UI).noquote()
-        << formatTraceEvent(CorrelationContext{}, QStringLiteral("import_started"),
-                            {DiagnosticField::number(QStringLiteral("urls"), urls.size())});
+    qCInfo(BANDCAMP_UI).noquote() << formatTraceEvent(CorrelationContext{}, QStringLiteral("import_started"),
+                                                      {DiagnosticField::number(QStringLiteral("urls"), urls.size())});
     if(!m_service) {
         qCWarning(BANDCAMP_UI) << "Bandcamp service is not available; URLs were not resolved";
         return;
@@ -198,16 +191,14 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
 
     FySettings fySettings;
     const BandcampSettings settings = loadBandcampSettings(fySettings);
-    qCDebug(BANDCAMP_SETTINGS).noquote()
-        << formatTraceEvent(CorrelationContext{}, QStringLiteral("settings"),
-                            {DiagnosticField::number(QStringLiteral("parallelism"), settings.parallelism),
-                             DiagnosticField::number(QStringLiteral("timeoutMs"), settings.attemptTimeoutMs),
-                             DiagnosticField::number(QStringLiteral("maxAttempts"), settings.maxAttempts),
-                             DiagnosticField::number(QStringLiteral("cooldownMs"), settings.attemptCooldownMs),
-                             DiagnosticField::number(QStringLiteral("discographyOrder"),
-                                                     static_cast<qint64>(settings.discographyOrder)),
-                             DiagnosticField::number(QStringLiteral("refreshWindowMin"),
-                                                     settings.prePlaybackRefreshWindowMinutes)});
+    qCDebug(BANDCAMP_SETTINGS).noquote() << formatTraceEvent(
+        CorrelationContext{}, QStringLiteral("settings"),
+        {DiagnosticField::number(QStringLiteral("parallelism"), settings.parallelism),
+         DiagnosticField::number(QStringLiteral("timeoutMs"), settings.attemptTimeoutMs),
+         DiagnosticField::number(QStringLiteral("maxAttempts"), settings.maxAttempts),
+         DiagnosticField::number(QStringLiteral("cooldownMs"), settings.attemptCooldownMs),
+         DiagnosticField::number(QStringLiteral("discographyOrder"), static_cast<qint64>(settings.discographyOrder)),
+         DiagnosticField::number(QStringLiteral("refreshWindowMin"), settings.prePlaybackRefreshWindowMinutes)});
 
     const Fooyin::UId selectedPlaylistId
         = m_playlistSelection ? m_playlistSelection->currentPlaylistId() : Fooyin::UId{};
@@ -227,8 +218,10 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
     QPointer<Fooyin::PlaylistHandler> handler{interactor ? interactor->handler() : nullptr};
 
     BandcampPlaylistApi playlistApi;
-    playlistApi.owner = interactor;
-    playlistApi.ownersAvailable = [interactor, handler]() { return interactor && handler; };
+    playlistApi.owner           = interactor;
+    playlistApi.ownersAvailable = [interactor, handler]() {
+        return interactor && handler;
+    };
     playlistApi.inspect = [interactor, handler](const Fooyin::UId& playlistId) {
         if(!interactor || !handler) {
             return BandcampPlaylistAvailability::OwnerUnavailable;
@@ -281,31 +274,22 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
         },
         this};
     m_imports.append(controller);
-    QObject::connect(controller, &QObject::destroyed, this, [this, controller]() {
-        m_imports.removeAll(controller);
-    });
+    QObject::connect(controller, &QObject::destroyed, this, [this, controller]() { m_imports.removeAll(controller); });
 
     QObject::connect(m_service, &BandcampResolutionService::scopeResolved, controller,
                      [controller](const BandcampScopeResult& result) { controller->acceptScopeResult(result); });
     QObject::connect(m_service, &BandcampResolutionService::progressChanged, controller,
-                     [controller](const BandcampOperationProgress& progress) {
-                         controller->acceptProgress(progress);
-                     });
+                     [controller](const BandcampOperationProgress& progress) { controller->acceptProgress(progress); });
     QObject::connect(m_service, &BandcampResolutionService::operationFinished, controller,
-                     [controller](const BandcampOperationSummary& summary) {
-                         controller->finishResolution(summary);
-                     });
+                     [controller](const BandcampOperationSummary& summary) { controller->finishResolution(summary); });
     QObject::connect(controller, &BandcampImportController::progressChanged, dialog,
                      &BandcampProgressDialog::updateProgress);
-    QObject::connect(controller, &BandcampImportController::importing, dialog,
-                     &BandcampProgressDialog::showImporting);
+    QObject::connect(controller, &BandcampImportController::importing, dialog, &BandcampProgressDialog::showImporting);
     QObject::connect(controller, &BandcampImportController::integrationError, dialog,
                      &BandcampProgressDialog::showIntegrationError);
-    QObject::connect(controller, &BandcampImportController::finished, dialog,
-                     &BandcampProgressDialog::finish);
-    QObject::connect(controller, &BandcampImportController::finished, controller, [controller]() {
-        controller->deleteLater();
-    });
+    QObject::connect(controller, &BandcampImportController::finished, dialog, &BandcampProgressDialog::finish);
+    QObject::connect(controller, &BandcampImportController::finished, controller,
+                     [controller]() { controller->deleteLater(); });
     QObject::connect(dialog, &QDialog::finished, controller, &BandcampImportController::cancel);
     dialog->open();
     controller->start();

@@ -60,8 +60,7 @@ struct PlaybackWaiter
     bool cancelled{false};
     std::optional<BandcampPlaybackBridge::PreparedTransport> transport;
     QString failure;
-    std::chrono::steady_clock::time_point deadline
-        = std::chrono::steady_clock::now() + PreArmWaiterBudget;
+    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + PreArmWaiterBudget;
 
     QPointer<BandcampPlaybackPreparation> operation;
 };
@@ -73,7 +72,7 @@ void completeWaiter(const std::shared_ptr<PlaybackWaiter>& waiter, QString failu
         if(waiter->completed || waiter->transport) {
             return;
         }
-        waiter->failure = std::move(failure);
+        waiter->failure   = std::move(failure);
         waiter->completed = true;
     }
     waiter->changed.notify_all();
@@ -82,8 +81,8 @@ void completeWaiter(const std::shared_ptr<PlaybackWaiter>& waiter, QString failu
 void playbackDiagnostic(qint64 trackId, const QString& event, const QString& reason)
 {
     const CorrelationContext context{.trackId = trackId};
-    qCWarning(BANDCAMP_TRACKS).noquote()
-        << formatTraceEvent(context, event, {DiagnosticField::text(QStringLiteral("reason"), reason)});
+    qCWarning(BANDCAMP_TRACKS).noquote() << formatTraceEvent(context, event,
+                                                             {DiagnosticField::text(QStringLiteral("reason"), reason)});
 }
 } // namespace
 
@@ -114,7 +113,8 @@ struct BandcampPlaybackBridge::State
     void removeOperation(BandcampPlaybackPreparation* operation)
     {
         const std::scoped_lock lock{operationsMutex};
-        std::erase_if(operations, [operation](const auto& current) { return current.isNull() || current == operation; });
+        std::erase_if(operations,
+                      [operation](const auto& current) { return current.isNull() || current == operation; });
     }
 };
 
@@ -130,7 +130,7 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
         const std::scoped_lock lock{waiter->mutex};
         if(waiter->cancelled || waiter->completed) {
             waiter->completed = true;
-            waiter->failure = QStringLiteral("Playback preparation was cancelled.");
+            waiter->failure   = QStringLiteral("Playback preparation was cancelled.");
             waiter->changed.notify_all();
             return;
         }
@@ -142,22 +142,22 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
     }
 
     FySettings settings;
-    const auto loaded = loadBandcampSettings(settings);
+    const auto loaded        = loadBandcampSettings(settings);
     OperationOptions options = makeOperationOptions(loaded);
     options.maxAttempts      = PlaybackAttemptsPerPage;
-    const auto deadline = std::chrono::steady_clock::now()
-        + std::chrono::milliseconds{playbackWaiterBudgetMs(options.attemptTimeoutMs)};
+    const auto deadline      = std::chrono::steady_clock::now()
+                             + std::chrono::milliseconds{playbackWaiterBudgetMs(options.attemptTimeoutMs)};
     {
         const std::scoped_lock lock{waiter->mutex};
         if(state->shuttingDown.load(std::memory_order_acquire)) {
             waiter->completed = true;
-            waiter->failure = QStringLiteral("Playback preparation was withdrawn.");
+            waiter->failure   = QStringLiteral("Playback preparation was withdrawn.");
             waiter->changed.notify_all();
             return;
         }
         if(waiter->cancelled || waiter->completed) {
             waiter->completed = true;
-            waiter->failure = QStringLiteral("Playback preparation was cancelled.");
+            waiter->failure   = QStringLiteral("Playback preparation was cancelled.");
             waiter->changed.notify_all();
             return;
         }
@@ -165,17 +165,17 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
     }
     waiter->changed.notify_all();
 
-    auto* operation = new BandcampPlaybackPreparation{state->service, track, options, state->libraryApi,
-                                                      state->service};
+    auto* operation
+        = new BandcampPlaybackPreparation{state->service, track, options, state->libraryApi, state->service};
     {
         const std::scoped_lock lock{state->operationsMutex, waiter->mutex};
         if(state->shuttingDown.load(std::memory_order_acquire) || waiter->cancelled || waiter->completed) {
             delete operation;
             if(!waiter->completed) {
                 waiter->completed = true;
-                waiter->failure = state->shuttingDown.load(std::memory_order_acquire)
-                    ? QStringLiteral("Playback preparation was withdrawn.")
-                    : QStringLiteral("Playback preparation was cancelled.");
+                waiter->failure   = state->shuttingDown.load(std::memory_order_acquire)
+                                      ? QStringLiteral("Playback preparation was withdrawn.")
+                                      : QStringLiteral("Playback preparation was cancelled.");
             }
             waiter->changed.notify_all();
             return;
@@ -186,21 +186,18 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
     const std::weak_ptr weakState{state};
     QObject::connect(operation, &BandcampPlaybackPreparation::prepared, operation,
                      [waiter, deadline](const QString& streamUrl) {
-        {
-            const std::scoped_lock lock{waiter->mutex};
-            if(waiter->cancelled || waiter->completed) {
-                return;
-            }
-            waiter->transport = BandcampPlaybackBridge::PreparedTransport{streamUrl, deadline};
-        }
-        waiter->changed.notify_all();
-    });
+                         {
+                             const std::scoped_lock lock{waiter->mutex};
+                             if(waiter->cancelled || waiter->completed) {
+                                 return;
+                             }
+                             waiter->transport = BandcampPlaybackBridge::PreparedTransport{streamUrl, deadline};
+                         }
+                         waiter->changed.notify_all();
+                     });
     QObject::connect(operation, &BandcampPlaybackPreparation::failed, operation,
-                     [waiter](const QString& reason) {
-        completeWaiter(waiter, reason);
-    });
-    QObject::connect(operation, &BandcampPlaybackPreparation::finished, operation,
-                     [weakState, waiter, operation]() {
+                     [waiter](const QString& reason) { completeWaiter(waiter, reason); });
+    QObject::connect(operation, &BandcampPlaybackPreparation::finished, operation, [weakState, waiter, operation]() {
         {
             const std::scoped_lock lock{waiter->mutex};
             if(waiter->operation == operation) {
@@ -222,33 +219,35 @@ void cancelPreparation(const std::weak_ptr<BandcampPlaybackBridge::State>& weakS
     if(!application) {
         return;
     }
-    QMetaObject::invokeMethod(application, [weakState, waiter]() {
-        if(const auto state = weakState.lock()) {
-            QPointer<BandcampPlaybackPreparation> operation;
-            {
-                const std::scoped_lock lock{waiter->mutex};
-                operation = waiter->operation;
+    QMetaObject::invokeMethod(
+        application,
+        [weakState, waiter]() {
+            if(const auto state = weakState.lock()) {
+                QPointer<BandcampPlaybackPreparation> operation;
+                {
+                    const std::scoped_lock lock{waiter->mutex};
+                    operation = waiter->operation;
+                }
+                if(operation) {
+                    operation->cancel();
+                }
             }
-            if(operation) {
-                operation->cancel();
-            }
-        }
-    }, Qt::QueuedConnection);
+        },
+        Qt::QueuedConnection);
 }
 } // namespace
 
 BandcampPlaybackBridge::BandcampPlaybackBridge(BandcampResolutionService* service,
                                                std::shared_ptr<Fooyin::AudioLoader> audioLoader,
-                                               Fooyin::RemoteIoService* remoteIo,
-                                               Fooyin::SettingsManager* settings,
+                                               Fooyin::RemoteIoService* remoteIo, Fooyin::SettingsManager* settings,
                                                FooyinLibraryApi libraryApi)
     : m_state{std::make_shared<State>()}
 {
-    m_state->service = service;
+    m_state->service     = service;
     m_state->audioLoader = std::move(audioLoader);
-    m_state->remoteIo = remoteIo;
-    m_state->settings = settings;
-    m_state->libraryApi = std::move(libraryApi);
+    m_state->remoteIo    = remoteIo;
+    m_state->settings    = settings;
+    m_state->libraryApi  = std::move(libraryApi);
 }
 
 BandcampPlaybackBridge::~BandcampPlaybackBridge() = default;
@@ -258,8 +257,7 @@ std::shared_ptr<Fooyin::AudioLoader> BandcampPlaybackBridge::audioLoader() const
     return m_state->audioLoader;
 }
 
-bool BandcampPlaybackBridge::createRemoteStreamSource(const QUrl& url,
-                                                       Fooyin::RemoteStreamSource& source) const
+bool BandcampPlaybackBridge::createRemoteStreamSource(const QUrl& url, Fooyin::RemoteStreamSource& source) const
 {
     const auto state = m_state;
     const std::scoped_lock lock{state->remoteIoMutex};
@@ -278,7 +276,7 @@ std::stop_token BandcampPlaybackBridge::shutdownToken() const
 BandcampPlaybackBridge::Preparation BandcampPlaybackBridge::prepare(const Fooyin::Track& track,
                                                                     std::stop_token cancellation) const
 {
-    const auto state = m_state;
+    const auto state       = m_state;
     const auto application = QCoreApplication::instance();
     if(!application || QThread::currentThread() == application->thread()) {
         return Failure{QStringLiteral("Playback preparation requires a worker thread.")};
@@ -298,32 +296,35 @@ BandcampPlaybackBridge::Preparation BandcampPlaybackBridge::prepare(const Fooyin
 
     const std::weak_ptr weakState{state};
     if(!application
-       || !QMetaObject::invokeMethod(application, [weakState, waiter, track]() {
-              if(const auto locked = weakState.lock()) {
-                  beginPreparation(locked, waiter, track);
-              }
-              else {
-                  completeWaiter(waiter, QStringLiteral("Playback preparation was withdrawn."));
-              }
-          }, Qt::QueuedConnection)) {
+       || !QMetaObject::invokeMethod(
+           application,
+           [weakState, waiter, track]() {
+               if(const auto locked = weakState.lock()) {
+                   beginPreparation(locked, waiter, track);
+               }
+               else {
+                   completeWaiter(waiter, QStringLiteral("Playback preparation was withdrawn."));
+               }
+           },
+           Qt::QueuedConnection)) {
         state->removeWaiter(waiter);
         return Failure{QStringLiteral("The host event loop is unavailable.")};
     }
 
     std::stop_callback cancellationWake{cancellation, [waiter]() {
-        {
-            const std::scoped_lock lock{waiter->mutex};
-            waiter->cancelled = true;
-            waiter->completed = true;
-            waiter->failure = QStringLiteral("Playback preparation was cancelled.");
-        }
-        waiter->changed.notify_all();
-    }};
+                                            {
+                                                const std::scoped_lock lock{waiter->mutex};
+                                                waiter->cancelled = true;
+                                                waiter->completed = true;
+                                                waiter->failure = QStringLiteral("Playback preparation was cancelled.");
+                                            }
+                                            waiter->changed.notify_all();
+                                        }};
     std::unique_lock lock{waiter->mutex};
     auto withdraw = [&](QString reason) {
         waiter->cancelled = true;
         waiter->completed = true;
-        waiter->failure = reason;
+        waiter->failure   = reason;
         lock.unlock();
         waiter->changed.notify_all();
         cancelPreparation(weakState, waiter);
@@ -347,8 +348,8 @@ BandcampPlaybackBridge::Preparation BandcampPlaybackBridge::prepare(const Fooyin
         state->removeWaiter(waiter);
         return result;
     }
-    const QString reason = waiter->failure.isEmpty()
-        ? QStringLiteral("Bandcamp could not prepare a playable stream.") : waiter->failure;
+    const QString reason
+        = waiter->failure.isEmpty() ? QStringLiteral("Bandcamp could not prepare a playable stream.") : waiter->failure;
     lock.unlock();
     state->removeWaiter(waiter);
     return Failure{reason};
@@ -368,7 +369,7 @@ void BandcampPlaybackBridge::shutdown()
                     waiter->cancelled = true;
                     if(!waiter->transport) {
                         waiter->completed = true;
-                        waiter->failure = QStringLiteral("Playback preparation was withdrawn.");
+                        waiter->failure   = QStringLiteral("Playback preparation was withdrawn.");
                     }
                 }
                 waiter->changed.notify_all();
@@ -565,7 +566,7 @@ public:
                 return {};
             }
             const auto& transport = std::get<BandcampPlaybackBridge::PreparedTransport>(prepared);
-            m_deadline = transport.deadline;
+            m_deadline            = transport.deadline;
             if(attemptStopped()) {
                 playbackDiagnostic(*id, QStringLiteral("playback_prepare_failed"),
                                    QStringLiteral("The playback deadline expired."));
@@ -586,8 +587,8 @@ public:
                                    QStringLiteral("The Bandcamp stream could not be opened."));
                 return {};
             }
-            decoderSource.filepath = safeUrl;
-            decoderSource.device = m_device.get();
+            decoderSource.filepath           = safeUrl;
+            decoderSource.device             = m_device.get();
             decoderSource.remoteStreamDevice = m_remoteDevice;
 
             auto candidates = m_bridge->audioLoader()->decodersForFile(safeUrl);
@@ -606,7 +607,7 @@ public:
                     continue;
                 }
                 const qint64 sourcePosition = m_device->pos();
-                auto inner = std::shared_ptr<Fooyin::AudioDecoder>{std::move(candidate)};
+                auto inner                  = std::shared_ptr<Fooyin::AudioDecoder>{std::move(candidate)};
                 setInnerDecoder(inner);
                 if(attemptStopped()) {
                     stop();
@@ -625,8 +626,9 @@ public:
                     return {};
                 }
                 decoderSource.remoteOpenTimeout = m_hostOpenTimeout > std::chrono::milliseconds{0}
-                    ? std::min(m_hostOpenTimeout, remainingOpenTime) : remainingOpenTime;
-                const auto format = inner->init(decoderSource, decoderTrack, options);
+                                                    ? std::min(m_hostOpenTimeout, remainingOpenTime)
+                                                    : remainingOpenTime;
+                const auto format               = inner->init(decoderSource, decoderTrack, options);
                 if(format) {
                     if(m_remoteDevice) {
                         m_remoteDevice->setReconnectOnFinishedEnabled(false);
@@ -880,8 +882,8 @@ private:
                     return false;
                 }
                 m_hostOpenTimeout = remote.openTimeout;
-                m_remoteDevice = remote.remoteDevice;
-                m_device = std::move(remote.device);
+                m_remoteDevice    = remote.remoteDevice;
+                m_device          = std::move(remote.device);
                 return true;
             }
             if(attempt != 0 || abortToken().stop_requested()
@@ -910,7 +912,7 @@ Fooyin::InputCreator bandcampInputCreator(const std::weak_ptr<BandcampPlaybackBr
 {
     Fooyin::InputCreator creator;
     creator.priority = Fooyin::DefaultInputPriority;
-    creator.decoder = [bridge]() -> std::unique_ptr<Fooyin::AudioDecoder> {
+    creator.decoder  = [bridge]() -> std::unique_ptr<Fooyin::AudioDecoder> {
         const auto locked = bridge.lock();
         return std::make_unique<BandcampAudioDecoder>(locked);
     };

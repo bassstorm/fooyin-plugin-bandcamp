@@ -69,7 +69,7 @@ LiveRun runOperation(const QList<BandcampPageUrl>& pages, bool stopAfterFirstSco
                              return;
                          }
                          cancelRequested = true;
-                         const auto id = result.operationId;
+                         const auto id   = result.operationId;
                          // Queued so the service is not cancelled from inside its own emission.
                          QMetaObject::invokeMethod(
                              &service, [&service, id] { service.cancel(id); }, Qt::QueuedConnection);
@@ -83,7 +83,7 @@ LiveRun runOperation(const QList<BandcampPageUrl>& pages, bool stopAfterFirstSco
 
     OperationOptions options;
     options.parallelism = 1;
-    run.submission = service.submit(pages, options);
+    run.submission      = service.submit(pages, options);
     if(std::holds_alternative<BandcampOperationAccepted>(run.submission)) {
         watchdog.start();
         loop.exec();
@@ -111,7 +111,7 @@ QString describeOutcome(const BandcampResolutionOutcome& outcome)
 {
     if(const auto* failure = std::get_if<ResolutionFailure>(&outcome)) {
         return u"%1 during %2: %3"_s.arg(resolutionErrorCodeName(failure->error.code),
-                                          resolutionStageName(failure->error.stage), failure->error.reason);
+                                         resolutionStageName(failure->error.stage), failure->error.reason);
     }
     return u"not resolved (cancelled)"_s;
 }
@@ -193,13 +193,13 @@ private slots:
 
 void BandcampLiveTests::artistDiscographyResolves()
 {
-    const auto run = runOperation(pagesFor(ArtistUrl), true);
+    const auto run     = runOperation(pagesFor(ArtistUrl), true);
     const auto problem = completionProblem(run);
     QVERIFY2(problem.isEmpty(), qPrintable(problem));
     QVERIFY2(!run.results.isEmpty(), "no releases were reported");
 
     const auto& first = run.results.constFirst();
-    const auto* data = successData(first);
+    const auto* data  = successData(first);
     QVERIFY2(data, qPrintable(describeOutcome(first.outcome)));
     verifyResolvedData(*data);
     QVERIFY(run.summary->succeeded >= 1);
@@ -207,13 +207,13 @@ void BandcampLiveTests::artistDiscographyResolves()
 
 void BandcampLiveTests::labelDiscographyResolves()
 {
-    const auto run = runOperation(pagesFor(LabelUrl), true);
+    const auto run     = runOperation(pagesFor(LabelUrl), true);
     const auto problem = completionProblem(run);
     QVERIFY2(problem.isEmpty(), qPrintable(problem));
     QVERIFY2(!run.results.isEmpty(), "no releases were reported");
 
     const auto& first = run.results.constFirst();
-    const auto* data = successData(first);
+    const auto* data  = successData(first);
     QVERIFY2(data, qPrintable(describeOutcome(first.outcome)));
     verifyResolvedData(*data);
     QVERIFY(run.summary->succeeded >= 1);
@@ -221,7 +221,7 @@ void BandcampLiveTests::labelDiscographyResolves()
 
 void BandcampLiveTests::albumResolves()
 {
-    const auto run = runOperation(pagesFor(AlbumUrl));
+    const auto run     = runOperation(pagesFor(AlbumUrl));
     const auto problem = completionProblem(run);
     QVERIFY2(problem.isEmpty(), qPrintable(problem));
     QCOMPARE(run.results.size(), qsizetype{1});
@@ -235,7 +235,7 @@ void BandcampLiveTests::albumResolves()
 
 void BandcampLiveTests::memberTrackResolves()
 {
-    const auto run = runOperation(pagesFor(MemberTrackUrl));
+    const auto run     = runOperation(pagesFor(MemberTrackUrl));
     const auto problem = completionProblem(run);
     QVERIFY2(problem.isEmpty(), qPrintable(problem));
     QCOMPARE(run.results.size(), qsizetype{1});
@@ -250,7 +250,7 @@ void BandcampLiveTests::memberTrackResolves()
 
 void BandcampLiveTests::standaloneTrackResolves()
 {
-    const auto run = runOperation(pagesFor(StandaloneTrackUrl));
+    const auto run     = runOperation(pagesFor(StandaloneTrackUrl));
     const auto problem = completionProblem(run);
     QVERIFY2(problem.isEmpty(), qPrintable(problem));
     QCOMPARE(run.results.size(), qsizetype{1});

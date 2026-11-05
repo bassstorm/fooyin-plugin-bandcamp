@@ -1,13 +1,13 @@
 #pragma once
 
-#include "bandcampresolutionservice.h"
 #include "bandcampplayback.h"
+#include "bandcampresolutionservice.h"
 #include "bandcampurl.h"
 
-#include <core/plugins/coreplugin.h>
 #include <core/engine/inputplugin.h>
-#include <core/track.h>
+#include <core/plugins/coreplugin.h>
 #include <core/plugins/plugin.h>
+#include <core/track.h>
 #include <gui/plugins/guiplugin.h>
 #include <gui/plugins/pluginconfigguiplugin.h>
 

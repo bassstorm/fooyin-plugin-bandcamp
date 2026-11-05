@@ -82,9 +82,8 @@ struct BandcampListingResolver::Impl
     void issueFetch()
     {
         const quint64 id = attempts.issueAttempt();
-        requestId
-            = client->fetch(pageUrl, [this, id](BandcampFetchOutcome outcome) { onFetch(id, std::move(outcome)); },
-                            context);
+        requestId        = client->fetch(
+            pageUrl, [this, id](BandcampFetchOutcome outcome) { onFetch(id, std::move(outcome)); }, context);
     }
 
     void scheduleRetry(const ResolutionError& error, int httpStatus)
@@ -256,7 +255,8 @@ struct BandcampListingResolver::Impl
         if(const auto* failure = std::get_if<ResolutionFailure>(&outcome)) {
             if(started) {
                 logResolutionFailure(context, failure->error, lastHttpStatus, attempts, elapsed.elapsed());
-            } else {
+            }
+            else {
                 logResolutionFailure(context, failure->error, lastHttpStatus);
             }
         }
@@ -274,9 +274,9 @@ struct BandcampListingResolver::Impl
             return;
         }
         if(!reported) {
-            report(ResolutionFailure{makeResolutionError(
-                ResolutionErrorCode::FetchFailed, ResolutionStage::Fetch, pageUrl, 0, QStringLiteral("listing"),
-                QStringLiteral("listing workflow ended without an outcome"))});
+            report(ResolutionFailure{makeResolutionError(ResolutionErrorCode::FetchFailed, ResolutionStage::Fetch,
+                                                         pageUrl, 0, QStringLiteral("listing"),
+                                                         QStringLiteral("listing workflow ended without an outcome"))});
             return;
         }
         settled = true;

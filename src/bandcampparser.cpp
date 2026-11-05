@@ -174,8 +174,8 @@ struct SourceObject
             return CandidateField<qint64>::invalid();
         }
         const double number = input.toDouble();
-        if(!std::isfinite(number) || std::floor(number) != number || number < 1.0
-           || number >= MaxExactJsonInteger || number > static_cast<double>(maximum)) {
+        if(!std::isfinite(number) || std::floor(number) != number || number < 1.0 || number >= MaxExactJsonInteger
+           || number > static_cast<double>(maximum)) {
             return CandidateField<qint64>::invalid();
         }
         return CandidateField<qint64>::usable(static_cast<qint64>(number), FieldProvenance::Explicit);
@@ -203,8 +203,7 @@ CorrelationContext snapshotContext(const QJsonValue& root, const CorrelationCont
     if(!id.isUsable()) {
         return context;
     }
-    const auto typeValue = current.value(u"type").isUndefined() ? object.value(u"item_type")
-                                                                : current.value(u"type");
+    const auto typeValue = current.value(u"type").isUndefined() ? object.value(u"item_type") : current.value(u"type");
     if(typeValue.toString() == u"album" || typeValue.toString() == u"a") {
         return context.withAlbum(id.value);
     }
@@ -439,13 +438,13 @@ public:
         const auto id    = object.integer(u"id");
         const auto alias = object.integer(u"track_id");
         // Contradictory stable aliases do not identify a usable member.
-        track.id = scoped.select(QStringLiteral("track.id"), id, alias, FieldProvenance::Explicit, true);
+        track.id          = scoped.select(QStringLiteral("track.id"), id, alias, FieldProvenance::Explicit, true);
         track.title       = text(object.value(u"title"));
         track.artist      = text(object.value(u"artist"));
         track.trackNumber = object.integer(u"track_num", MaxTrackNumber);
         track.durationMs  = duration(object.value(u"duration"));
         const auto file   = object.value(u"file");
-        auto stream       = file.isUndefined() ? CandidateField<QString>::missing() : CandidateField<QString>::invalid();
+        auto stream = file.isUndefined() ? CandidateField<QString>::missing() : CandidateField<QString>::invalid();
         if(file.isObject()) {
             stream = streamLocator(file.toObject().value(u"mp3-128"));
         }
@@ -659,10 +658,11 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
     Mapper mapper(context);
     const auto currentKind = kind(current.value(u"type"));
     const auto rootKind    = kind(root.value(u"item_type"));
-    const auto sourceKind  = mapper.select(QStringLiteral("kind"), currentKind, rootKind, FieldProvenance::Explicit, true);
-    const auto currentId   = current.integer(u"id");
-    const auto rootId      = root.integer(u"id");
-    const auto id          = mapper.select(QStringLiteral("id"), currentId, rootId, FieldProvenance::Explicit, true);
+    const auto sourceKind
+        = mapper.select(QStringLiteral("kind"), currentKind, rootKind, FieldProvenance::Explicit, true);
+    const auto currentId = current.integer(u"id");
+    const auto rootId    = root.integer(u"id");
+    const auto id        = mapper.select(QStringLiteral("id"), currentId, rootId, FieldProvenance::Explicit, true);
     if(!sourceKind.isUsable() || conflicts(currentKind, rootKind) || conflicts(currentId, rootId)) {
         return failure(ResolutionErrorCode::MalformedPage, pageUrl, QStringLiteral("identity"),
                        QStringLiteral("unknown or contradictory release identity"));
@@ -702,11 +702,11 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
     sourceUrl.provenance = FieldProvenance::Derived;
     if(sourceKind.value == SourceKind::Album) {
         AlbumCandidate album;
-        album.id        = id;
-        album.sourceUrl = sourceUrl;
-        album.title     = text(current.value(u"title"));
-        album.artist    = mapper.select(QStringLiteral("album.artist"), text(current.value(u"artist")),
-                                        text(root.value(u"artist")));
+        album.id          = id;
+        album.sourceUrl   = sourceUrl;
+        album.title       = text(current.value(u"title"));
+        album.artist      = mapper.select(QStringLiteral("album.artist"), text(current.value(u"artist")),
+                                          text(root.value(u"artist")));
         album.releaseDate = mapper.select(QStringLiteral("album.releaseDate"), date(current.value(u"release_date")),
                                           date(root.value(u"album_release_date")));
         album.tracks.reserve(info.size());
@@ -738,18 +738,17 @@ ReleaseParseOutcome parseReleasePage(const QByteArray& body, const QUrl& pageUrl
             }
         }
     }
-    page.track    = std::move(matched);
-    page.track.id = id;
-    page.track.title
-        = mapper.select(QStringLiteral("track.title"), text(current.value(u"title")), page.track.title,
-                        FieldProvenance::Explicit);
-    page.track.artist = mapper.select(QStringLiteral("track.artist"), text(current.value(u"artist")),
-                                      page.track.artist, FieldProvenance::Explicit);
+    page.track        = std::move(matched);
+    page.track.id     = id;
+    page.track.title  = mapper.select(QStringLiteral("track.title"), text(current.value(u"title")), page.track.title,
+                                      FieldProvenance::Explicit);
+    page.track.artist = mapper.select(QStringLiteral("track.artist"), text(current.value(u"artist")), page.track.artist,
+                                      FieldProvenance::Explicit);
     page.track.trackNumber
         = mapper.select(QStringLiteral("track.trackNumber"), current.integer(u"track_number", MaxTrackNumber),
                         page.track.trackNumber, FieldProvenance::Explicit);
-    page.track.releaseDate = date(current.value(u"release_date"));
-    page.fallbackArtist    = text(root.value(u"artist"));
+    page.track.releaseDate         = date(current.value(u"release_date"));
+    page.fallbackArtist            = text(root.value(u"artist"));
     page.fallbackArtist.provenance = FieldProvenance::Fallback;
 
     const auto parentId  = current.value(u"album_id");
@@ -812,8 +811,9 @@ BandcampListingParseOutcome parseDiscographyPage(const QByteArray& body, const Q
         listedReferences.insert(key);
         const qsizetype ordinal = batch.references.size();
         batch.references.append({ordinal, id, page});
-        const CorrelationContext itemContext = page.kind == BandcampPageKind::Track ? CorrelationContext{}.withTrack(id)
-                                                                                     : CorrelationContext{}.withAlbum(id);
+        const CorrelationContext itemContext = page.kind == BandcampPageKind::Track
+                                                 ? CorrelationContext{}.withTrack(id)
+                                                 : CorrelationContext{}.withAlbum(id);
         qCDebug(BANDCAMP_TRACE_PARSER).noquote()
             << formatTraceEvent(itemContext, QStringLiteral("listing_reference"),
                                 {DiagnosticField::number(QStringLiteral("ordinal"), ordinal),
@@ -852,12 +852,11 @@ BandcampListingParseOutcome parseDiscographyPage(const QByteArray& body, const Q
         }
         if(const auto* error = std::get_if<Private::HtmlError>(&read)) {
             const bool limited = error->kind == Private::HtmlError::ResourceLimit;
-            return listingFailure(limited ? ResolutionErrorCode::ResourceLimitExceeded
-                                          : ResolutionErrorCode::MalformedPage,
-                                  pageUrl, QStringLiteral("listing.html"),
-                                  limited ? QStringLiteral("HTML nesting, field or record limit exceeded")
-                                          : QStringLiteral("incomplete or ambiguous listing markup at byte %1")
-                                                .arg(error->offset));
+            return listingFailure(
+                limited ? ResolutionErrorCode::ResourceLimitExceeded : ResolutionErrorCode::MalformedPage, pageUrl,
+                QStringLiteral("listing.html"),
+                limited ? QStringLiteral("HTML nesting, field or record limit exceeded")
+                        : QStringLiteral("incomplete or ambiguous listing markup at byte %1").arg(error->offset));
         }
         if(std::holds_alternative<Private::HtmlEnd>(read)) {
             if(rowDepth) {
@@ -880,7 +879,7 @@ BandcampListingParseOutcome parseDiscographyPage(const QByteArray& body, const Q
             continue;
         }
         const auto& attributes = tag.attributes;
-        const bool isGrid = tag.name == u"ol" && attributes.value(u"id"_s) == u"music-grid";
+        const bool isGrid      = tag.name == u"ol" && attributes.value(u"id"_s) == u"music-grid";
         if(isGrid) {
             if(foundGrid) {
                 return listingFailure(ResolutionErrorCode::MalformedPage, pageUrl, QStringLiteral("listing"),
@@ -899,19 +898,22 @@ BandcampListingParseOutcome parseDiscographyPage(const QByteArray& body, const Q
            && attributes.value(u"rel"_s).simplified().toLower().split(u' ').contains(u"next"_s)) {
             const QString href = attributes.value(u"href"_s);
             if(href.isEmpty()) {
-                return listingFailure(ResolutionErrorCode::MalformedPage, pageUrl, QStringLiteral("listing.continuation"),
+                return listingFailure(ResolutionErrorCode::MalformedPage, pageUrl,
+                                      QStringLiteral("listing.continuation"),
                                       QStringLiteral("next-page link has no location"));
             }
             QUrl next                    = pageUrl.resolved(QUrl(href, QUrl::StrictMode));
             const BandcampPageUrl parsed = parseBandcampPageUrl(next.toString(QUrl::FullyEncoded));
             if(!next.isValid() || next.host().compare(pageUrl.host(), Qt::CaseInsensitive) != 0
                || !next.userInfo().isEmpty() || !parsed.isValid() || parsed.kind != BandcampPageKind::Discography) {
-                return listingFailure(ResolutionErrorCode::MalformedPage, pageUrl, QStringLiteral("listing.continuation"),
+                return listingFailure(ResolutionErrorCode::MalformedPage, pageUrl,
+                                      QStringLiteral("listing.continuation"),
                                       QStringLiteral("next-page link is not a same-site discography"));
             }
             next.setFragment(QString());
             if(batch.continuation && batch.continuation->locator != next) {
-                return listingFailure(ResolutionErrorCode::MalformedPage, pageUrl, QStringLiteral("listing.continuation"),
+                return listingFailure(ResolutionErrorCode::MalformedPage, pageUrl,
+                                      QStringLiteral("listing.continuation"),
                                       QStringLiteral("music listing has conflicting next-page links"));
             }
             batch.continuation = BandcampListingContinuation{std::move(next)};
@@ -924,7 +926,7 @@ BandcampListingParseOutcome parseDiscographyPage(const QByteArray& body, const Q
             rowDepth = tag.depth;
         }
         if(rowDepth && tag.depth > *rowDepth && tag.name == u"a" && attributes.contains(u"href"_s)) {
-            const QUrl target = pageUrl.resolved(QUrl(attributes.value(u"href"_s), QUrl::StrictMode));
+            const QUrl target            = pageUrl.resolved(QUrl(attributes.value(u"href"_s), QUrl::StrictMode));
             const BandcampPageUrl parsed = parseBandcampPageUrl(target.toString(QUrl::FullyEncoded));
             if(!target.isValid() || target.host().compare(pageUrl.host(), Qt::CaseInsensitive) != 0
                || !target.userInfo().isEmpty() || !parsed.isValid() || parsed.kind != rowKind) {

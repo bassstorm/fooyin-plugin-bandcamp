@@ -34,8 +34,8 @@ BandcampSettings loadBandcampSettings(const QSettings& settings)
 {
     BandcampSettings values;
     values.parallelism = readClamped(settings, ParallelismKey, DefaultParallelism, MinParallelism, MaxParallelism);
-    values.attemptTimeoutMs = readClamped(settings, AttemptTimeoutKey, DefaultAttemptTimeoutMs, MinAttemptTimeoutMs,
-                                          MaxAttemptTimeoutMs);
+    values.attemptTimeoutMs
+        = readClamped(settings, AttemptTimeoutKey, DefaultAttemptTimeoutMs, MinAttemptTimeoutMs, MaxAttemptTimeoutMs);
     values.discographyOrder = static_cast<BandcampDiscographyOrder>(readClamped(
         settings, DiscographyOrderKey, static_cast<int>(BandcampDiscographyOrder::Default),
         static_cast<int>(BandcampDiscographyOrder::Default), static_cast<int>(BandcampDiscographyOrder::Descending)));
@@ -44,9 +44,8 @@ BandcampSettings loadBandcampSettings(const QSettings& settings)
                       MaxRefreshWindowMinutes);
     values.maxAttempts
         = readClamped(settings, MaxAttemptsKey, DefaultAttemptsPerPage, MinAttemptsPerPage, MaxAttemptsPerPage);
-    values.attemptCooldownMs
-        = readClamped(settings, AttemptCooldownKey, DefaultAttemptCooldownMs, MinAttemptCooldownMs,
-                      MaxAttemptCooldownMs);
+    values.attemptCooldownMs = readClamped(settings, AttemptCooldownKey, DefaultAttemptCooldownMs, MinAttemptCooldownMs,
+                                           MaxAttemptCooldownMs);
     return values;
 }
 

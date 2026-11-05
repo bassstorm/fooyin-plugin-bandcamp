@@ -61,10 +61,9 @@ void cancelPhysicalWrite(const std::function<void()>& cancelWrite)
 
 Fooyin::Track mergeTransport(Fooyin::Track target, const Fooyin::Track& incoming)
 {
-    for(const QString& property : {QString::fromLatin1(StreamProviderProperty),
-                                   QString::fromLatin1(BandcampSourceUrlProperty),
-                                   QString::fromLatin1(BandcampStreamUrlProperty),
-                                   QString::fromLatin1(BandcampExpiresAtProperty)}) {
+    for(const QString& property :
+        {QString::fromLatin1(StreamProviderProperty), QString::fromLatin1(BandcampSourceUrlProperty),
+         QString::fromLatin1(BandcampStreamUrlProperty), QString::fromLatin1(BandcampExpiresAtProperty)}) {
         target.setExtraProperty(property, trackProperty(incoming, property));
     }
     return target;
@@ -73,10 +72,9 @@ Fooyin::Track mergeTransport(Fooyin::Track target, const Fooyin::Track& incoming
 QStringList changedTransportProperties(const Fooyin::Track& previous, const Fooyin::Track& updated)
 {
     QStringList changed;
-    for(const QString& property : {QString::fromLatin1(StreamProviderProperty),
-                                   QString::fromLatin1(BandcampSourceUrlProperty),
-                                   QString::fromLatin1(BandcampStreamUrlProperty),
-                                   QString::fromLatin1(BandcampExpiresAtProperty)}) {
+    for(const QString& property :
+        {QString::fromLatin1(StreamProviderProperty), QString::fromLatin1(BandcampSourceUrlProperty),
+         QString::fromLatin1(BandcampStreamUrlProperty), QString::fromLatin1(BandcampExpiresAtProperty)}) {
         if(trackProperty(previous, property) != trackProperty(updated, property)) {
             changed.append(property);
         }
@@ -89,7 +87,7 @@ QStringList changedTransportProperties(const Fooyin::Track& previous, const Fooy
 FooyinLibraryApi fooyinLibraryApi(Fooyin::MusicLibrary* library, Fooyin::PlaylistHandler* playlists)
 {
     FooyinLibraryApi api;
-    api.owner = library;
+    api.owner         = library;
     api.playlistOwner = playlists;
     const QPointer<Fooyin::PlaylistHandler> guardedPlaylists{playlists};
     api.playlistTracks = [guardedPlaylists]() -> Fooyin::TrackList {
@@ -152,7 +150,8 @@ void BandcampLibraryGateway::cancel()
         if(request.refreshOnly && request.callbackContext) {
             deliver(request.callbackContext, std::move(request.completion),
                     failure(FooyinTrackCommitErrorCode::Cancelled, 0,
-                            QStringLiteral("The queued transport update was withdrawn.")), request.correlation);
+                            QStringLiteral("The queued transport update was withdrawn.")),
+                    request.correlation);
         }
     }
     if(!m_active) {
@@ -181,14 +180,13 @@ void BandcampLibraryGateway::commit(QList<BandcampResolvedTrack> incoming, QObje
 }
 
 void BandcampLibraryGateway::refreshTransport(BandcampResolvedTrack incoming, QObject* callbackContext,
-                                             CorrelationContext correlation, Completion completion, int timeoutMs)
+                                              CorrelationContext correlation, Completion completion, int timeoutMs)
 {
     enqueue({std::move(incoming)}, timeoutMs, callbackContext, std::move(correlation), std::move(completion), true);
 }
 
-void BandcampLibraryGateway::enqueue(QList<BandcampResolvedTrack> incoming, int timeoutMs,
-                                     QObject* callbackContext, CorrelationContext correlation,
-                                     Completion completion, bool refreshOnly)
+void BandcampLibraryGateway::enqueue(QList<BandcampResolvedTrack> incoming, int timeoutMs, QObject* callbackContext,
+                                     CorrelationContext correlation, Completion completion, bool refreshOnly)
 {
     if(!callbackContext || !completion) {
         return;
@@ -224,17 +222,16 @@ void BandcampLibraryGateway::enqueue(QList<BandcampResolvedTrack> incoming, int 
         return;
     }
 
-    CommitRequest request{m_nextToken++, std::move(incoming), timeoutMs,
-                          callbackContext, std::move(correlation), std::move(completion), {}, refreshOnly};
+    CommitRequest request{m_nextToken++,          std::move(incoming),   timeoutMs, callbackContext,
+                          std::move(correlation), std::move(completion), {},        refreshOnly};
     const quint64 token = request.token;
-    request.receiverDestroyed = QObject::connect(callbackContext, &QObject::destroyed, this,
-                                                 [this, token]() { withdraw(token); });
+    request.receiverDestroyed
+        = QObject::connect(callbackContext, &QObject::destroyed, this, [this, token]() { withdraw(token); });
     if(m_active || !m_pending.isEmpty() || m_nextScheduled) {
         if(BANDCAMP_TRACE_TRACKS().isDebugEnabled()) {
-            qCDebug(BANDCAMP_TRACE_TRACKS).noquote()
-                << formatTraceEvent(request.correlation, QStringLiteral("track_commit_queued"),
-                                    {DiagnosticField::number(QStringLiteral("occurrences"),
-                                                             static_cast<qint64>(request.incoming.size()))});
+            qCDebug(BANDCAMP_TRACE_TRACKS).noquote() << formatTraceEvent(
+                request.correlation, QStringLiteral("track_commit_queued"),
+                {DiagnosticField::number(QStringLiteral("occurrences"), static_cast<qint64>(request.incoming.size()))});
         }
     }
     m_pending.enqueue(std::move(request));
@@ -279,8 +276,8 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
     }
     m_active->deadline.start();
     QTimer::singleShot(request.timeoutMs, this, [this, token]() { onTimeout(token); });
-    if(!m_api.owner || !m_api.playlistOwner || !m_api.tracks || !m_api.playlistTracks
-       || !m_api.metadataStore || !m_api.writeTrackMetadata) {
+    if(!m_api.owner || !m_api.playlistOwner || !m_api.tracks || !m_api.playlistTracks || !m_api.metadataStore
+       || !m_api.writeTrackMetadata) {
         failActive(failure(FooyinTrackCommitErrorCode::LibraryUnavailable, 0,
                            QStringLiteral("The public library or playlist interface is unavailable.")));
         return;
@@ -294,10 +291,10 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
     Fooyin::TrackList playlistSnapshot;
     std::shared_ptr<Fooyin::TrackMetadataStore> metadataStore;
     const QPointer<BandcampLibraryGateway> guard{this};
-    const auto readLibrary = m_api.tracks;
-    const auto readPlaylists = m_api.playlistTracks;
+    const auto readLibrary       = m_api.tracks;
+    const auto readPlaylists     = m_api.playlistTracks;
     const auto readMetadataStore = m_api.metadataStore;
-    librarySnapshot  = readLibrary();
+    librarySnapshot              = readLibrary();
     if(!guard || !m_active || m_active->request.token != token) {
         return;
     }
@@ -305,7 +302,7 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
     if(!guard || !m_active || m_active->request.token != token) {
         return;
     }
-    metadataStore    = readMetadataStore();
+    metadataStore = readMetadataStore();
     if(!guard || !m_active || m_active->request.token != token) {
         return;
     }
@@ -362,7 +359,7 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
             return;
         }
         const Fooyin::Track previous = resident == residentsByTrackId.cend() ? incoming : resident.value();
-        Fooyin::Track updated = mergeTransport(previous, incoming);
+        Fooyin::Track updated        = mergeTransport(previous, incoming);
         if(previous.id() <= 0) {
             if(updated.hash().isEmpty()) {
                 updated.generateHash();
@@ -371,8 +368,7 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
         }
 
         if(resident != residentsByTrackId.cend() && previous.id() > 0
-           && !changedTransportProperties(previous, updated).isEmpty()
-           && !writeTargetIds.contains(previous.id())) {
+           && !changedTransportProperties(previous, updated).isEmpty() && !writeTargetIds.contains(previous.id())) {
             writeTargetIds.insert(previous.id());
             m_active->writeTargets.push_back(updated);
         }
@@ -392,33 +388,30 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
     }
 
     if(BANDCAMP_TRACE_TRACKS().isDebugEnabled()) {
-        qCDebug(BANDCAMP_TRACE_TRACKS).noquote()
-            << formatTraceEvent(request.correlation, QStringLiteral("track_commit_started"),
-                                {DiagnosticField::number(QStringLiteral("occurrences"),
-                                                         static_cast<qint64>(request.incoming.size())),
-                                 DiagnosticField::number(QStringLiteral("write_targets"),
-                                                         static_cast<qint64>(m_active->writeTargets.size()))});
+        qCDebug(BANDCAMP_TRACE_TRACKS).noquote() << formatTraceEvent(
+            request.correlation, QStringLiteral("track_commit_started"),
+            {DiagnosticField::number(QStringLiteral("occurrences"), static_cast<qint64>(request.incoming.size())),
+             DiagnosticField::number(QStringLiteral("write_targets"),
+                                     static_cast<qint64>(m_active->writeTargets.size()))});
     }
 
     if(m_active->writeTargets.empty()) {
         FooyinTrackCommitSuccess result{std::move(m_active->output), 0, m_active->newIdentityCount};
-        qCDebug(BANDCAMP_TRACKS).noquote()
-            << formatTraceEvent(request.correlation, QStringLiteral("track_commit_completed"),
-                                {DiagnosticField::number(QStringLiteral("occurrences"),
-                                                         static_cast<qint64>(result.tracks.size())),
-                                 DiagnosticField::number(QStringLiteral("updated_residents"), 0),
-                                 DiagnosticField::number(QStringLiteral("new_idless"),
-                                                         static_cast<qint64>(result.newIdentityCount))});
+        qCDebug(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+            request.correlation, QStringLiteral("track_commit_completed"),
+            {DiagnosticField::number(QStringLiteral("occurrences"), static_cast<qint64>(result.tracks.size())),
+             DiagnosticField::number(QStringLiteral("updated_residents"), 0),
+             DiagnosticField::number(QStringLiteral("new_idless"), static_cast<qint64>(result.newIdentityCount))});
         finishActive(std::move(result));
         return;
     }
 
     Fooyin::WriteRequest writeRequest;
     const auto writeTrackMetadata = m_api.writeTrackMetadata;
-    const auto writeTargets = m_active->writeTargets;
-    const auto writeContext = request.correlation;
-    m_active->enteringWrite = true;
-    writeRequest = writeTrackMetadata(writeTargets);
+    const auto writeTargets       = m_active->writeTargets;
+    const auto writeContext       = request.correlation;
+    m_active->enteringWrite       = true;
+    writeRequest                  = writeTrackMetadata(writeTargets);
     if(!guard || !m_active || m_active->request.token != token) {
         cancelPhysicalWrite(writeRequest.cancel);
         return;
@@ -431,8 +424,8 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
     }
 
     m_active->cancelWrite = std::move(writeRequest.cancel);
-    auto* watcher = new QFutureWatcher<Fooyin::WriteResult>(this);
-    m_active->watcher = watcher;
+    auto* watcher         = new QFutureWatcher<Fooyin::WriteResult>(this);
+    m_active->watcher     = watcher;
     QObject::connect(watcher, &QFutureWatcher<Fooyin::WriteResult>::finished, this,
                      [this, token]() { onWriteFinished(token); });
     watcher->setFuture(writeRequest.finished);
@@ -443,10 +436,9 @@ void BandcampLibraryGateway::start(const CommitRequest& request)
         }
     }
     if(BANDCAMP_TRACE_TRACKS().isDebugEnabled()) {
-        qCDebug(BANDCAMP_TRACE_TRACKS).noquote()
-            << formatTraceEvent(writeContext, QStringLiteral("track_write_started"),
-                                {DiagnosticField::number(QStringLiteral("targets"),
-                                                         static_cast<qint64>(m_active->writeTargets.size()))});
+        qCDebug(BANDCAMP_TRACE_TRACKS).noquote() << formatTraceEvent(
+            writeContext, QStringLiteral("track_write_started"),
+            {DiagnosticField::number(QStringLiteral("targets"), static_cast<qint64>(m_active->writeTargets.size()))});
     }
     if(m_active->deadline.elapsed() >= m_active->request.timeoutMs) {
         onTimeout(token);
@@ -479,8 +471,8 @@ void BandcampLibraryGateway::onWriteFinished(quint64 token)
     const QFuture<Fooyin::WriteResult> future = m_active->watcher->future();
     if(future.isCanceled()) {
         failActive(failure(m_active->withdrawn ? FooyinTrackCommitErrorCode::Cancelled
-                                              : FooyinTrackCommitErrorCode::PersistenceFailed, 0,
-                           QStringLiteral("The library write was cancelled.")));
+                                               : FooyinTrackCommitErrorCode::PersistenceFailed,
+                           0, QStringLiteral("The library write was cancelled.")));
         return;
     }
     const Fooyin::WriteResult result = future.result();
@@ -488,8 +480,8 @@ void BandcampLibraryGateway::onWriteFinished(quint64 token)
     if(result.state != Fooyin::WriteState::Completed || result.failed > 0 || result.succeeded <= 0) {
         failActive(failure(m_active->withdrawn && result.state == Fooyin::WriteState::Cancelled
                                ? FooyinTrackCommitErrorCode::Cancelled
-                               : FooyinTrackCommitErrorCode::PersistenceFailed, 0,
-                           QStringLiteral("The library did not complete every requested track write.")));
+                               : FooyinTrackCommitErrorCode::PersistenceFailed,
+                           0, QStringLiteral("The library did not complete every requested track write.")));
         return;
     }
 
@@ -499,13 +491,11 @@ void BandcampLibraryGateway::onWriteFinished(quint64 token)
             << formatTraceEvent(m_active->request.correlation, QStringLiteral("track_write_completed"),
                                 {DiagnosticField::number(QStringLiteral("targets"), expected)});
     }
-    qCDebug(BANDCAMP_TRACKS).noquote()
-        << formatTraceEvent(m_active->request.correlation, QStringLiteral("track_commit_completed"),
-                            {DiagnosticField::number(QStringLiteral("occurrences"),
-                                                     static_cast<qint64>(success.tracks.size())),
-                             DiagnosticField::number(QStringLiteral("updated_residents"), expected),
-                             DiagnosticField::number(QStringLiteral("new_idless"),
-                                                     static_cast<qint64>(success.newIdentityCount))});
+    qCDebug(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+        m_active->request.correlation, QStringLiteral("track_commit_completed"),
+        {DiagnosticField::number(QStringLiteral("occurrences"), static_cast<qint64>(success.tracks.size())),
+         DiagnosticField::number(QStringLiteral("updated_residents"), expected),
+         DiagnosticField::number(QStringLiteral("new_idless"), static_cast<qint64>(success.newIdentityCount))});
     finishActive(std::move(success));
 }
 
@@ -583,7 +573,8 @@ void BandcampLibraryGateway::finishActive(FooyinTrackCommitOutcome outcome)
     if(const auto* error = std::get_if<FooyinTrackCommitFailure>(&outcome)) {
         logFailure(active.request.correlation, *error);
     }
-    if(!active.callbackDelivered && (!active.withdrawn || active.request.refreshOnly) && active.request.callbackContext) {
+    if(!active.callbackDelivered && (!active.withdrawn || active.request.refreshOnly)
+       && active.request.callbackContext) {
         deliver(active.request.callbackContext, std::move(active.request.completion), std::move(outcome),
                 active.request.correlation);
     }
@@ -622,7 +613,8 @@ void BandcampLibraryGateway::deliver(QObject* context, Completion completion, Fo
     }
 
     const bool queued = QMetaObject::invokeMethod(
-        receiver, [receiver, completion = std::move(completion), outcome = std::move(outcome)]() mutable {
+        receiver,
+        [receiver, completion = std::move(completion), outcome = std::move(outcome)]() mutable {
             if(!receiver) {
                 return;
             }
@@ -646,32 +638,28 @@ void BandcampLibraryGateway::traceTransportChange(const CorrelationContext& cont
         return;
     }
 
-    qCDebug(BANDCAMP_TRACE_TRACKS).noquote()
-        << formatTraceEvent(context, QStringLiteral("transport_updated"),
-                            {DiagnosticField::text(QStringLiteral("properties"), changed.join(u","_s)),
-                             DiagnosticField::text(QStringLiteral("reason"),
-                                                   QStringLiteral("transport-only resident snapshot merge")),
-                             DiagnosticField::url(QStringLiteral("old_source_url"),
-                                                  QUrl{trackProperty(previous, BandcampSourceUrlProperty)}),
-                             DiagnosticField::url(QStringLiteral("new_source_url"),
-                                                  QUrl{trackProperty(updated, BandcampSourceUrlProperty)}),
-                             DiagnosticField::url(QStringLiteral("old_stream_locator"),
-                                                  QUrl{trackProperty(previous, BandcampStreamUrlProperty)}),
-                             DiagnosticField::url(QStringLiteral("new_stream_locator"),
-                                                  QUrl{trackProperty(updated, BandcampStreamUrlProperty)}),
-                             DiagnosticField::text(QStringLiteral("old_expiry_ms"),
-                                                   trackProperty(previous, BandcampExpiresAtProperty)),
-                             DiagnosticField::text(QStringLiteral("new_expiry_ms"),
-                                                   trackProperty(updated, BandcampExpiresAtProperty))});
+    qCDebug(BANDCAMP_TRACE_TRACKS).noquote() << formatTraceEvent(
+        context, QStringLiteral("transport_updated"),
+        {DiagnosticField::text(QStringLiteral("properties"), changed.join(u","_s)),
+         DiagnosticField::text(QStringLiteral("reason"), QStringLiteral("transport-only resident snapshot merge")),
+         DiagnosticField::url(QStringLiteral("old_source_url"),
+                              QUrl{trackProperty(previous, BandcampSourceUrlProperty)}),
+         DiagnosticField::url(QStringLiteral("new_source_url"),
+                              QUrl{trackProperty(updated, BandcampSourceUrlProperty)}),
+         DiagnosticField::url(QStringLiteral("old_stream_locator"),
+                              QUrl{trackProperty(previous, BandcampStreamUrlProperty)}),
+         DiagnosticField::url(QStringLiteral("new_stream_locator"),
+                              QUrl{trackProperty(updated, BandcampStreamUrlProperty)}),
+         DiagnosticField::text(QStringLiteral("old_expiry_ms"), trackProperty(previous, BandcampExpiresAtProperty)),
+         DiagnosticField::text(QStringLiteral("new_expiry_ms"), trackProperty(updated, BandcampExpiresAtProperty))});
 }
 
-void BandcampLibraryGateway::logFailure(const CorrelationContext& context,
-                                        const FooyinTrackCommitFailure& error) const
+void BandcampLibraryGateway::logFailure(const CorrelationContext& context, const FooyinTrackCommitFailure& error) const
 {
     const CorrelationContext failureContext = error.trackId > 0 ? context.withTrack(error.trackId) : context;
-    qCWarning(BANDCAMP_TRACKS).noquote()
-        << formatTraceEvent(failureContext, QStringLiteral("track_commit_failed"),
-                            {DiagnosticField::text(QStringLiteral("code"), errorCodeName(error.code)),
-                             DiagnosticField::text(QStringLiteral("reason"), error.reason)});
+    qCWarning(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+        failureContext, QStringLiteral("track_commit_failed"),
+        {DiagnosticField::text(QStringLiteral("code"), errorCodeName(error.code)),
+         DiagnosticField::text(QStringLiteral("reason"), error.reason)});
 }
 } // namespace Fooyin::Bandcamp

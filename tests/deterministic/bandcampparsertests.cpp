@@ -105,9 +105,9 @@ void ParserTests::cleanup()
 
 void ParserTests::kindAndIdentityAliases()
 {
-    const auto result = parseReleasePage(
-        tralbumPage(R"({"item_type":"a","id":3493169048,"url":"not an identity","trackinfo":[]})"),
-        QUrl{u"https://artist.bandcamp.com/album/viewed?from=test#part"_s});
+    const auto result
+        = parseReleasePage(tralbumPage(R"({"item_type":"a","id":3493169048,"url":"not an identity","trackinfo":[]})"),
+                           QUrl{u"https://artist.bandcamp.com/album/viewed?from=test#part"_s});
     const auto* album = value<AlbumCandidate>(result);
     QVERIFY(album);
     QCOMPARE(album->id.value, qint64{3493169048});
@@ -115,8 +115,8 @@ void ParserTests::kindAndIdentityAliases()
     QCOMPARE(album->sourceUrl.value.toString(), u"https://artist.bandcamp.com/album/viewed"_s);
     QCOMPARE(album->title.state, FieldState::Missing);
 
-    const auto equal = parse(
-        R"({"current":{"type":"album","id":3493169048},"item_type":"a","id":3493169048,"trackinfo":[]})");
+    const auto equal
+        = parse(R"({"current":{"type":"album","id":3493169048},"item_type":"a","id":3493169048,"trackinfo":[]})");
     QVERIFY(value<AlbumCandidate>(equal));
     QCOMPARE(value<AlbumCandidate>(equal)->id.value, qint64{3493169048});
 
@@ -302,8 +302,8 @@ void ParserTests::parentEvidence_data()
         << ParentDeclaration::AlbumBacked << FieldState::Invalid;
     QTest::newRow("bad-id") << QByteArray(",\"album_id\":false") << QByteArray() << ParentDeclaration::Invalid
                             << FieldState::Missing;
-    QTest::newRow("fractional-id") << QByteArray(",\"album_id\":1.5") << QByteArray()
-                                   << ParentDeclaration::Invalid << FieldState::Missing;
+    QTest::newRow("fractional-id") << QByteArray(",\"album_id\":1.5") << QByteArray() << ParentDeclaration::Invalid
+                                   << FieldState::Missing;
     QTest::newRow("no-parent-conflicting-location")
         << QByteArray(",\"album_id\":0") << QByteArray(",\"album_url\":\"/album/parent\"")
         << ParentDeclaration::NoParent << FieldState::Usable;
@@ -452,7 +452,8 @@ void ParserTests::diagnosticsAreCorrelatedRedactedAndIndependent()
     const auto result = parseReleasePage(body, PageUrl);
     QVERIFY(value<AlbumCandidate>(result));
     QVERIFY(hasEvent(u"fy.trace.bandcamp.parser"_s, u"album=1 source_snapshot"_s));
-    QVERIFY(hasEvent(u"fy.bandcamp.parser"_s, u"conflict"_s, u"field=album.artist chosen=Own ignored=\"Other \\\"Quoted\\\"\""_s));
+    QVERIFY(hasEvent(u"fy.bandcamp.parser"_s, u"conflict"_s,
+                     u"field=album.artist chosen=Own ignored=\"Other \\\"Quoted\\\"\""_s));
     QVERIFY(hasEvent(u"fy.bandcamp.parser"_s, u"fallback"_s, u"field=album.releaseDate"_s));
     int snapshots = 0;
     for(const auto& log : capturedLogs()) {
@@ -727,20 +728,16 @@ void ParserTests::limitedHtmlReader_data()
     QTest::addColumn<QString>("tags");
     // 0=end, 1=malformed, 2=limit, 3=withdraw after the first tag.
     QTest::addColumn<int>("terminal");
-    QTest::newRow("attributes")
-        << QByteArray("<X A = 'one>two' B=unquoted c=\"&amp;quot;\"disabled></X>")
-        << u"x:0 /x:0"_s << 0;
-    QTest::newRow("ignored-contexts")
-        << QByteArray("<!-- <x> --><![CDATA[<x>]]><SCRIPT/>'<x>'</SCRIPT><style><x></style><textarea><x></textarea>")
-        << u"script:0 /script:0 style:0 /style:0 textarea:0 /textarea:0"_s << 0;
-    QTest::newRow("omitted-rows")
-        << QByteArray("<ol><li><div><a></a><li><a></a></ol>")
-        << u"ol:0 li:1 div:2 a:3 /a:3 li:1 a:2 /a:2 /ol:0"_s << 0;
-    QTest::newRow("svg-reference-leaf") << QByteArray("<svg><use href='#icon'></svg>")
-        << u"svg:0 use:1 /svg:0"_s << 0;
-    QTest::newRow("unrelated-form-list")
-        << QByteArray("<ul><li><form><li></li></form></li></ul>")
-        << u"ul:0 li:1 form:2 li:3 /li:3 /form:2 /li:1 /ul:0"_s << 0;
+    QTest::newRow("attributes") << QByteArray("<X A = 'one>two' B=unquoted c=\"&amp;quot;\"disabled></X>")
+                                << u"x:0 /x:0"_s << 0;
+    QTest::newRow("ignored-contexts") << QByteArray(
+        "<!-- <x> --><![CDATA[<x>]]><SCRIPT/>'<x>'</SCRIPT><style><x></style><textarea><x></textarea>")
+                                      << u"script:0 /script:0 style:0 /style:0 textarea:0 /textarea:0"_s << 0;
+    QTest::newRow("omitted-rows") << QByteArray("<ol><li><div><a></a><li><a></a></ol>")
+                                  << u"ol:0 li:1 div:2 a:3 /a:3 li:1 a:2 /a:2 /ol:0"_s << 0;
+    QTest::newRow("svg-reference-leaf") << QByteArray("<svg><use href='#icon'></svg>") << u"svg:0 use:1 /svg:0"_s << 0;
+    QTest::newRow("unrelated-form-list") << QByteArray("<ul><li><form><li></li></form></li></ul>")
+                                         << u"ul:0 li:1 form:2 li:3 /li:3 /form:2 /li:1 /ul:0"_s << 0;
     QTest::newRow("stray-end") << QByteArray("<div></span></div>") << u"div:0 /span:1 /div:0"_s << 0;
     QTest::newRow("duplicate-attribute") << QByteArray("<x A=one a=two><unknown></unknown>") << QString{} << 1;
     QTest::newRow("truncated-quote") << QByteArray("<x a='one>") << QString{} << 1;
@@ -749,17 +746,14 @@ void ParserTests::limitedHtmlReader_data()
     QTest::newRow("truncated-list") << QByteArray("<ol><li><a></a>") << u"ol:0 li:1 a:2 /a:2"_s << 1;
     QTest::newRow("field-boundary") << QByteArray("<x a='") + QByteArray(32, 'x') + "'></x>" << u"x:0 /x:0"_s << 0;
     QTest::newRow("field-overflow") << QByteArray("<x a='") + QByteArray(33, 'x') + "'></x>" << QString{} << 2;
-    QTest::newRow("opaque-and-client")
-        << QByteArray("<x data-blob='") + QByteArray(33, 'x') + "' data-client-items='" + QByteArray(33, 'x') + "'></x>"
-        << u"x:0 /x:0"_s << 0;
+    QTest::newRow("opaque-and-client") << QByteArray("<x data-blob='") + QByteArray(33, 'x') + "' data-client-items='"
+                                              + QByteArray(33, 'x') + "'></x>"
+                                       << u"x:0 /x:0"_s << 0;
     QTest::newRow("depth-boundary") << QByteArray("<x><x><x><x><x></x></x></x></x></x>")
-        << u"x:0 x:1 x:2 x:3 x:4 /x:4 /x:3 /x:2 /x:1 /x:0"_s << 0;
-    QTest::newRow("depth-overflow") << QByteArray("<x><x><x><x><x><br>")
-        << u"x:0 x:1 x:2 x:3 x:4"_s << 2;
-    QTest::newRow("record-boundary") << QByteArray("<br>").repeated(32)
-        << QStringList(32, u"br:0"_s).join(u' ') << 0;
-    QTest::newRow("record-overflow") << QByteArray("<br>").repeated(33)
-        << QStringList(32, u"br:0"_s).join(u' ') << 2;
+                                    << u"x:0 x:1 x:2 x:3 x:4 /x:4 /x:3 /x:2 /x:1 /x:0"_s << 0;
+    QTest::newRow("depth-overflow") << QByteArray("<x><x><x><x><x><br>") << u"x:0 x:1 x:2 x:3 x:4"_s << 2;
+    QTest::newRow("record-boundary") << QByteArray("<br>").repeated(32) << QStringList(32, u"br:0"_s).join(u' ') << 0;
+    QTest::newRow("record-overflow") << QByteArray("<br>").repeated(33) << QStringList(32, u"br:0"_s).join(u' ') << 2;
     QTest::newRow("cancelled") << QByteArray("<script>ignored</script>") << u"script:0"_s << 3;
     QTest::newRow("unfinished-utf8") << QByteArray("<x></x>\xc3") << QString{} << 1;
 }
@@ -774,7 +768,7 @@ void ParserTests::limitedHtmlReader()
     QStringList observed;
     Private::HtmlRead read;
     while(true) {
-        read = reader.next();
+        read            = reader.next();
         const auto* tag = std::get_if<Private::HtmlTag>(&read);
         if(!tag) {
             break;

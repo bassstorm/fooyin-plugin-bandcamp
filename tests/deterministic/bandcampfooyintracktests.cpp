@@ -1,6 +1,6 @@
 #include "bandcampfooyintrack.h"
-#include "bandcamplibrarygateway.h"
 #include "bandcampimportcontroller.h"
+#include "bandcamplibrarygateway.h"
 #include "bandcamplogcapture.h"
 #include "bandcamplogging.h"
 #include "bandcamptrackuri.h"
@@ -92,9 +92,11 @@ class LibraryBoundary
 public:
     LibraryBoundary()
     {
-        api.owner = owner.get();
-        api.playlistOwner = owner.get();
-        api.playlistTracks = []() { return Fooyin::TrackList{}; };
+        api.owner          = owner.get();
+        api.playlistOwner  = owner.get();
+        api.playlistTracks = []() {
+            return Fooyin::TrackList{};
+        };
         api.tracks = [this]() {
             ++snapshotCalls;
             if(snapshotDelayMs > 0) {
@@ -105,7 +107,9 @@ public:
             }
             return residents;
         };
-        api.metadataStore = [this]() -> std::shared_ptr<Fooyin::TrackMetadataStore> { return store; };
+        api.metadataStore = [this]() -> std::shared_ptr<Fooyin::TrackMetadataStore> {
+            return store;
+        };
         api.writeTrackMetadata = [this](const Fooyin::TrackList& tracks) {
             ++writeCalls;
             writeInputs.push_back(tracks);
@@ -158,8 +162,10 @@ struct PlaylistBoundary
 {
     PlaylistBoundary()
     {
-        api.owner = owner.get();
-        api.ownersAvailable = [this]() { return owner != nullptr; };
+        api.owner           = owner.get();
+        api.ownersAvailable = [this]() {
+            return owner != nullptr;
+        };
         api.inspect = [this](const Fooyin::UId& id) {
             inspected.append(id);
             if(!owner) {
@@ -198,7 +204,7 @@ struct PlaylistBoundary
 
     void supplyResidents(FooyinLibraryApi& libraryApi)
     {
-        libraryApi.playlistOwner = owner.get();
+        libraryApi.playlistOwner  = owner.get();
         libraryApi.playlistTracks = [this]() {
             ++snapshotCalls;
             Fooyin::TrackList snapshot;
@@ -228,11 +234,11 @@ BandcampResolvedTrack importTrack(qint64 id, const QString& title, const QString
                                   std::optional<BandcampAlbumMetadata> album = std::nullopt)
 {
     BandcampTrack track;
-    track.id = id;
-    track.title = title;
-    track.artist = u"Recording artist"_s;
-    track.sourceUrl = sourceUrl;
-    track.streamUrl = u"https://t4.bcbits.com/stream/0123456789abcdef0123456789abcdef?token=secret&ts=1793621993"_s;
+    track.id          = id;
+    track.title       = title;
+    track.artist      = u"Recording artist"_s;
+    track.sourceUrl   = sourceUrl;
+    track.streamUrl   = u"https://t4.bcbits.com/stream/0123456789abcdef0123456789abcdef?token=secret&ts=1793621993"_s;
     track.trackNumber = 1;
     return {std::move(track), std::move(album)};
 }
@@ -240,10 +246,10 @@ BandcampResolvedTrack importTrack(qint64 id, const QString& title, const QString
 BandcampAlbumMetadata importAlbumMetadata()
 {
     BandcampAlbumMetadata metadata;
-    metadata.id = 70;
-    metadata.title = u"Admitted album"_s;
-    metadata.artist = u"Album artist"_s;
-    metadata.sourceUrl = AlbumSource;
+    metadata.id         = 70;
+    metadata.title      = u"Admitted album"_s;
+    metadata.artist     = u"Album artist"_s;
+    metadata.sourceUrl  = AlbumSource;
     metadata.trackTotal = 2;
     return metadata;
 }
@@ -254,7 +260,9 @@ BandcampScopeResult successfulAlbumScope(BandcampOperationId operationId, qsizet
     album.metadata = importAlbumMetadata();
     album.tracks.append(importTrack(71, u"First track"_s, AlbumSource).track);
     album.tracks.append(importTrack(72, u"Second track"_s, AlbumSource).track);
-    return {operationId, ordinal, {BandcampPageKind::Album, AlbumSource, {}},
+    return {operationId,
+            ordinal,
+            {BandcampPageKind::Album, AlbumSource, {}},
             ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(album)}}};
 }
 
@@ -266,14 +274,18 @@ BandcampScopeResult successfulTrackScope(BandcampOperationId operationId, bool a
         album = importAlbumMetadata();
     }
     const QString sourceUrl = albumMember ? AlbumSource : TrackSource;
-    return {operationId, ordinal, {BandcampPageKind::Track, TrackSource, {}},
+    return {operationId,
+            ordinal,
+            {BandcampPageKind::Track, TrackSource, {}},
             ResolutionSuccess<BandcampResolvedData>{
                 BandcampResolvedData{importTrack(73, u"Standalone title"_s, sourceUrl, std::move(album))}}};
 }
 
 BandcampScopeResult failedScope(BandcampOperationId operationId, qsizetype ordinal = 0)
 {
-    return {operationId, ordinal, {BandcampPageKind::Album, AlbumSource, {}},
+    return {operationId,
+            ordinal,
+            {BandcampPageKind::Album, AlbumSource, {}},
             ResolutionFailure{ResolutionError{ResolutionErrorCode::FetchFailed, ResolutionStage::Acquire,
                                               QUrl{AlbumSource}, 0, u"page"_s, u"fetch failed"_s}}};
 }
@@ -283,7 +295,7 @@ void connectImportCompletion(BandcampImportController& controller, bool& finishe
     QObject::connect(&controller, &BandcampImportController::finished, &controller,
                      [&finished, &summary](const BandcampImportSummary& value) {
                          finished = true;
-                         summary = value;
+                         summary  = value;
                      });
 }
 
@@ -338,7 +350,7 @@ void FooyinTrackTests::canonicalTrackUriRoundTrips()
     QCOMPARE(parseBandcampTrackUri(u"bandcamp://track/1"_s), std::optional<qint64>{1});
 
     constexpr qint64 MaxId = std::numeric_limits<qint64>::max();
-    const QString maxUri = u"bandcamp://track/9223372036854775807"_s;
+    const QString maxUri   = u"bandcamp://track/9223372036854775807"_s;
     QCOMPARE(bandcampTrackUri(MaxId), maxUri);
     QCOMPARE(parseBandcampTrackUri(maxUri), std::optional<qint64>{MaxId});
     QVERIFY(bandcampTrackUri(0).isEmpty());
@@ -399,11 +411,11 @@ void FooyinTrackTests::projectsTrustedAlbumMetadataWithoutInference()
     QCOMPARE(properties.value(BandcampStreamUrlProperty), SignedStream);
     QCOMPARE(properties.value(BandcampExpiresAtProperty), u"1793621993000"_s);
 
-    auto otherScope = memberTrack();
+    auto otherScope        = memberTrack();
     otherScope.track.title = u"Other selection title"_s;
     QCOMPARE(project(otherScope).filepath(), track.filepath());
 
-    auto missingTrackDate = memberTrack();
+    auto missingTrackDate              = memberTrack();
     missingTrackDate.track.releaseDate = {};
     QVERIFY(project(missingTrackDate).date().isEmpty());
 }
@@ -433,12 +445,9 @@ void FooyinTrackTests::parsesOnlyObservedBandcampExpiryForm()
     QCOMPARE(bandcampStreamExpiryMs(SignedStream), std::optional<qint64>{1793621993000LL});
     QVERIFY(!bandcampStreamExpiryMs(u"https://cdn.example.com/audio.mp3?ts=1793621993"_s));
     QVERIFY(!bandcampStreamExpiryMs(u"https://t4.bcbits.com/audio/abc?ts=1793621993"_s));
-    QVERIFY(!bandcampStreamExpiryMs(
-        u"https://t4.bcbits.com/stream/abc?ts=not-a-number"_s));
-    QVERIFY(!bandcampStreamExpiryMs(
-        u"https://t4.bcbits.com/stream/abc?ts=1793621993&ts=1793622993"_s));
-    QVERIFY(!bandcampStreamExpiryMs(
-        u"https://t4.bcbits.com/stream/abc?ts=9223372036854776"_s));
+    QVERIFY(!bandcampStreamExpiryMs(u"https://t4.bcbits.com/stream/abc?ts=not-a-number"_s));
+    QVERIFY(!bandcampStreamExpiryMs(u"https://t4.bcbits.com/stream/abc?ts=1793621993&ts=1793622993"_s));
+    QVERIFY(!bandcampStreamExpiryMs(u"https://t4.bcbits.com/stream/abc?ts=9223372036854776"_s));
 }
 
 void FooyinTrackTests::preservesLargeRepeatedInputOccurrences()
@@ -496,10 +505,13 @@ void FooyinTrackTests::mergesOnlyTransportAndPreservesResidentMetadata()
     FooyinTrackCommitOutcome outcome;
     CorrelationContext correlation;
     correlation.albumId = 9;
-    submit(gateway, std::move(incoming), &receiver, [&](FooyinTrackCommitOutcome result) {
-        outcome   = std::move(result);
-        completed = true;
-    }, 1000, correlation);
+    submit(
+        gateway, std::move(incoming), &receiver,
+        [&](FooyinTrackCommitOutcome result) {
+            outcome   = std::move(result);
+            completed = true;
+        },
+        1000, correlation);
 
     QTRY_COMPARE(library.writeCalls, 1);
     QCOMPARE(library.snapshotCalls, 1);
@@ -555,7 +567,7 @@ void FooyinTrackTests::selectsLibraryThenFirstPlaylistOccurrence()
         laterOccurrence.setTitle(u"Later occurrence"_s);
         Fooyin::Track laterPlaylist = first;
         laterPlaylist.setTitle(u"Later playlist"_s);
-        playlists.residents = {{project(standaloneTrack()), first, laterOccurrence}, {laterPlaylist}};
+        playlists.residents               = {{project(standaloneTrack()), first, laterOccurrence}, {laterPlaylist}};
         const Fooyin::Track authoritative = residentWithUserEdits(700);
         if(libraryPresent) {
             library.residents = {authoritative};
@@ -567,7 +579,7 @@ void FooyinTrackTests::selectsLibraryThenFirstPlaylistOccurrence()
         FooyinTrackCommitOutcome outcome;
         submit(gateway, {memberTrack(), memberTrack(42, OtherSignedStream)}, &receiver,
                [&](FooyinTrackCommitOutcome value) {
-                   outcome = std::move(value);
+                   outcome   = std::move(value);
                    completed = true;
                });
 
@@ -615,10 +627,13 @@ void FooyinTrackTests::rejectsConflictingPersistedTrackIdMirror()
     FooyinTrackCommitOutcome outcome;
     CorrelationContext correlation;
     correlation.albumId = 31;
-    submit(gateway, {memberTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
-        outcome   = std::move(result);
-        completed = true;
-    }, 1000, correlation);
+    submit(
+        gateway, {memberTrack()}, &receiver,
+        [&](FooyinTrackCommitOutcome result) {
+            outcome   = std::move(result);
+            completed = true;
+        },
+        1000, correlation);
 
     QTRY_VERIFY(completed);
     const auto* error = std::get_if<FooyinTrackCommitFailure>(&outcome);
@@ -629,8 +644,7 @@ void FooyinTrackTests::rejectsConflictingPersistedTrackIdMirror()
 
     bool foundFailure = false;
     for(const CapturedLog& message : capturedLogs()) {
-        if(message.category == u"fy.bandcamp.tracks"_s
-           && message.message.contains(u"track_commit_failed"_s)) {
+        if(message.category == u"fy.bandcamp.tracks"_s && message.message.contains(u"track_commit_failed"_s)) {
             foundFailure = true;
             QVERIFY(message.message.startsWith(u"album=31 track=42 "_s));
             QVERIFY(message.message.contains(u"track_commit_failed "_s));
@@ -681,11 +695,10 @@ void FooyinTrackTests::reportsWriteFailuresWithoutMutatingResidents()
     FooyinTrackCommitOutcome second;
 
     auto retryRequest = [&](bool& completed, FooyinTrackCommitOutcome& outcome) {
-        submit(retryGateway, {memberTrack()}, &retryReceiver,
-               [&completed, &outcome](FooyinTrackCommitOutcome result) {
-                   outcome   = std::move(result);
-                   completed = true;
-               });
+        submit(retryGateway, {memberTrack()}, &retryReceiver, [&completed, &outcome](FooyinTrackCommitOutcome result) {
+            outcome   = std::move(result);
+            completed = true;
+        });
     };
     retryRequest(firstDone, first);
     QTRY_COMPARE(retryLibrary.writeCalls, 1);
@@ -731,11 +744,10 @@ void FooyinTrackTests::serializesOnlyWithinOneSubmission()
         first     = std::move(result);
         firstDone = true;
     });
-    submit(gateway, {memberTrack(42, OtherSignedStream)}, &receiver,
-           [&](FooyinTrackCommitOutcome result) {
-               second     = std::move(result);
-               secondDone = true;
-           });
+    submit(gateway, {memberTrack(42, OtherSignedStream)}, &receiver, [&](FooyinTrackCommitOutcome result) {
+        second     = std::move(result);
+        secondDone = true;
+    });
 
     QTRY_COMPARE(library.writeCalls, 1);
     QCOMPARE(library.snapshotCalls, 1);
@@ -775,19 +787,21 @@ void FooyinTrackTests::timeoutDoesNotPoisonQueuedCommit()
     BandcampLibraryGateway gateway{library.api};
     QObject receiver;
 
-    bool timedOut = false;
+    bool timedOut  = false;
     bool completed = false;
     FooyinTrackCommitOutcome timeoutOutcome;
     FooyinTrackCommitOutcome result;
-    submit(gateway, {memberTrack()}, &receiver, [&](FooyinTrackCommitOutcome value) {
-        timeoutOutcome = std::move(value);
-        timedOut = true;
-    }, 5);
-    submit(gateway, {memberTrack(42, OtherSignedStream)}, &receiver,
-           [&](FooyinTrackCommitOutcome value) {
-               result = std::move(value);
-               completed = true;
-           });
+    submit(
+        gateway, {memberTrack()}, &receiver,
+        [&](FooyinTrackCommitOutcome value) {
+            timeoutOutcome = std::move(value);
+            timedOut       = true;
+        },
+        5);
+    submit(gateway, {memberTrack(42, OtherSignedStream)}, &receiver, [&](FooyinTrackCommitOutcome value) {
+        result    = std::move(value);
+        completed = true;
+    });
 
     QTRY_VERIFY(timedOut);
     QVERIFY(std::holds_alternative<FooyinTrackCommitFailure>(timeoutOutcome));
@@ -808,10 +822,13 @@ void FooyinTrackTests::activeDeadlineIncludesSnapshotWork()
 
     bool completed = false;
     FooyinTrackCommitOutcome outcome;
-    submit(gateway, {standaloneTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
-        outcome   = std::move(result);
-        completed = true;
-    }, 1);
+    submit(
+        gateway, {standaloneTrack()}, &receiver,
+        [&](FooyinTrackCommitOutcome result) {
+            outcome   = std::move(result);
+            completed = true;
+        },
+        1);
 
     QTRY_VERIFY(completed);
     const auto* error = std::get_if<FooyinTrackCommitFailure>(&outcome);
@@ -828,7 +845,9 @@ void FooyinTrackTests::guardsCallbacksAndObjectLifetimes()
         library.residents.push_back(residentWithUserEdits(704));
         library.makeWriteAvailable();
         BandcampLibraryGateway gateway{library.api};
-        library.writeHook = [&gateway]() { gateway.cancel(); };
+        library.writeHook = [&gateway]() {
+            gateway.cancel();
+        };
         QObject receiver;
         bool called = false;
         submit(gateway, {memberTrack()}, &receiver, [&called](FooyinTrackCommitOutcome) { called = true; });
@@ -849,7 +868,7 @@ void FooyinTrackTests::guardsCallbacksAndObjectLifetimes()
         FooyinTrackCommitOutcome outcome;
         submit(gateway, {memberTrack()}, &receiver, [&](FooyinTrackCommitOutcome value) {
             outcome = std::move(value);
-            called = true;
+            called  = true;
         });
         playlists.owner.reset();
         QTRY_VERIFY(called);
@@ -865,9 +884,8 @@ void FooyinTrackTests::guardsCallbacksAndObjectLifetimes()
         LibraryBoundary library;
         BandcampLibraryGateway gateway{library.api};
         auto* receiver = new QObject;
-        bool called = false;
-        submit(gateway, {standaloneTrack()}, receiver,
-               [&called](FooyinTrackCommitOutcome) { called = true; });
+        bool called    = false;
+        submit(gateway, {standaloneTrack()}, receiver, [&called](FooyinTrackCommitOutcome) { called = true; });
         delete receiver;
         QTest::qWait(10);
         QVERIFY(!called);
@@ -881,8 +899,7 @@ void FooyinTrackTests::guardsCallbacksAndObjectLifetimes()
         auto* gateway = new BandcampLibraryGateway{library.api};
         QObject receiver;
         bool called = false;
-        submit(*gateway, {memberTrack()}, &receiver,
-               [&called](FooyinTrackCommitOutcome) { called = true; });
+        submit(*gateway, {memberTrack()}, &receiver, [&called](FooyinTrackCommitOutcome) { called = true; });
         QTRY_COMPARE(library.writeCalls, 1);
         delete gateway;
         QCOMPARE(library.cancelCalls, 1);
@@ -899,11 +916,10 @@ void FooyinTrackTests::guardsCallbacksAndObjectLifetimes()
         QObject receiver;
         bool called = false;
         FooyinTrackCommitOutcome outcome;
-        submit(gateway, {memberTrack()}, &receiver,
-               [&called, &outcome](FooyinTrackCommitOutcome result) {
-                   called = true;
-                   outcome = std::move(result);
-               });
+        submit(gateway, {memberTrack()}, &receiver, [&called, &outcome](FooyinTrackCommitOutcome result) {
+            called  = true;
+            outcome = std::move(result);
+        });
         QTRY_COMPARE(library.writeCalls, 1);
         library.owner.reset();
         library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
@@ -943,10 +959,13 @@ void FooyinTrackTests::correlatesAndRedactsEffectiveTransportChanges()
     FooyinTrackCommitOutcome outcome;
     CorrelationContext correlation;
     correlation.albumId = 9;
-    submit(gateway, {memberTrack()}, &receiver, [&](FooyinTrackCommitOutcome result) {
-        outcome = std::move(result);
-        completed = true;
-    }, 1000, correlation);
+    submit(
+        gateway, {memberTrack()}, &receiver,
+        [&](FooyinTrackCommitOutcome result) {
+            outcome   = std::move(result);
+            completed = true;
+        },
+        1000, correlation);
     QTRY_COMPARE(library.writeCalls, 1);
     library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
     QTRY_VERIFY(completed);
@@ -954,8 +973,7 @@ void FooyinTrackTests::correlatesAndRedactsEffectiveTransportChanges()
 
     bool found = false;
     for(const CapturedLog& message : capturedLogs()) {
-        if(message.category == u"fy.trace.bandcamp.tracks"_s
-           && message.message.contains(u"transport_updated"_s)) {
+        if(message.category == u"fy.trace.bandcamp.tracks"_s && message.message.contains(u"transport_updated"_s)) {
             found = true;
             QVERIFY(message.message.startsWith(u"album=9 track=42 transport_updated "_s));
             QVERIFY(!message.message.contains(u"secret-old"_s));
@@ -971,13 +989,8 @@ void FooyinTrackTests::importsIntoCapturedUiPlaylist()
     PlaylistBoundary playlists;
     const Fooyin::UId selectedPlaylist = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
     const Fooyin::UId playbackPlaylist = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
-    BandcampImportController controller{1,
-                                        {{BandcampPageKind::Album, AlbumSource, {}}},
-                                        false,
-                                        selectedPlaylist,
-                                        library.api,
-                                        playlists.api,
-                                        {}};
+    BandcampImportController controller{
+        1, {{BandcampPageKind::Album, AlbumSource, {}}}, false, selectedPlaylist, library.api, playlists.api, {}};
     bool finished = false;
     BandcampImportSummary summary;
     connectImportCompletion(controller, finished, summary);
@@ -1006,13 +1019,8 @@ void FooyinTrackTests::importsPlaylistOnlyResidentMetadata()
     playlists.residents = {{resident}};
     library.makeWriteAvailable();
     const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
-    BandcampImportController controller{1,
-                                        {{BandcampPageKind::Album, AlbumSource, {}}},
-                                        false,
-                                        selected,
-                                        library.api,
-                                        playlists.api,
-                                        {}};
+    BandcampImportController controller{
+        1, {{BandcampPageKind::Album, AlbumSource, {}}}, false, selected, library.api, playlists.api, {}};
     bool finished = false;
     BandcampImportSummary summary;
     connectImportCompletion(controller, finished, summary);
@@ -1049,13 +1057,8 @@ void FooyinTrackTests::createsNewForForcedAndInitiallyUnsuitableDestinations()
         LibraryBoundary library;
         PlaylistBoundary playlists;
         const Fooyin::UId selected = playlists.addPlaylist(state);
-        BandcampImportController controller{2,
-                                            {{BandcampPageKind::Album, AlbumSource, {}}},
-                                            false,
-                                            selected,
-                                            library.api,
-                                            playlists.api,
-                                            {}};
+        BandcampImportController controller{
+            2, {{BandcampPageKind::Album, AlbumSource, {}}}, false, selected, library.api, playlists.api, {}};
         bool finished = false;
         BandcampImportSummary summary;
         connectImportCompletion(controller, finished, summary);
@@ -1075,13 +1078,8 @@ void FooyinTrackTests::createsNewForForcedAndInitiallyUnsuitableDestinations()
     LibraryBoundary library;
     PlaylistBoundary playlists;
     const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
-    BandcampImportController forced{3,
-                                    {{BandcampPageKind::Track, TrackSource, {}}},
-                                    true,
-                                    selected,
-                                    library.api,
-                                    playlists.api,
-                                    {}};
+    BandcampImportController forced{
+        3, {{BandcampPageKind::Track, TrackSource, {}}}, true, selected, library.api, playlists.api, {}};
     bool finished = false;
     BandcampImportSummary summary;
     connectImportCompletion(forced, finished, summary);
@@ -1097,13 +1095,8 @@ void FooyinTrackTests::createsNewForForcedAndInitiallyUnsuitableDestinations()
 
     LibraryBoundary standaloneLibrary;
     PlaylistBoundary standalonePlaylists;
-    BandcampImportController standalone{13,
-                                        {{BandcampPageKind::Track, TrackSource, {}}},
-                                        true,
-                                        {},
-                                        standaloneLibrary.api,
-                                        standalonePlaylists.api,
-                                        {}};
+    BandcampImportController standalone{
+        13, {{BandcampPageKind::Track, TrackSource, {}}}, true, {}, standaloneLibrary.api, standalonePlaylists.api, {}};
     bool standaloneFinished = false;
     BandcampImportSummary standaloneSummary;
     connectImportCompletion(standalone, standaloneFinished, standaloneSummary);
@@ -1161,13 +1154,8 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
     {
         LibraryBoundary library;
         PlaylistBoundary playlists;
-        BandcampImportController controller{5,
-                                            {{BandcampPageKind::Album, AlbumSource, {}}},
-                                            true,
-                                            {},
-                                            library.api,
-                                            playlists.api,
-                                            {}};
+        BandcampImportController controller{
+            5, {{BandcampPageKind::Album, AlbumSource, {}}}, true, {}, library.api, playlists.api, {}};
         bool finished = false;
         BandcampImportSummary summary;
         connectImportCompletion(controller, finished, summary);
@@ -1186,14 +1174,11 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
         LibraryBoundary library;
         PlaylistBoundary playlists;
         const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
-        BandcampImportController controller{6,
-                                            {{BandcampPageKind::Album, AlbumSource, {}},
-                                             {BandcampPageKind::Track, TrackSource, {}}},
-                                            false,
-                                            selected,
-                                            library.api,
-                                            playlists.api,
-                                            {}};
+        BandcampImportController controller{
+            6,           {{BandcampPageKind::Album, AlbumSource, {}}, {BandcampPageKind::Track, TrackSource, {}}},
+            false,       selected,
+            library.api, playlists.api,
+            {}};
         bool finished = false;
         BandcampImportSummary summary;
         connectImportCompletion(controller, finished, summary);
@@ -1219,14 +1204,11 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
         library.residents.push_back(resident);
         library.makeWriteAvailable();
         PlaylistBoundary playlists;
-        BandcampImportController controller{10,
-                                            {{BandcampPageKind::Album, AlbumSource, {}},
-                                             {BandcampPageKind::Track, TrackSource, {}}},
-                                            true,
-                                            {},
-                                            library.api,
-                                            playlists.api,
-                                            {}};
+        BandcampImportController controller{
+            10,          {{BandcampPageKind::Album, AlbumSource, {}}, {BandcampPageKind::Track, TrackSource, {}}},
+            true,        {},
+            library.api, playlists.api,
+            {}};
         bool finished = false;
         BandcampImportSummary summary;
         connectImportCompletion(controller, finished, summary);
@@ -1245,16 +1227,16 @@ void FooyinTrackTests::advancesAfterFailuresAndLeavesEmptyImportsUncreated()
         QCOMPARE(playlists.createCalls, 1);
         QCOMPARE(playlists.names, QStringList{u"Bandcamp"_s});
         QCOMPARE(playlists.blocks.size(), 1);
-    }}
+    }
+}
 
 void FooyinTrackTests::stopsWhenDestinationChangesDuringPreparation()
 {
     LibraryBoundary library;
     PlaylistBoundary playlists;
     const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
-    library.snapshotHook = [&playlists, selected]() {
-        playlists.availability.insert(selected.toString(QUuid::WithoutBraces),
-                                      BandcampPlaylistAvailability::Locked);
+    library.snapshotHook       = [&playlists, selected]() {
+        playlists.availability.insert(selected.toString(QUuid::WithoutBraces), BandcampPlaylistAvailability::Locked);
     };
     BandcampOperationId cancelledOperation = 0;
     BandcampImportController controller{7,
@@ -1263,9 +1245,7 @@ void FooyinTrackTests::stopsWhenDestinationChangesDuringPreparation()
                                         selected,
                                         library.api,
                                         playlists.api,
-                                        [&cancelledOperation](BandcampOperationId id) {
-                                            cancelledOperation = id;
-                                        }};
+                                        [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
     bool finished = false;
     BandcampImportSummary summary;
     connectImportCompletion(controller, finished, summary);
@@ -1284,15 +1264,14 @@ void FooyinTrackTests::stopsWhenDestinationChangesDuringPreparation()
 
     PlaylistBoundary unavailable;
     unavailable.owner.reset();
-    BandcampImportController unavailableController{12,
-                                                   {{BandcampPageKind::Track, TrackSource, {}}},
-                                                   true,
-                                                   {},
-                                                   library.api,
-                                                   unavailable.api,
-                                                   [&cancelledOperation](BandcampOperationId id) {
-                                                       cancelledOperation = id;
-                                                   }};
+    BandcampImportController unavailableController{
+        12,
+        {{BandcampPageKind::Track, TrackSource, {}}},
+        true,
+        {},
+        library.api,
+        unavailable.api,
+        [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
     bool unavailableFinished = false;
     BandcampImportSummary unavailableSummary;
     connectImportCompletion(unavailableController, unavailableFinished, unavailableSummary);
@@ -1313,13 +1292,8 @@ void FooyinTrackTests::waitsForGatewayBeforeFinishingResolutionImport()
     library.makeWriteAvailable();
     PlaylistBoundary playlists;
     const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
-    BandcampImportController controller{8,
-                                        {{BandcampPageKind::Track, TrackSource, {}}},
-                                        false,
-                                        selected,
-                                        library.api,
-                                        playlists.api,
-                                        {}};
+    BandcampImportController controller{
+        8, {{BandcampPageKind::Track, TrackSource, {}}}, false, selected, library.api, playlists.api, {}};
     bool finished = false;
     BandcampImportSummary summary;
     connectImportCompletion(controller, finished, summary);
@@ -1328,8 +1302,7 @@ void FooyinTrackTests::waitsForGatewayBeforeFinishingResolutionImport()
     BandcampScopeResult scope{8,
                               0,
                               {BandcampPageKind::Track, TrackSource, {}},
-                              ResolutionSuccess<BandcampResolvedData>{
-                                  BandcampResolvedData{std::move(member)}}};
+                              ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(member)}}};
     controller.start();
     controller.acceptScopeResult(scope);
     QTRY_COMPARE_WITH_TIMEOUT(library.writeCalls, 1, 2000);
@@ -1349,7 +1322,7 @@ void FooyinTrackTests::cancellationWithdrawsPendingGatewayHandoff()
     library.residents.push_back(residentWithUserEdits(711));
     library.makeWriteAvailable();
     PlaylistBoundary playlists;
-    const Fooyin::UId selected = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    const Fooyin::UId selected             = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
     BandcampOperationId cancelledOperation = 0;
     BandcampImportController controller{9,
                                         {{BandcampPageKind::Track, TrackSource, {}}},
@@ -1357,17 +1330,16 @@ void FooyinTrackTests::cancellationWithdrawsPendingGatewayHandoff()
                                         selected,
                                         library.api,
                                         playlists.api,
-                                        [&cancelledOperation](BandcampOperationId id) {
-                                            cancelledOperation = id;
-                                        }};
+                                        [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
     bool finished = false;
     BandcampImportSummary summary;
     connectImportCompletion(controller, finished, summary);
     BandcampResolvedTrack member = memberTrack();
     controller.start();
-    controller.acceptScopeResult(
-        {9, 0, {BandcampPageKind::Track, TrackSource, {}},
-         ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(member)}}});
+    controller.acceptScopeResult({9,
+                                  0,
+                                  {BandcampPageKind::Track, TrackSource, {}},
+                                  ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(member)}}});
     QTRY_COMPARE_WITH_TIMEOUT(library.writeCalls, 1, 2000);
 
     controller.cancel();
@@ -1387,30 +1359,28 @@ void FooyinTrackTests::deletingControllerFromPlaylistCallbackWithdrawsResolution
 {
     LibraryBoundary library;
     PlaylistBoundary playlists;
-    BandcampImportController* controller = nullptr;
+    BandcampImportController* controller   = nullptr;
     BandcampOperationId cancelledOperation = 0;
-    playlists.insertHook = [&controller]() {
+    playlists.insertHook                   = [&controller]() {
         BandcampImportController* doomed = controller;
-        controller = nullptr;
+        controller                       = nullptr;
         delete doomed;
     };
-    controller = new BandcampImportController{14,
-                                              {{BandcampPageKind::Album, AlbumSource, {}},
-                                               {BandcampPageKind::Track, TrackSource, {}}},
-                                              true,
-                                              {},
-                                              library.api,
-                                              playlists.api,
-                                              [&cancelledOperation](BandcampOperationId id) {
-                                                  cancelledOperation = id;
-                                              }};
+    controller = new BandcampImportController{
+        14,
+        {{BandcampPageKind::Album, AlbumSource, {}}, {BandcampPageKind::Track, TrackSource, {}}},
+        true,
+        {},
+        library.api,
+        playlists.api,
+        [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
     QPointer<BandcampImportController> guard{controller};
     bool finished = false;
     BandcampImportSummary summary;
     QObject::connect(controller, &BandcampImportController::finished, controller,
                      [&finished, &summary](const BandcampImportSummary& value) {
                          finished = true;
-                         summary = value;
+                         summary  = value;
                      });
 
     controller->start();
@@ -1428,8 +1398,8 @@ void FooyinTrackTests::cancellationDuringPlaylistCreationDoesNotInsert()
     LibraryBoundary library;
     PlaylistBoundary playlists;
     BandcampImportController* controllerPointer = nullptr;
-    bool finished = false;
-    bool finishedDuringCreation = false;
+    bool finished                               = false;
+    bool finishedDuringCreation                 = false;
     BandcampImportSummary summary;
     BandcampOperationId cancelledOperation = 0;
     BandcampImportController controller{15,
@@ -1466,8 +1436,8 @@ void FooyinTrackTests::cancellationDuringInsertionDefersSummaryAndCountsAccepted
     LibraryBoundary library;
     PlaylistBoundary playlists;
     BandcampImportController* controllerPointer = nullptr;
-    bool finished = false;
-    bool finishedDuringInsertion = false;
+    bool finished                               = false;
+    bool finishedDuringInsertion                = false;
     BandcampImportSummary summary;
     BandcampOperationId cancelledOperation = 0;
     BandcampImportController controller{16,
@@ -1509,17 +1479,16 @@ void FooyinTrackTests::deletingControllerFromIntegrationErrorWithdrawsResolution
     QPointer<BandcampImportController> guard;
     QObject connectionContext;
     BandcampOperationId cancelledOperation = 0;
-    bool finished = false;
-    int integrationErrors = 0;
-    controller = new BandcampImportController{17,
-                                              {{BandcampPageKind::Album, AlbumSource, {}}},
-                                              true,
-                                              {},
-                                              library.api,
-                                              playlists.api,
-                                              [&cancelledOperation](BandcampOperationId id) {
-                                                  cancelledOperation = id;
-                                              }};
+    bool finished                          = false;
+    int integrationErrors                  = 0;
+    controller
+        = new BandcampImportController{17,
+                                       {{BandcampPageKind::Album, AlbumSource, {}}},
+                                       true,
+                                       {},
+                                       library.api,
+                                       playlists.api,
+                                       [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
     guard = controller;
     QObject::connect(controller, &BandcampImportController::integrationError, &connectionContext,
                      [&controller, &integrationErrors](const QString&) {

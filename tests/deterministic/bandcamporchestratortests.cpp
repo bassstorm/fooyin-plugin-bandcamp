@@ -120,11 +120,11 @@ private slots:
 
     void failedDiscoveryRemovesOnlyUnsharedRequests()
     {
-        const BandcampPageUrl artist = page(u"https://artist.bandcamp.com/music"_s);
-        const BandcampPageUrl shared = page(u"https://artist.bandcamp.com/album/shared"_s);
-        const BandcampPageUrl label = page(u"https://label.bandcamp.com/music"_s);
+        const BandcampPageUrl artist    = page(u"https://artist.bandcamp.com/music"_s);
+        const BandcampPageUrl shared    = page(u"https://artist.bandcamp.com/album/shared"_s);
+        const BandcampPageUrl label     = page(u"https://label.bandcamp.com/music"_s);
         const BandcampPageUrl abandoned = page(u"https://artist.bandcamp.com/album/abandoned"_s);
-        const BandcampPageUrl kept = page(u"https://label.bandcamp.com/album/kept"_s);
+        const BandcampPageUrl kept      = page(u"https://label.bandcamp.com/album/kept"_s);
         BandcampOrchestrator orchestrator{{artist, shared, label}};
 
         BandcampListingBatch first;
@@ -170,10 +170,10 @@ private slots:
         QVERIFY(!orchestrator.beginListingPage(first->inputOrdinal, first->url));
         BandcampListingBatch batch;
         batch.effectiveUrl = firstPage;
-        batch.references = {reference(u"https://artist.bandcamp.com/album/one"_s, 1, 0)};
+        batch.references   = {reference(u"https://artist.bandcamp.com/album/one"_s, 1, 0)};
         QVERIFY(!orchestrator.appendListingBatch(0, batch));
-        const auto repeated = orchestrator.beginListingPage(
-            0, QUrl(u"https://artist.bandcamp.com/nested/../music#fragment"_s));
+        const auto repeated
+            = orchestrator.beginListingPage(0, QUrl(u"https://artist.bandcamp.com/nested/../music#fragment"_s));
         QVERIFY(repeated);
         QCOMPARE(repeated->code, ResolutionErrorCode::RelationshipUnresolved);
         orchestrator.failDiscography(0, ResolutionFailure{*repeated});
@@ -186,8 +186,8 @@ private slots:
         QVERIFY(!orchestrator.appendListingBatch(1, batch));
         QVERIFY(!orchestrator.beginListingPage(1, secondPage));
         BandcampListingBatch redirected;
-        redirected.effectiveUrl = firstPage;
-        redirected.references = {reference(u"https://artist.bandcamp.com/album/two"_s, 2, 0)};
+        redirected.effectiveUrl  = firstPage;
+        redirected.references    = {reference(u"https://artist.bandcamp.com/album/two"_s, 2, 0)};
         const auto redirectError = orchestrator.appendListingBatch(1, redirected);
         QVERIFY(redirectError);
         QCOMPARE(redirectError->code, ResolutionErrorCode::RelationshipUnresolved);

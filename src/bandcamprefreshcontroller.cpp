@@ -54,8 +54,8 @@ BandcampRefreshController::BandcampRefreshController(BandcampResolutionService* 
                 return;
             }
             m_sourceFinished = true;
-            failPending({BandcampRefreshError::SourceUnavailable,
-                         QStringLiteral("The release service was destroyed.")});
+            failPending(
+                {BandcampRefreshError::SourceUnavailable, QStringLiteral("The release service was destroyed.")});
         });
     }
 }
@@ -98,8 +98,7 @@ void BandcampRefreshController::start(qint64 nowMs)
     for(const auto& [id, track] : accepted) {
         const auto input = readBandcampPersistedTransport(track, id);
         if(const auto* error = std::get_if<BandcampTransportFailure>(&input)) {
-            immediate.append({id, BandcampRefreshFailure{BandcampRefreshError::InvalidPersistedState,
-                                                         error->reason}});
+            immediate.append({id, BandcampRefreshFailure{BandcampRefreshError::InvalidPersistedState, error->reason}});
         }
         else {
             const auto& state = std::get<BandcampPersistedTransport>(input);
@@ -127,8 +126,8 @@ void BandcampRefreshController::start(qint64 nowMs)
         return;
     }
     if(!m_service) {
-        stopWithFailure({BandcampRefreshError::SourceUnavailable,
-                         QStringLiteral("The release service is unavailable.")});
+        stopWithFailure(
+            {BandcampRefreshError::SourceUnavailable, QStringLiteral("The release service is unavailable.")});
         return;
     }
     const BandcampSubmission submission = m_service->submit(pages, m_options);
@@ -142,11 +141,10 @@ void BandcampRefreshController::start(qint64 nowMs)
             withdrawSource();
             return;
         }
-        qCInfo(BANDCAMP_TRACKS).noquote()
-            << formatTraceEvent(CorrelationContext{}, QStringLiteral("refresh_started"),
-                                {DiagnosticField::number(QStringLiteral("consumers"), m_unsettled.size()),
-                                 DiagnosticField::number(QStringLiteral("window_ms"),
-                                                         m_options.prePlaybackRefreshWindowMs)});
+        qCInfo(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+            CorrelationContext{}, QStringLiteral("refresh_started"),
+            {DiagnosticField::number(QStringLiteral("consumers"), m_unsettled.size()),
+             DiagnosticField::number(QStringLiteral("window_ms"), m_options.prePlaybackRefreshWindowMs)});
     }
     else {
         const auto& error = std::get<BandcampSubmissionRejected>(submission).error;
@@ -160,7 +158,7 @@ void BandcampRefreshController::acceptScope(const BandcampScopeResult& result)
         return;
     }
     const QPointer<BandcampRefreshController> guard{this};
-    const auto ids = m_consumers.take(result.page.url);
+    const auto ids      = m_consumers.take(result.page.url);
     const auto* success = std::get_if<ResolutionSuccess<BandcampResolvedData>>(&result.outcome);
     std::optional<BandcampResolvedTrackLookup> tracks;
     if(success) {
@@ -183,8 +181,9 @@ void BandcampRefreshController::acceptScope(const BandcampScopeResult& result)
             else {
                 const auto expiry = bandcampStreamExpiryMs(matched->track.streamUrl);
                 if(!expiry || *expiry <= QDateTime::currentMSecsSinceEpoch()) {
-                    settle(id, BandcampRefreshFailure{BandcampRefreshError::UnusableRefreshedExpiry,
-                                                      QStringLiteral("The refreshed stream has no usable future expiry.")});
+                    settle(id,
+                           BandcampRefreshFailure{BandcampRefreshError::UnusableRefreshedExpiry,
+                                                  QStringLiteral("The refreshed stream has no usable future expiry.")});
                 }
                 else {
                     m_pendingWrites.enqueue(std::move(*matched));
@@ -207,29 +206,30 @@ void BandcampRefreshController::pump()
         finishIfReady();
         return;
     }
-    auto track = m_pendingWrites.dequeue();
-    const auto id = track.track.id;
+    auto track         = m_pendingWrites.dequeue();
+    const auto id      = track.track.id;
     const auto context = CorrelationContext{.albumId = track.album ? track.album->id : 0, .trackId = id};
-    m_writingTrackId = id;
+    m_writingTrackId   = id;
     const QPointer<BandcampRefreshController> guard{this};
     if(!m_gateway) {
         m_gateway = new BandcampLibraryGateway{std::move(m_libraryApi), this};
     }
-    m_gateway->refreshTransport(std::move(track), this, context,
-                                 [guard, id](FooyinTrackCommitOutcome outcome) {
+    m_gateway->refreshTransport(std::move(track), this, context, [guard, id](FooyinTrackCommitOutcome outcome) {
         if(!guard) {
             return;
         }
         if(const auto* success = std::get_if<FooyinTrackCommitSuccess>(&outcome)) {
             guard->settle(id, success->updatedResidentCount > 0 ? BandcampRefreshSuccess::Updated
-                                                               : BandcampRefreshSuccess::Unchanged);
+                                                                : BandcampRefreshSuccess::Unchanged);
         }
         else if(std::get<FooyinTrackCommitFailure>(outcome).code == FooyinTrackCommitErrorCode::Cancelled) {
             guard->settle(id, BandcampRefreshCancelled{});
         }
         else {
-            guard->settle(id, BandcampRefreshFailure{BandcampRefreshError::WriteFailed,
-                                                    std::get<FooyinTrackCommitFailure>(outcome).reason}, true);
+            guard->settle(id,
+                          BandcampRefreshFailure{BandcampRefreshError::WriteFailed,
+                                                 std::get<FooyinTrackCommitFailure>(outcome).reason},
+                          true);
         }
         if(guard) {
             guard->m_writingTrackId = 0;
@@ -262,8 +262,7 @@ void BandcampRefreshController::settle(qint64 id, BandcampRefreshOutcome outcome
         const auto& error = std::get<BandcampRefreshFailure>(outcome);
         if(!alreadyLogged) {
             qCWarning(BANDCAMP_TRACKS).noquote()
-                << formatTraceEvent(CorrelationContext{.trackId = id},
-                                    QStringLiteral("refresh_consumer_failed"),
+                << formatTraceEvent(CorrelationContext{.trackId = id}, QStringLiteral("refresh_consumer_failed"),
                                     {DiagnosticField::number(QStringLiteral("code"), static_cast<qint64>(error.code)),
                                      DiagnosticField::text(QStringLiteral("reason"), error.reason)});
         }
@@ -278,7 +277,7 @@ void BandcampRefreshController::withdrawSource()
     }
     m_withdrawalIssued = true;
     const auto service = m_service;
-    const auto id = m_summary.operationId;
+    const auto id      = m_summary.operationId;
     if(service) {
         service->cancel(id);
     }
@@ -324,8 +323,7 @@ void BandcampRefreshController::failPending(BandcampRefreshFailure error)
     const QPointer<BandcampRefreshController> guard{this};
     for(const auto& ids : consumers) {
         for(qint64 id : ids) {
-            settle(id, m_stopping ? BandcampRefreshOutcome{BandcampRefreshCancelled{}}
-                                 : BandcampRefreshOutcome{error});
+            settle(id, m_stopping ? BandcampRefreshOutcome{BandcampRefreshCancelled{}} : BandcampRefreshOutcome{error});
             if(!guard) {
                 return;
             }
@@ -336,10 +334,10 @@ void BandcampRefreshController::failPending(BandcampRefreshFailure error)
 
 void BandcampRefreshController::stopWithFailure(BandcampRefreshFailure error)
 {
-    qCWarning(BANDCAMP_TRACKS).noquote()
-        << formatTraceEvent(CorrelationContext{}, QStringLiteral("refresh_operation_failed"),
-                            {DiagnosticField::number(QStringLiteral("code"), static_cast<qint64>(error.code)),
-                             DiagnosticField::text(QStringLiteral("reason"), error.reason)});
+    qCWarning(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+        CorrelationContext{}, QStringLiteral("refresh_operation_failed"),
+        {DiagnosticField::number(QStringLiteral("code"), static_cast<qint64>(error.code)),
+         DiagnosticField::text(QStringLiteral("reason"), error.reason)});
     m_stopping = true;
     m_consumers.clear();
     m_pendingWrites.clear();
@@ -378,18 +376,17 @@ void BandcampRefreshController::stopWithFailure(BandcampRefreshFailure error)
 void BandcampRefreshController::finishIfReady()
 {
     if(m_finished || !m_started || !m_sourceFinished || m_writingTrackId || !m_unsettled.isEmpty()
-       || m_anonymousUnsettled
-       || !m_pendingWrites.isEmpty()) {
+       || m_anonymousUnsettled || !m_pendingWrites.isEmpty()) {
         return;
     }
-    m_finished = true;
+    m_finished         = true;
     const auto summary = m_summary;
-    qCInfo(BANDCAMP_TRACKS).noquote()
-        << formatTraceEvent(CorrelationContext{}, QStringLiteral("refresh_completed"),
-                            {DiagnosticField::number(QStringLiteral("updated"), summary.updated),
-                             DiagnosticField::number(QStringLiteral("unchanged"), summary.unchanged),
-                             DiagnosticField::number(QStringLiteral("failed"), summary.failed),
-                             DiagnosticField::number(QStringLiteral("cancelled"), summary.cancelled)});
+    qCInfo(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+        CorrelationContext{}, QStringLiteral("refresh_completed"),
+        {DiagnosticField::number(QStringLiteral("updated"), summary.updated),
+         DiagnosticField::number(QStringLiteral("unchanged"), summary.unchanged),
+         DiagnosticField::number(QStringLiteral("failed"), summary.failed),
+         DiagnosticField::number(QStringLiteral("cancelled"), summary.cancelled)});
     emit finished(summary);
 }
 } // namespace Fooyin::Bandcamp

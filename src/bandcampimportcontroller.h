@@ -5,9 +5,9 @@
 
 #include <utils/id.h>
 
-#include <QQueue>
 #include <QObject>
 #include <QPointer>
+#include <QQueue>
 
 #include <functional>
 #include <optional>
@@ -49,9 +49,9 @@ public:
     using CancelOperation = std::function<void(BandcampOperationId)>;
 
     BandcampImportController(BandcampOperationId operationId, QList<BandcampPageUrl> submittedPages,
-                             bool forceNewPlaylist, Fooyin::UId selectedPlaylistId,
-                             FooyinLibraryApi libraryApi, BandcampPlaylistApi playlistApi,
-                             CancelOperation cancelOperation, QObject* parent = nullptr);
+                             bool forceNewPlaylist, Fooyin::UId selectedPlaylistId, FooyinLibraryApi libraryApi,
+                             BandcampPlaylistApi playlistApi, CancelOperation cancelOperation,
+                             QObject* parent = nullptr);
     ~BandcampImportController() override;
 
     void start();

@@ -52,19 +52,19 @@ public:
         if(m_response.error == QNetworkReply::NoError && m_response.status >= 400) {
             // Mirror Qt, which reports HTTP error statuses through the network error as well.
             switch(m_response.status) {
-            case 401:
-                m_response.error = QNetworkReply::AuthenticationRequiredError;
-                break;
-            case 403:
-                m_response.error = QNetworkReply::ContentAccessDenied;
-                break;
-            case 404:
-                m_response.error = QNetworkReply::ContentNotFoundError;
-                break;
-            default:
-                m_response.error = m_response.status >= 500 ? QNetworkReply::InternalServerError
-                                                            : QNetworkReply::UnknownContentError;
-                break;
+                case 401:
+                    m_response.error = QNetworkReply::AuthenticationRequiredError;
+                    break;
+                case 403:
+                    m_response.error = QNetworkReply::ContentAccessDenied;
+                    break;
+                case 404:
+                    m_response.error = QNetworkReply::ContentNotFoundError;
+                    break;
+                default:
+                    m_response.error = m_response.status >= 500 ? QNetworkReply::InternalServerError
+                                                                : QNetworkReply::UnknownContentError;
+                    break;
             }
         }
         if(m_response.error != QNetworkReply::NoError) {
@@ -257,7 +257,7 @@ protected:
         const FakeResponse response = m_responder ? m_responder(request) : FakeResponse{};
         auto* reply                 = new FakeReply{request, response, this, [this](qint64 size) {
                                         m_largestReadRequest = std::max(m_largestReadRequest, size);
-                                    }};
+                                                    }};
         m_replies.append(reply);
         return reply;
     }

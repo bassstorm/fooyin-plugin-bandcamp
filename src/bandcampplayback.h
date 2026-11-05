@@ -53,6 +53,5 @@ private:
     std::shared_ptr<State> m_state;
 };
 
-[[nodiscard]] Fooyin::InputCreator bandcampInputCreator(
-    const std::weak_ptr<BandcampPlaybackBridge>& bridge);
+[[nodiscard]] Fooyin::InputCreator bandcampInputCreator(const std::weak_ptr<BandcampPlaybackBridge>& bridge);
 } // namespace Fooyin::Bandcamp

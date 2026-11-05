@@ -59,7 +59,8 @@ struct ResolverRun
     QHash<QString, BandcampResolutionOutcome> outcomes;
 };
 
-ServiceRun resolve(BandcampResolutionService& service, const QList<BandcampPageUrl>& pages, OperationOptions options = {})
+ServiceRun resolve(BandcampResolutionService& service, const QList<BandcampPageUrl>& pages,
+                   OperationOptions options = {})
 {
     ServiceRun run;
     QEventLoop loop;
@@ -103,11 +104,10 @@ ResolverRun resolveRequests(FakeNetworkManager& network, QVector<BandcampRelease
     QObject::connect(
         &resolver, &BandcampReleaseResolver::keyedOutcomeReady, &loop,
         [&run](const QString& key, const BandcampResolutionOutcome& outcome) { run.outcomes.insert(key, outcome); });
-    QObject::connect(&resolver, &BandcampReleaseResolver::completed, &loop,
-                     [&run, &loop]() {
-                         run.finished = true;
-                         loop.quit();
-                     });
+    QObject::connect(&resolver, &BandcampReleaseResolver::completed, &loop, [&run, &loop]() {
+        run.finished = true;
+        loop.quit();
+    });
 
     resolver.start();
     if(!run.finished) {
@@ -218,15 +218,15 @@ private slots:
         QVERIFY(failure);
         QCOMPARE(failure->error.code, ResolutionErrorCode::FetchFailed);
         QCOMPARE(network.requested.size(), 2);
-        const auto failedLines = std::count_if(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
-            return log.category == u"fy.bandcamp.resolve"_s && log.message.contains(u" failed "_s);
-        });
+        const auto failedLines
+            = std::count_if(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
+                  return log.category == u"fy.bandcamp.resolve"_s && log.message.contains(u" failed "_s);
+              });
         QCOMPARE(static_cast<int>(failedLines), 1);
         QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
             return log.category == u"fy.bandcamp.resolve"_s
                 && log.message.startsWith(u"url=https://artist.bandcamp.com/album/parent failed "_s)
-                && log.message.contains(u"stage=fetch"_s)
-                && log.message.contains(u"code=fetch_failed"_s)
+                && log.message.contains(u"stage=fetch"_s) && log.message.contains(u"code=fetch_failed"_s)
                 && log.message.contains(u"httpStatus=503"_s);
         }));
         QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
@@ -405,8 +405,7 @@ private slots:
 
     void transientDiscographyFailureIsRetried()
     {
-        const QByteArray listing
-            = discographyPage(R"(<li data-item-id="album-40"><a href="/album/parent"></a></li>)");
+        const QByteArray listing = discographyPage(R"(<li data-item-id="album-40"><a href="/album/parent"></a></li>)");
         FakeNetworkManager network;
         int listingCalls{0};
         network.setResponder([&listingCalls, &listing](const QNetworkRequest& request) {
@@ -461,9 +460,8 @@ private slots:
     void hungAttemptsEndInTimeoutAfterRetries()
     {
         FakeNetworkManager network;
-        network.setResponder([](const QNetworkRequest&) {
-            return FakeResponse{.body = AlbumDocument, .holdDelivery = true};
-        });
+        network.setResponder(
+            [](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument, .holdDelivery = true}; });
         BandcampResolutionService service{&network};
         OperationOptions options;
         options.attemptTimeoutMs  = MinAttemptTimeoutMs;
@@ -492,7 +490,7 @@ private slots:
         options.attemptTimeoutMs  = 30;
         options.maxAttempts       = 1;
         options.attemptCooldownMs = 0;
-        qsizetype liveAtTimeout = -1;
+        qsizetype liveAtTimeout   = -1;
         QObject::connect(&service, &BandcampResolutionService::scopeResolved, &service,
                          [&network, &liveAtTimeout](const BandcampScopeResult& result) {
                              if(std::holds_alternative<ResolutionFailure>(result.outcome) && liveAtTimeout < 0) {
@@ -597,7 +595,7 @@ private slots:
         options.attemptTimeoutMs  = 30;
         options.maxAttempts       = 2;
         options.attemptCooldownMs = 500;
-        const auto submission = service.submit({page(AlbumUrl)}, options);
+        const auto submission     = service.submit({page(AlbumUrl)}, options);
         QVERIFY(std::holds_alternative<BandcampOperationAccepted>(submission));
         const BandcampOperationId id = std::get<BandcampOperationAccepted>(submission).id;
         // Lands after the first attempt's 30 ms timeout and before the 500 ms cooldown ends.
@@ -682,8 +680,7 @@ private slots:
         QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
             return log.category == u"fy.trace.bandcamp.resolve"_s
                 && log.message.contains(u"url=https://artist.bandcamp.com/album/parent "_s)
-                && log.message.contains(u"domain_cache_hit"_s)
-                && log.message.contains(u"scope=album"_s);
+                && log.message.contains(u"domain_cache_hit"_s) && log.message.contains(u"scope=album"_s);
         }));
     }
 
@@ -694,9 +691,8 @@ private slots:
 
         OperationOptions options{1, 10000};
         options.attemptCooldownMs = 0;
-        const ResolverRun run
-            = resolveRequests(network, {{u"first-failure"_s, page(AlbumUrl)}, {u"second-failure"_s, page(AlbumUrl)}},
-                              options);
+        const ResolverRun run     = resolveRequests(
+            network, {{u"first-failure"_s, page(AlbumUrl)}, {u"second-failure"_s, page(AlbumUrl)}}, options);
 
         QVERIFY(run.finished);
         QCOMPARE(run.outcomes.size(), 2);
@@ -713,21 +709,21 @@ private slots:
     {
         FakeNetworkManager network;
         network.setResponder([](const QNetworkRequest&) { return FakeResponse{.body = AlbumDocument}; });
-        BandcampReleaseResolver resolver{
-            &network,
-            1,
-            {{u"first"_s, page(AlbumUrl)}, {u"second"_s, page(SecondAlbumUrl)},
-             {u"third"_s, page(u"https://artist.bandcamp.com/album/third"_s)}},
-            OperationOptions{1, 10000},
-            parseReleasePage,
-            std::make_shared<BandcampWorkflowSlots>()};
+        BandcampReleaseResolver resolver{&network,
+                                         1,
+                                         {{u"first"_s, page(AlbumUrl)},
+                                          {u"second"_s, page(SecondAlbumUrl)},
+                                          {u"third"_s, page(u"https://artist.bandcamp.com/album/third"_s)}},
+                                         OperationOptions{1, 10000},
+                                         parseReleasePage,
+                                         std::make_shared<BandcampWorkflowSlots>()};
 
         QHash<QString, BandcampResolutionOutcome> outcomes;
         QStringList deliveredKeys;
-        int completions = 0;
+        int completions                = 0;
         qsizetype outcomesAtCompletion = -1;
-        bool insideFirstOutcome = false;
-        bool completedInsideOutcome = false;
+        bool insideFirstOutcome        = false;
+        bool completedInsideOutcome    = false;
         QObject::connect(&resolver, &BandcampReleaseResolver::keyedOutcomeReady, &resolver,
                          [&](const QString& key, const BandcampResolutionOutcome& outcome) {
                              deliveredKeys.append(key);
@@ -740,7 +736,7 @@ private slots:
                          });
         QObject::connect(&resolver, &BandcampReleaseResolver::completed, &resolver, [&]() {
             ++completions;
-            outcomesAtCompletion = deliveredKeys.size();
+            outcomesAtCompletion   = deliveredKeys.size();
             completedInsideOutcome = insideFirstOutcome;
         });
 
@@ -751,9 +747,9 @@ private slots:
         QCOMPARE(deliveredKeys.size(), 3);
         QCOMPARE(outcomes.size(), 3);
         QCOMPARE(deliveredKeys.first(), u"first"_s);
-        const auto first = outcomes.constFind(u"first"_s);
+        const auto first  = outcomes.constFind(u"first"_s);
         const auto second = outcomes.constFind(u"second"_s);
-        const auto third = outcomes.constFind(u"third"_s);
+        const auto third  = outcomes.constFind(u"third"_s);
         QVERIFY(first != outcomes.cend());
         QVERIFY(second != outcomes.cend());
         QVERIFY(third != outcomes.cend());
@@ -804,7 +800,7 @@ private slots:
         BandcampResolutionService service{&network};
 
         OperationOptions options{1, 1000};
-        options.maxAttempts = 1;
+        options.maxAttempts  = 1;
         const ServiceRun run = resolve(service, {page(AlbumUrl), page(SecondAlbumUrl)}, options);
 
         QVERIFY(run.finished);
@@ -829,7 +825,7 @@ private slots:
         }
 
         OperationOptions options{8, 10000};
-        options.maxAttempts = 1;
+        options.maxAttempts  = 1;
         const ServiceRun run = resolve(service, pages, options);
         QCOMPARE(run.summary.failed, 300);
         QCOMPARE(run.results.size(), 300);
@@ -1116,7 +1112,8 @@ private slots:
             R"(<li data-item-id="album-40"><a href="/album/parent"></a></li><li data-item-id="album-41"><a href="/album/broken"></a></li>)");
         const QByteArray parent = albumPage(
             R"({"type":"album","id":40,"title":"Parent album","artist":"Parent artist","release_date":"2020-01-01"})",
-            {streamEntry(R"("id":7,"title":"Parent child title","artist":"Parent artist","track_num":1,"duration":90)")});
+            {streamEntry(
+                R"("id":7,"title":"Parent child title","artist":"Parent artist","track_num":1,"duration":90)")});
 
         FakeNetworkManager network;
         network.setResponder([&](const QNetworkRequest& request) {
@@ -1230,16 +1227,16 @@ private slots:
         const QByteArray firstListing = discographyPage(
             R"(<li data-item-id="album-40"><a href="/album/parent"></a></li><li data-item-id="album-41"><a href="/album/second"></a></li>)",
             R"(<link rel="next" href="?page=2">)");
-        const QByteArray secondListing = discographyPage(
-            R"(<li data-item-id="album-40"><a href="/album/parent"></a></li>)");
+        const QByteArray secondListing
+            = discographyPage(R"(<li data-item-id="album-40"><a href="/album/parent"></a></li>)");
         FakeNetworkManager network;
         network.setResponder([&](const QNetworkRequest& request) {
             if(request.url().path() == u"/music"_s) {
                 return request.url().query().isEmpty() ? FakeResponse{.body = firstListing}
                                                        : FakeResponse{.body = secondListing, .holdDelivery = true};
             }
-            return FakeResponse{.body = request.url().path() == u"/album/parent"_s ? AlbumDocument
-                                                                                  : SecondAlbumDocument};
+            return FakeResponse{.body
+                                = request.url().path() == u"/album/parent"_s ? AlbumDocument : SecondAlbumDocument};
         });
         BandcampResolutionService service{&network};
         QObject receiver;
@@ -1256,9 +1253,12 @@ private slots:
         QVERIFY(std::holds_alternative<BandcampOperationAccepted>(
             service.submit({page(u"https://artist.bandcamp.com/music"_s)})));
         QTRY_COMPARE_WITH_TIMEOUT(network.requested.size(), 2, 3000);
-        QTRY_VERIFY_WITH_TIMEOUT(std::any_of(progress.cbegin(), progress.cend(), [](const auto& value) {
-            return value.phase == BandcampOperationPhase::Discovering && value.requested == 2;
-        }), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(std::any_of(progress.cbegin(), progress.cend(),
+                                             [](const auto& value) {
+                                                 return value.phase == BandcampOperationPhase::Discovering
+                                                     && value.requested == 2;
+                                             }),
+                                 3000);
         QVERIFY(results.isEmpty());
         QVERIFY(!summary);
 
@@ -1325,9 +1325,8 @@ private slots:
         QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampResolvedData>>(run.results.at(1).outcome));
         QCOMPARE(network.requested.size(), 4);
         QCOMPARE(network.requested.last().path(), u"/album/parent"_s);
-        QVERIFY(std::none_of(network.requested.cbegin(), network.requested.cend(), [](const QUrl& url) {
-            return url.path() == u"/album/second"_s;
-        }));
+        QVERIFY(std::none_of(network.requested.cbegin(), network.requested.cend(),
+                             [](const QUrl& url) { return url.path() == u"/album/second"_s; }));
     }
 
     void malformedDiscoveryDoesNotSuppressIndependentInputs()
@@ -1428,7 +1427,7 @@ private slots:
         QList<BandcampScopeResult> results;
         QList<BandcampOperationProgress> progressValues;
         bool sawOrderedWait = false;
-        bool finished = false;
+        bool finished       = false;
         BandcampOperationSummary summary;
         BandcampOperationId id = 0;
         QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
@@ -1447,14 +1446,14 @@ private slots:
         QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                          [&finished, &summary, &loop, &id](const BandcampOperationSummary& value) {
                              if(value.operationId == id) {
-                                 summary = value;
+                                 summary  = value;
                                  finished = true;
                                  loop.quit();
                              }
                          });
 
-        const auto submission = service.submit({page(AlbumUrl), page(AlbumUrl), page(SecondAlbumUrl)},
-                                               OperationOptions{2, 10000});
+        const auto submission
+            = service.submit({page(AlbumUrl), page(AlbumUrl), page(SecondAlbumUrl)}, OperationOptions{2, 10000});
         QVERIFY(std::holds_alternative<BandcampOperationAccepted>(submission));
         id = std::get<BandcampOperationAccepted>(submission).id;
         loop.exec();
@@ -1495,16 +1494,16 @@ private slots:
 
         QList<BandcampScopeResult> results;
         QList<BandcampOperationProgress> progressValues;
-        bool cancelledFromProgress = false;
+        bool cancelledFromProgress           = false;
         bool firstProgressHadNoOrderedResult = false;
-        bool finished = false;
+        bool finished                        = false;
         BandcampOperationSummary summary;
         BandcampOperationId id = 0;
         QObject::connect(&service, &BandcampResolutionService::scopeResolved, &loop,
                          [&results](const BandcampScopeResult& result) { results.append(result); });
         QObject::connect(&service, &BandcampResolutionService::progressChanged, &loop,
-                         [&service, &progressValues, &results, &cancelledFromProgress,
-                          &firstProgressHadNoOrderedResult, &id](const BandcampOperationProgress& value) {
+                         [&service, &progressValues, &results, &cancelledFromProgress, &firstProgressHadNoOrderedResult,
+                          &id](const BandcampOperationProgress& value) {
                              if(value.operationId != id) {
                                  return;
                              }
@@ -1512,7 +1511,7 @@ private slots:
                              if(!cancelledFromProgress && value.phase == BandcampOperationPhase::Resolving
                                 && value.completedWork == 1) {
                                  firstProgressHadNoOrderedResult = results.isEmpty();
-                                 cancelledFromProgress = true;
+                                 cancelledFromProgress           = true;
                                  service.cancel(id);
                              }
                          });
@@ -1520,7 +1519,7 @@ private slots:
                          [&finished, &summary, &loop, &id](const BandcampOperationSummary& value) {
                              if(value.operationId == id) {
                                  finished = true;
-                                 summary = value;
+                                 summary  = value;
                                  loop.quit();
                              }
                          });
@@ -1563,7 +1562,7 @@ private slots:
         timeout.start(5000);
         QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
 
-        bool deleted = false;
+        bool deleted           = false;
         BandcampOperationId id = 0;
         QObject::connect(service, &BandcampResolutionService::progressChanged, &loop,
                          [&service, &loop, &deleted, &id](const BandcampOperationProgress& progress) {
@@ -1587,9 +1586,8 @@ private slots:
     void discoveryAndZeroWorkHaveExplicitProgressPhases()
     {
         FakeNetworkManager network;
-        network.setResponder([](const QNetworkRequest&) {
-            return FakeResponse{.body = discographyPage({}), .delayMs = 30};
-        });
+        network.setResponder(
+            [](const QNetworkRequest&) { return FakeResponse{.body = discographyPage({}), .delayMs = 30}; });
         BandcampResolutionService service{&network};
         QEventLoop loop;
         QTimer timeout;
@@ -1613,7 +1611,7 @@ private slots:
         QObject::connect(&service, &BandcampResolutionService::operationFinished, &loop,
                          [&finished, &summary, &loop, &id](const BandcampOperationSummary& value) {
                              if(value.operationId == id) {
-                                 summary = value;
+                                 summary  = value;
                                  finished = true;
                                  loop.quit();
                              }

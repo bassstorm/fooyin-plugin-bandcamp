@@ -77,4 +77,3 @@ void logResolutionFailure(const CorrelationContext& context, const ResolutionErr
 // Single Warning for a terminal failure before any attempt started: omits the attempt and elapsed-time fields.
 void logResolutionFailure(const CorrelationContext& context, const ResolutionError& error, int httpStatus);
 } // namespace Fooyin::Bandcamp
-

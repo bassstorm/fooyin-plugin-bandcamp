@@ -1,7 +1,7 @@
-#include "bandcampplayback.h"
-#include "bandcampplaybackpreparation.h"
 #include "bandcampfakenetwork.h"
 #include "bandcamplogcapture.h"
+#include "bandcampplayback.h"
+#include "bandcampplaybackpreparation.h"
 #include "bandcamptestpages.h"
 
 #include <core/engine/audioloader.h>
@@ -36,18 +36,17 @@ const QString AlbumUrl{u"https://artist.bandcamp.com/album/parent"_s};
 
 QString playbackStream(qint64 expiryMs)
 {
-    return u"https://t4.bcbits.com/stream/playback?signature=private&ts="_s
-        + QString::number(expiryMs / 1000);
+    return u"https://t4.bcbits.com/stream/playback?signature=private&ts="_s + QString::number(expiryMs / 1000);
 }
 
 Fooyin::Track playbackTrack(qint64 expiryMs)
 {
     BandcampTrack source;
-    source.id = 456;
-    source.title = u"Source title"_s;
+    source.id        = 456;
+    source.title     = u"Source title"_s;
     source.sourceUrl = AlbumUrl;
     source.streamUrl = playbackStream(expiryMs);
-    auto track = makeFooyinTrack({source, std::nullopt});
+    auto track       = makeFooyinTrack({source, std::nullopt});
     track.setTitle(u"User-edited title"_s);
     track.replaceExtraTag(u"MOOD"_s, u"User mood"_s);
     track.setExtraProperty(u"_USER_PROPERTY"_s, u"preserve me"_s);
@@ -57,21 +56,25 @@ Fooyin::Track playbackTrack(qint64 expiryMs)
 QByteArray playbackEntry(qint64 id, qint64 expiryMs)
 {
     return "{\"id\":" + QByteArray::number(id) + ",\"title\":\"Selected\",\"file\":{\"mp3-128\":\""
-        + playbackStream(expiryMs).toUtf8() + "\"}}";
+         + playbackStream(expiryMs).toUtf8() + "\"}}";
 }
 
 struct PlaybackLibrary
 {
     PlaybackLibrary()
     {
-        api.owner = &owner;
+        api.owner         = &owner;
         api.playlistOwner = &owner;
-        api.tracks = [this]() {
+        api.tracks        = [this]() {
             ++libraryReads;
             return library;
         };
-        api.playlistTracks = [this]() { return playlist; };
-        api.metadataStore = []() { return std::shared_ptr<Fooyin::TrackMetadataStore>{}; };
+        api.playlistTracks = [this]() {
+            return playlist;
+        };
+        api.metadataStore = []() {
+            return std::shared_ptr<Fooyin::TrackMetadataStore>{};
+        };
         api.writeTrackMetadata = [this](const Fooyin::TrackList& targets) {
             writes.push_back(targets);
             pending = std::make_shared<QPromise<Fooyin::WriteResult>>();
@@ -83,8 +86,8 @@ struct PlaybackLibrary
     void finishWrite(bool success)
     {
         const int count = static_cast<int>(writes.back().size());
-        pending->addResult(Fooyin::WriteResult{Fooyin::WriteState::Completed, success ? count : 0,
-                                               success ? 0 : count});
+        pending->addResult(
+            Fooyin::WriteResult{Fooyin::WriteState::Completed, success ? count : 0, success ? 0 : count});
         pending->finish();
     }
 
@@ -117,7 +120,8 @@ struct RemoteState
     int succeedsOn{1};
 };
 
-class FixtureRemoteDevice final : public QIODevice, public Fooyin::RemoteStreamDevice
+class FixtureRemoteDevice final : public QIODevice,
+                                  public Fooyin::RemoteStreamDevice
 {
 public:
     FixtureRemoteDevice(std::shared_ptr<RemoteState> state, int attempt)
@@ -210,8 +214,8 @@ public:
         auto device = std::make_unique<FixtureRemoteDevice>(m_state, attempt);
         Fooyin::RemoteStreamSource source;
         source.remoteDevice = device.get();
-        source.openTimeout = std::chrono::seconds{5};
-        source.device = std::move(device);
+        source.openTimeout  = std::chrono::seconds{5};
+        source.device       = std::move(device);
         return source;
     }
 
@@ -271,21 +275,21 @@ public:
                                             DecoderOptions options) override
     {
         ++m_state->initCalls;
-        m_state->sourcePath = source.filepath;
-        m_state->trackPath = track.filepath();
-        m_state->options = options;
+        m_state->sourcePath           = source.filepath;
+        m_state->trackPath            = track.filepath();
+        m_state->options              = options;
         m_state->receivedPlaybackHint = playbackHints().testFlag(RepeatTrackEnabled);
         m_state->hadTransportProperty = track.hasExtraProperty(BandcampStreamUrlProperty);
-        m_state->sourceOpen = source.device && source.device->isOpen();
-        m_state->firstBytePreserved = source.device && source.device->bytesAvailable() > 0;
-        m_state->hasRemoteDevice = source.remoteStreamDevice != nullptr;
-        m_state->trackRemote = track.isRemote();
+        m_state->sourceOpen           = source.device && source.device->isOpen();
+        m_state->firstBytePreserved   = source.device && source.device->bytesAvailable() > 0;
+        m_state->hasRemoteDevice      = source.remoteStreamDevice != nullptr;
+        m_state->trackRemote          = track.isRemote();
         if(m_state->blockInitialization) {
             std::unique_lock lock{m_state->initMutex};
             m_state->initEntered.store(true, std::memory_order_release);
             m_state->initChanged.notify_all();
-            const bool aborted = m_state->initChanged.wait_for(
-                lock, std::chrono::milliseconds{1500}, [this]() { return abortToken().stop_requested(); });
+            const bool aborted = m_state->initChanged.wait_for(lock, std::chrono::milliseconds{1500},
+                                                               [this]() { return abortToken().stop_requested(); });
             m_state->initAbortObserved.store(aborted, std::memory_order_release);
         }
         if(abortToken().stop_requested()) {
@@ -341,17 +345,17 @@ struct PlaybackFixture
     PlaybackFixture(int remoteOpenSucceedsOn, FooyinLibraryApi libraryApi = {})
     {
         settingsPath = QCoreApplication::applicationDirPath()
-            + QStringLiteral("/bandcamp-playback-settings-%1.ini").arg(QCoreApplication::applicationPid());
+                     + QStringLiteral("/bandcamp-playback-settings-%1.ini").arg(QCoreApplication::applicationPid());
         QFile::remove(settingsPath);
-        settings = std::make_unique<Fooyin::SettingsManager>(settingsPath);
-        network = std::make_shared<FakeNetworkManager>();
-        service = std::make_unique<BandcampResolutionService>(network.get());
-        audioLoader = std::make_shared<Fooyin::AudioLoader>();
-        remoteState = std::make_shared<RemoteState>();
+        settings                = std::make_unique<Fooyin::SettingsManager>(settingsPath);
+        network                 = std::make_shared<FakeNetworkManager>();
+        service                 = std::make_unique<BandcampResolutionService>(network.get());
+        audioLoader             = std::make_shared<Fooyin::AudioLoader>();
+        remoteState             = std::make_shared<RemoteState>();
         remoteState->succeedsOn = remoteOpenSucceedsOn;
-        remoteIo = std::make_unique<FixtureRemoteIo>(network, settings.get(), remoteState);
-        bridge = std::make_shared<BandcampPlaybackBridge>(service.get(), audioLoader, remoteIo.get(),
-                                                          settings.get(), std::move(libraryApi));
+        remoteIo                = std::make_unique<FixtureRemoteIo>(network, settings.get(), remoteState);
+        bridge = std::make_shared<BandcampPlaybackBridge>(service.get(), audioLoader, remoteIo.get(), settings.get(),
+                                                          std::move(libraryApi));
     }
 
     ~PlaybackFixture()
@@ -406,7 +410,7 @@ void PlaybackTests::cachedPreparationDoesNotCreateGateway()
 {
     FakeNetworkManager network;
     BandcampResolutionService service{&network};
-    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    const qint64 now          = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
     const Fooyin::Track track = playbackTrack(now + 7'200'000);
     BandcampPlaybackPreparation preparation{&service, track, {}, {}};
     QString streamUrl;
@@ -426,9 +430,8 @@ void PlaybackTests::cachedPreparationDoesNotCreateGateway()
     QCOMPARE(failedCount, 0);
     QCOMPARE(streamUrl, track.extraProperties().value(BandcampStreamUrlProperty));
     QVERIFY(network.requested.isEmpty());
-    QVERIFY(std::none_of(preparation.children().cbegin(), preparation.children().cend(), [](QObject* child) {
-        return dynamic_cast<BandcampLibraryGateway*>(child) != nullptr;
-    }));
+    QVERIFY(std::none_of(preparation.children().cbegin(), preparation.children().cend(),
+                         [](QObject* child) { return dynamic_cast<BandcampLibraryGateway*>(child) != nullptr; }));
 }
 
 void PlaybackTests::refreshedPreparationDoesNotWaitForPersistence()
@@ -436,26 +439,26 @@ void PlaybackTests::refreshedPreparationDoesNotWaitForPersistence()
     for(int scenario = 0; scenario < 3; ++scenario) {
         PlaybackLibrary host;
         PlaybackFixture fixture{1, host.api};
-        const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+        const qint64 now         = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
         const qint64 freshExpiry = now + 10'800'000;
-        Fooyin::Track original = playbackTrack(scenario == 1 ? now + 7'200'000 : now - 60'000);
+        Fooyin::Track original   = playbackTrack(scenario == 1 ? now + 7'200'000 : now - 60'000);
         original.setId(123);
         if(scenario == 1) {
             original.setExtraProperty(BandcampExpiresAtProperty, u"1"_s);
         }
-        host.library = {original};
+        host.library      = {original};
         auto playlistCopy = original;
         playlistCopy.setId(124);
         playlistCopy.setTitle(u"Playlist edit"_s);
         host.playlist = {playlistCopy};
         fixture.network->setResponder([now, freshExpiry](const QNetworkRequest&) {
-            return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
-                                                 {playbackEntry(789, now + 7'200'000),
-                                                  playbackEntry(456, freshExpiry)})};
+            return FakeResponse{.body
+                                = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
+                                            {playbackEntry(789, now + 7'200'000), playbackEntry(456, freshExpiry)})};
         });
 
         auto bridge = fixture.bridge;
-        auto work = std::async(std::launch::async, [bridge, original]() { return bridge->prepare(original, {}); });
+        auto work   = std::async(std::launch::async, [bridge, original]() { return bridge->prepare(original, {}); });
         QTRY_VERIFY_WITH_TIMEOUT(work.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready, 5000);
         const auto result = work.get();
         QVERIFY(std::holds_alternative<BandcampPlaybackBridge::PreparedTransport>(result));
@@ -482,13 +485,13 @@ void PlaybackTests::cancellationDuringPlaybackHandoffSkipsPersistence()
     PlaybackLibrary host;
     FakeNetworkManager network;
     BandcampResolutionService service{&network};
-    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    const qint64 now       = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
     Fooyin::Track original = playbackTrack(now - 60'000);
     original.setId(123);
     host.library = {original};
     network.setResponder([now](const QNetworkRequest&) {
-        return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
-                                             {playbackEntry(456, now + 7'200'000)})};
+        return FakeResponse{
+            .body = albumPage(R"({"type":"album","id":40,"title":"Parent"})", {playbackEntry(456, now + 7'200'000)})};
     });
 
     BandcampPlaybackPreparation preparation{&service, original, {}, host.api};
@@ -518,13 +521,13 @@ void PlaybackTests::invalidAndUnusablePlaybackTransportsFail()
 {
     FakeNetworkManager network;
     BandcampResolutionService service{&network};
-    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    const qint64 now          = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
     const Fooyin::Track valid = playbackTrack(now + 7'200'000);
-    for(const auto& [property, value] : QList<QPair<QString, QString>>{
-            {StreamProviderProperty, u"other"_s},
-            {BandcampSourceUrlProperty, u"https://artist.bandcamp.com/music"_s},
-            {BandcampStreamUrlProperty, u"http://t4.bcbits.com/stream/abc?ts=123"_s},
-            {BandcampTrackIdProperty, u"999"_s}}) {
+    for(const auto& [property, value] :
+        QList<QPair<QString, QString>>{{StreamProviderProperty, u"other"_s},
+                                       {BandcampSourceUrlProperty, u"https://artist.bandcamp.com/music"_s},
+                                       {BandcampStreamUrlProperty, u"http://t4.bcbits.com/stream/abc?ts=123"_s},
+                                       {BandcampTrackIdProperty, u"999"_s}}) {
         auto invalid = valid;
         invalid.setExtraProperty(property, value);
         BandcampPlaybackPreparation preparation{&service, invalid, {}, {}};
@@ -541,10 +544,10 @@ void PlaybackTests::invalidAndUnusablePlaybackTransportsFail()
 
     for(int scenario = 0; scenario < 2; ++scenario) {
         network.setResponder([now, scenario](const QNetworkRequest&) {
-            const qint64 id = scenario == 0 ? 789 : 456;
+            const qint64 id     = scenario == 0 ? 789 : 456;
             const qint64 expiry = scenario == 0 ? now + 7'200'000 : now - 60'000;
-            return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
-                                                 {playbackEntry(id, expiry)})};
+            return FakeResponse{
+                .body = albumPage(R"({"type":"album","id":40,"title":"Parent"})", {playbackEntry(id, expiry)})};
         });
         BandcampPlaybackPreparation preparation{&service, playbackTrack(now - 60'000), {}, {}};
         int failures{0};
@@ -566,16 +569,16 @@ void PlaybackTests::shutdownWithdrawsPendingPersistence()
 {
     PlaybackLibrary host;
     PlaybackFixture fixture{1, host.api};
-    const qint64 now = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
+    const qint64 now       = (QDateTime::currentMSecsSinceEpoch() / 1000) * 1000;
     Fooyin::Track original = playbackTrack(now - 60'000);
     original.setId(123);
     host.library = {original};
     fixture.network->setResponder([now](const QNetworkRequest&) {
-        return FakeResponse{.body = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
-                                             {playbackEntry(456, now + 7'200'000)})};
+        return FakeResponse{
+            .body = albumPage(R"({"type":"album","id":40,"title":"Parent"})", {playbackEntry(456, now + 7'200'000)})};
     });
     auto bridge = fixture.bridge;
-    auto work = std::async(std::launch::async, [bridge, original]() { return bridge->prepare(original, {}); });
+    auto work   = std::async(std::launch::async, [bridge, original]() { return bridge->prepare(original, {}); });
     QTRY_VERIFY_WITH_TIMEOUT(work.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready, 5000);
     QVERIFY(std::holds_alternative<BandcampPlaybackBridge::PreparedTransport>(work.get()));
     QTRY_COMPARE_WITH_TIMEOUT(host.writes.size(), std::size_t{1}, 3000);
@@ -589,7 +592,7 @@ void PlaybackTests::shutdownWithdrawsPendingPersistence()
 void PlaybackTests::serviceDestroyedBeforeStartDoesNotProduceTwoOutcomes()
 {
     FakeNetworkManager network;
-    auto service = std::make_unique<BandcampResolutionService>(&network);
+    auto service     = std::make_unique<BandcampResolutionService>(&network);
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     BandcampPlaybackPreparation preparation{service.get(), playbackTrack(now - 60'000), {}, {}};
     int failures{0};
@@ -615,11 +618,10 @@ void PlaybackTests::serviceTeardownFailsPendingPreparation()
 {
     PlaybackFixture fixture{1};
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    fixture.network->setResponder([](const QNetworkRequest&) {
-        return FakeResponse{.holdDelivery = true, .holdAfterAbort = true};
-    });
+    fixture.network->setResponder(
+        [](const QNetworkRequest&) { return FakeResponse{.holdDelivery = true, .holdAfterAbort = true}; });
     const Fooyin::Track track = playbackTrack(now - 60'000);
-    auto bridge = fixture.bridge;
+    auto bridge               = fixture.bridge;
     auto work = std::async(std::launch::async, [bridge, track]() { return bridge->prepare(track, {}); });
     QTRY_COMPARE_WITH_TIMEOUT(fixture.network->requested.size(), 1, 3000);
     fixture.service.reset();
@@ -635,7 +637,7 @@ void PlaybackTests::playbackMakesSingleAttemptPerPage()
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     fixture.network->setResponder([](const QNetworkRequest&) { return FakeResponse{.status = 503}; });
     const Fooyin::Track track = playbackTrack(now - 60'000);
-    auto bridge = fixture.bridge;
+    auto bridge               = fixture.bridge;
     auto work = std::async(std::launch::async, [bridge, track]() { return bridge->prepare(track, {}); });
     QTRY_VERIFY_WITH_TIMEOUT(work.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready, 5000);
     QVERIFY(std::holds_alternative<BandcampPlaybackBridge::Failure>(work.get()));
@@ -646,31 +648,30 @@ void PlaybackTests::hostSchemeSelectionAndBoundedSameUrlReopen()
 {
     PlaybackFixture fixture{2};
     auto inner = std::make_shared<InnerState>();
-    fixture.audioLoader->addDecoder(u"Fixture MP3"_s, [inner]() {
-        return std::make_unique<FixtureRemoteDecoder>(inner);
-    }, 10);
+    fixture.audioLoader->addDecoder(
+        u"Fixture MP3"_s, [inner]() { return std::make_unique<FixtureRemoteDecoder>(inner); }, 10);
     const auto input = bandcampInputCreator(fixture.bridge);
     fixture.audioLoader->addDecoder(u"Bandcamp"_s, input.decoder, input.priority);
 
-    const qint64 expiry = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
-    const Fooyin::Track original = playbackTrack(expiry);
-    const QString originalUri = original.filepath();
-    const QString originalTitle = original.title();
+    const qint64 expiry            = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
+    const Fooyin::Track original   = playbackTrack(expiry);
+    const QString originalUri      = original.filepath();
+    const QString originalTitle    = original.title();
     const QStringList originalMood = original.extraTag(u"MOOD"_s);
-    const QString originalStream = original.extraProperties().value(BandcampStreamUrlProperty);
-    auto candidates = fixture.audioLoader->decodersForTrack(original);
+    const QString originalStream   = original.extraProperties().value(BandcampStreamUrlProperty);
+    auto candidates                = fixture.audioLoader->decodersForTrack(original);
     QCOMPARE(candidates.size(), std::size_t{1});
     QCOMPARE(candidates.front()->supportedSchemes(), QStringList{u"bandcamp"_s});
 
     Fooyin::AudioDecoder* decoder = candidates.front().get();
-    auto work = std::async(std::launch::async, [decoder, original]() mutable {
+    auto work                     = std::async(std::launch::async, [decoder, original]() mutable {
         decoder->setPlaybackHints(Fooyin::AudioDecoder::RepeatTrackEnabled);
         Fooyin::AudioSource source;
         source.filepath = original.filepath();
-        const auto format = decoder->init(source, original,
-                                          Fooyin::AudioDecoder::UpdateTracks | Fooyin::AudioDecoder::NoLooping);
+        const auto format
+            = decoder->init(source, original, Fooyin::AudioDecoder::UpdateTracks | Fooyin::AudioDecoder::NoLooping);
         const bool initialized = format.has_value();
-        const bool seekable = decoder->isSeekable();
+        const bool seekable    = decoder->isSeekable();
         decoder->seek(137339);
         decoder->stop();
         return std::pair{initialized, seekable};
@@ -717,20 +718,19 @@ void PlaybackTests::hostSchemeSelectionAndBoundedSameUrlReopen()
 void PlaybackTests::decoderOpenFailureDoesNotRetry()
 {
     PlaybackFixture fixture{1};
-    auto inner = std::make_shared<InnerState>();
+    auto inner    = std::make_shared<InnerState>();
     inner->accept = false;
-    fixture.audioLoader->addDecoder(u"Fixture MP3"_s, [inner]() {
-        return std::make_unique<FixtureRemoteDecoder>(inner);
-    }, 10);
+    fixture.audioLoader->addDecoder(
+        u"Fixture MP3"_s, [inner]() { return std::make_unique<FixtureRemoteDecoder>(inner); }, 10);
     const auto input = bandcampInputCreator(fixture.bridge);
     fixture.audioLoader->addDecoder(u"Bandcamp"_s, input.decoder, input.priority);
 
-    const qint64 expiry = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
+    const qint64 expiry       = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
     const Fooyin::Track track = playbackTrack(expiry);
-    auto candidates = fixture.audioLoader->decodersForTrack(track);
+    auto candidates           = fixture.audioLoader->decodersForTrack(track);
     QCOMPARE(candidates.size(), std::size_t{1});
     Fooyin::AudioDecoder* decoder = candidates.front().get();
-    auto work = std::async(std::launch::async, [decoder, track]() {
+    auto work                     = std::async(std::launch::async, [decoder, track]() {
         Fooyin::AudioSource source;
         source.filepath = track.filepath();
         return decoder->init(source, track, Fooyin::AudioDecoder::None).has_value();
@@ -745,7 +745,7 @@ void PlaybackTests::decoderOpenFailureDoesNotRetry()
 void PlaybackTests::shutdownWithdrawsPendingPreparation()
 {
     PlaybackFixture fixture{1};
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 now    = QDateTime::currentMSecsSinceEpoch();
     const qint64 expiry = now - 60'000;
     fixture.network->setResponder([now](const QNetworkRequest&) {
         const auto responseBody = albumPage(R"({"type":"album","id":40,"title":"Parent"})",
@@ -753,10 +753,8 @@ void PlaybackTests::shutdownWithdrawsPendingPreparation()
         return FakeResponse{.body = responseBody, .holdDelivery = true, .holdAfterAbort = true};
     });
     const Fooyin::Track track = playbackTrack(expiry);
-    auto bridge = fixture.bridge;
-    auto work = std::async(std::launch::async, [bridge, track]() {
-        return bridge->prepare(track, {});
-    });
+    auto bridge               = fixture.bridge;
+    auto work = std::async(std::launch::async, [bridge, track]() { return bridge->prepare(track, {}); });
     QTRY_COMPARE_WITH_TIMEOUT(fixture.network->requested.size(), 1, 5000);
     fixture.bridge->shutdown();
     QTRY_VERIFY_WITH_TIMEOUT(work.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready, 2000);
@@ -773,7 +771,7 @@ void PlaybackTests::preparationRejectsMainThreadCall()
 {
     PlaybackFixture fixture{1};
     const qint64 expiry = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
-    const auto result = fixture.bridge->prepare(playbackTrack(expiry), {});
+    const auto result   = fixture.bridge->prepare(playbackTrack(expiry), {});
     QVERIFY(std::holds_alternative<BandcampPlaybackBridge::Failure>(result));
     QVERIFY(fixture.network->requested.isEmpty());
 }
@@ -781,23 +779,22 @@ void PlaybackTests::preparationRejectsMainThreadCall()
 void PlaybackTests::delegateExceptionLatchesPlaybackFailure()
 {
     PlaybackFixture fixture{1};
-    auto inner = std::make_shared<InnerState>();
+    auto inner          = std::make_shared<InnerState>();
     inner->throwOnStart = true;
-    fixture.audioLoader->addDecoder(u"Fixture MP3"_s, [inner]() {
-        return std::make_unique<FixtureRemoteDecoder>(inner);
-    }, 10);
+    fixture.audioLoader->addDecoder(
+        u"Fixture MP3"_s, [inner]() { return std::make_unique<FixtureRemoteDecoder>(inner); }, 10);
     const auto input = bandcampInputCreator(fixture.bridge);
     fixture.audioLoader->addDecoder(u"Bandcamp"_s, input.decoder, input.priority);
 
-    const qint64 expiry = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
+    const qint64 expiry       = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
     const Fooyin::Track track = playbackTrack(expiry);
-    auto candidates = fixture.audioLoader->decodersForTrack(track);
+    auto candidates           = fixture.audioLoader->decodersForTrack(track);
     QCOMPARE(candidates.size(), std::size_t{1});
     Fooyin::AudioDecoder* decoder = candidates.front().get();
     LogCapture logs{u"fy.bandcamp.tracks.warning=true"_s};
     auto work = std::async(std::launch::async, [decoder, track]() {
         Fooyin::AudioSource source;
-        source.filepath = track.filepath();
+        source.filepath   = track.filepath();
         const auto format = decoder->init(source, track, Fooyin::AudioDecoder::None);
         if(!format) {
             return false;
@@ -811,9 +808,8 @@ void PlaybackTests::delegateExceptionLatchesPlaybackFailure()
     QVERIFY(work.get());
     QCOMPARE(inner->startCalls, 1);
     QCOMPARE(inner->readCalls, 0);
-    QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
-        return log.message.contains(u"playback_start_failed"_s);
-    }));
+    QVERIFY(std::any_of(capturedLogs().cbegin(), capturedLogs().cend(),
+                        [](const CapturedLog& log) { return log.message.contains(u"playback_start_failed"_s); }));
     QVERIFY(std::none_of(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
         return log.message.contains(u"signature=private"_s) || log.message.contains(u"private decoder error"_s);
     }));
@@ -822,20 +818,19 @@ void PlaybackTests::delegateExceptionLatchesPlaybackFailure()
 void PlaybackTests::abortDuringInnerInitializationIsForwarded()
 {
     PlaybackFixture fixture{1};
-    auto inner = std::make_shared<InnerState>();
+    auto inner                 = std::make_shared<InnerState>();
     inner->blockInitialization = true;
-    fixture.audioLoader->addDecoder(u"Fixture MP3"_s, [inner]() {
-        return std::make_unique<FixtureRemoteDecoder>(inner);
-    }, 10);
+    fixture.audioLoader->addDecoder(
+        u"Fixture MP3"_s, [inner]() { return std::make_unique<FixtureRemoteDecoder>(inner); }, 10);
     const auto input = bandcampInputCreator(fixture.bridge);
     fixture.audioLoader->addDecoder(u"Bandcamp"_s, input.decoder, input.priority);
 
-    const qint64 expiry = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
+    const qint64 expiry          = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
     const Fooyin::Track original = playbackTrack(expiry);
-    auto candidates = fixture.audioLoader->decodersForTrack(original);
+    auto candidates              = fixture.audioLoader->decodersForTrack(original);
     QCOMPARE(candidates.size(), std::size_t{1});
     Fooyin::AudioDecoder* decoder = candidates.front().get();
-    auto work = std::async(std::launch::async, [decoder, original]() {
+    auto work                     = std::async(std::launch::async, [decoder, original]() {
         Fooyin::AudioSource source;
         source.filepath = original.filepath();
         return decoder->init(source, original, Fooyin::AudioDecoder::None).has_value();
@@ -852,20 +847,19 @@ void PlaybackTests::abortDuringInnerInitializationIsForwarded()
 void PlaybackTests::shutdownAbortsInnerInitialization()
 {
     PlaybackFixture fixture{1};
-    auto inner = std::make_shared<InnerState>();
+    auto inner                 = std::make_shared<InnerState>();
     inner->blockInitialization = true;
-    fixture.audioLoader->addDecoder(u"Fixture MP3"_s, [inner]() {
-        return std::make_unique<FixtureRemoteDecoder>(inner);
-    }, 10);
+    fixture.audioLoader->addDecoder(
+        u"Fixture MP3"_s, [inner]() { return std::make_unique<FixtureRemoteDecoder>(inner); }, 10);
     const auto input = bandcampInputCreator(fixture.bridge);
     fixture.audioLoader->addDecoder(u"Bandcamp"_s, input.decoder, input.priority);
 
-    const qint64 expiry = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
+    const qint64 expiry          = (QDateTime::currentMSecsSinceEpoch() / 1000 + 30 * 24 * 60 * 60) * 1000;
     const Fooyin::Track original = playbackTrack(expiry);
-    auto candidates = fixture.audioLoader->decodersForTrack(original);
+    auto candidates              = fixture.audioLoader->decodersForTrack(original);
     QCOMPARE(candidates.size(), std::size_t{1});
     Fooyin::AudioDecoder* decoder = candidates.front().get();
-    auto work = std::async(std::launch::async, [decoder, original]() {
+    auto work                     = std::async(std::launch::async, [decoder, original]() {
         Fooyin::AudioSource source;
         source.filepath = original.filepath();
         return decoder->init(source, original, Fooyin::AudioDecoder::None).has_value();
@@ -890,7 +884,7 @@ void PlaybackTests::stopTokenWakesPendingPreparation()
     const Fooyin::Track track = playbackTrack(now - 60'000);
     std::stop_source cancellation;
     auto bridge = fixture.bridge;
-    auto work = std::async(std::launch::async, [bridge, track, token = cancellation.get_token()]() {
+    auto work   = std::async(std::launch::async, [bridge, track, token = cancellation.get_token()]() {
         return bridge->prepare(track, token);
     });
     QTRY_COMPARE_WITH_TIMEOUT(fixture.network->requested.size(), 1, 5000);
@@ -912,7 +906,7 @@ void PlaybackTests::stopBeforeMainThreadPreparationNeverStartsRefresh()
         return FakeResponse{.body = responseBody, .holdDelivery = true, .holdAfterAbort = true};
     });
     const Fooyin::Track track = playbackTrack(now - 60'000);
-    auto bridge = fixture.bridge;
+    auto bridge               = fixture.bridge;
 
     // 1. Pre-cancelled stop_token: prepare() returns before the queued main-thread
     //    beginPreparation runs, and pumping the main thread afterwards must not start a refresh.
@@ -925,8 +919,7 @@ void PlaybackTests::stopBeforeMainThreadPreparationNeverStartsRefresh()
         QCOMPARE(work.wait_for(std::chrono::milliseconds{1000}), std::future_status::ready);
         const auto outcome = work.get();
         QVERIFY(std::holds_alternative<BandcampPlaybackBridge::Failure>(outcome));
-        QCOMPARE(std::get<BandcampPlaybackBridge::Failure>(outcome).reason,
-                 u"Playback preparation was cancelled."_s);
+        QCOMPARE(std::get<BandcampPlaybackBridge::Failure>(outcome).reason, u"Playback preparation was cancelled."_s);
         QCoreApplication::processEvents();
         QVERIFY(fixture.network->requested.isEmpty());
     }
@@ -935,11 +928,11 @@ void PlaybackTests::stopBeforeMainThreadPreparationNeverStartsRefresh()
     {
         std::stop_source immediateStop;
         std::atomic_bool enteredPrepare{false};
-        auto work = std::async(std::launch::async,
-                               [bridge, track, &enteredPrepare, token = immediateStop.get_token()]() {
-                                   enteredPrepare.store(true, std::memory_order_release);
-                                   return bridge->prepare(track, token);
-                               });
+        auto work
+            = std::async(std::launch::async, [bridge, track, &enteredPrepare, token = immediateStop.get_token()]() {
+                  enteredPrepare.store(true, std::memory_order_release);
+                  return bridge->prepare(track, token);
+              });
         while(!enteredPrepare.load(std::memory_order_acquire)) {
             std::this_thread::yield();
         }
@@ -947,8 +940,7 @@ void PlaybackTests::stopBeforeMainThreadPreparationNeverStartsRefresh()
         QCOMPARE(work.wait_for(std::chrono::milliseconds{1000}), std::future_status::ready);
         const auto outcome = work.get();
         QVERIFY(std::holds_alternative<BandcampPlaybackBridge::Failure>(outcome));
-        QCOMPARE(std::get<BandcampPlaybackBridge::Failure>(outcome).reason,
-                 u"Playback preparation was cancelled."_s);
+        QCOMPARE(std::get<BandcampPlaybackBridge::Failure>(outcome).reason, u"Playback preparation was cancelled."_s);
         QCoreApplication::processEvents();
         QVERIFY(fixture.network->requested.isEmpty());
     }

@@ -11,7 +11,8 @@ BandcampProgressDialog::BandcampProgressDialog(BandcampDialogMode mode, QWidget*
     : QDialog{parent}
     , m_mode{mode}
     , m_status{new QLabel(mode == BandcampDialogMode::Refresh ? tr("Starting Bandcamp stream refresh…")
-                                                             : tr("Starting Bandcamp import…"), this)}
+                                                              : tr("Starting Bandcamp import…"),
+                          this)}
     , m_progress{new QProgressBar(this)}
     , m_buttons{new QDialogButtonBox(QDialogButtonBox::Cancel, this)}
 {
@@ -46,17 +47,15 @@ void BandcampProgressDialog::updateProgress(const BandcampOperationProgress& pro
             m_progress->show();
             m_progress->setRange(0, 100);
             const int percent = progress.completedWork >= progress.totalWork
-                                    ? 100
-                                    : qMin(99, static_cast<int>(100.0L * progress.completedWork / progress.totalWork));
+                                  ? 100
+                                  : qMin(99, static_cast<int>(100.0L * progress.completedWork / progress.totalWork));
             m_progress->setValue(percent);
-            m_status->setText(tr("Resolving releases… %1 of %2")
-                                  .arg(progress.completedWork)
-                                  .arg(progress.totalWork));
+            m_status->setText(tr("Resolving releases… %1 of %2").arg(progress.completedWork).arg(progress.totalWork));
             break;
         }
         case BandcampOperationPhase::Finished:
             m_status->setText(m_mode == BandcampDialogMode::Refresh ? tr("Finishing stream updates…")
-                                                                   : tr("Finishing import…"));
+                                                                    : tr("Finishing import…"));
             m_progress->show();
             m_progress->setRange(0, 0);
             break;
@@ -66,8 +65,11 @@ void BandcampProgressDialog::updateProgress(const BandcampOperationProgress& pro
 void BandcampProgressDialog::finishRefresh(const BandcampRefreshSummary& summary)
 {
     m_status->setText(tr("Refresh finished (unique selected Bandcamp tracks): %1 updated, %2 unchanged, "
-                        "%3 failed, %4 cancelled.")
-                          .arg(summary.updated).arg(summary.unchanged).arg(summary.failed).arg(summary.cancelled));
+                         "%3 failed, %4 cancelled.")
+                          .arg(summary.updated)
+                          .arg(summary.unchanged)
+                          .arg(summary.failed)
+                          .arg(summary.cancelled));
     m_progress->hide();
     m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Close"));
 }

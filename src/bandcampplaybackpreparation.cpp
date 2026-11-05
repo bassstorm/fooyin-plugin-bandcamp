@@ -67,8 +67,8 @@ void BandcampPlaybackPreparation::start(qint64 nowMs)
     if(m_started || m_finished) {
         return;
     }
-    m_started = true;
-    m_trackId = parseBandcampTrackUri(m_track.filepath()).value_or(0);
+    m_started            = true;
+    m_trackId            = parseBandcampTrackUri(m_track.filepath()).value_or(0);
     const auto persisted = readBandcampPersistedTransport(m_track, m_trackId);
     const QPointer<BandcampPlaybackPreparation> guard{this};
     if(const auto* error = std::get_if<BandcampTransportFailure>(&persisted)) {
@@ -83,7 +83,7 @@ void BandcampPlaybackPreparation::start(qint64 nowMs)
     const auto& transport = std::get<BandcampPersistedTransport>(persisted);
     if(!bandcampRefreshNeeded(transport.expiry, nowMs, m_options.prePlaybackRefreshWindowMs)) {
         m_sourceFinished = true;
-        m_outcomeSent = true;
+        m_outcomeSent    = true;
         emit prepared(transport.streamUrl);
         if(guard) {
             finishIfReady();
@@ -147,13 +147,12 @@ void BandcampPlaybackPreparation::acceptScope(const BandcampScopeResult& result)
     }
 
     m_writePending = true;
-    m_gateway = new BandcampLibraryGateway{std::move(m_libraryApi), this};
+    m_gateway      = new BandcampLibraryGateway{std::move(m_libraryApi), this};
     const CorrelationContext context{.albumId = selected->album ? selected->album->id : 0, .trackId = m_trackId};
-    m_gateway->refreshTransport(std::move(*selected), this, context,
-                                [this](FooyinTrackCommitOutcome) {
-                                    m_writePending = false;
-                                    finishIfReady();
-                                });
+    m_gateway->refreshTransport(std::move(*selected), this, context, [this](FooyinTrackCommitOutcome) {
+        m_writePending = false;
+        finishIfReady();
+    });
 }
 
 void BandcampPlaybackPreparation::cancel()
