@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.18)
 project(
     bandcamp
     VERSION 0.2.0
-    DESCRIPTION "Bandcamp plugin for fooyin"
+    DESCRIPTION "Stream music from Bandcamp in Fooyin"
     LANGUAGES CXX
 )
 

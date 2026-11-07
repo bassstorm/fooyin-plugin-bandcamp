@@ -7,6 +7,6 @@
         "MIT License — Permissive use, modification, and distribution; provided “as is,” without warranty."
     ],
     "Category": "Online Services",
-    "Description": "Adds Bandcamp as an audio source",
+    "Description": "Stream music from Bandcamp",
     "Url": "https://github.com/bassstorm/fooyin-plugin-bandcamp"
 }

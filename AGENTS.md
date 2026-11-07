@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository implements a Bandcamp integration plugin for Fooyin. This document defines the durable engineering principles, architectural boundaries, and domain invariants that govern the codebase. Concrete schemas, field mappings, and API signatures live in the code itself.
+Stream music from Bandcamp in Fooyin. This document defines the durable engineering principles, architectural boundaries, and domain invariants that govern the codebase. Concrete schemas, field mappings, and API signatures live in the code itself.
 
 ## 1. Core Engineering Principles
 
@@ -50,6 +50,11 @@ Do not split a single state machine across layers or mix UI batch workflows with
 - **Deterministic async lifetimes.** Every async operation must reach **exactly one** terminal state (`Success`, `Failure`, or `Cancelled`). Guard `QObject::connect` lambdas with the true receiver lifetime, synchronize cross-thread state shared with the audio thread, and cancel/clean up child operations and dialogs deterministically on `shutdown()` and destruction.
 - **Background-worker teardown.** Work that survives plugin-object teardown must retain valid state and executable code until completion, without blocking the UI thread.
 - **Explicit outcomes over exceptions.** Use typed result/outcome values (`ResolutionOutcome`) for expected failures. Contain exceptions only at external library or top-level host decoder entry points.
+
+### Documentation Boundaries
+
+- **`README.md` is strictly user-facing:** Written in plain language for end users. Covers what the plugin does, how to install a release bundle, and how to build it locally from source. Excludes internal design choices, implementation mechanics, CI/release workflows, and contributor policy.
+- **`AGENTS.md` holds only durable engineering invariants:** Captures architectural boundaries, domain rules, and verification requirements that cannot be inferred from the code or build configurations. Concrete schemas, preset definitions, and file inventories live in the codebase itself.
 
 ---
 
@@ -104,10 +109,8 @@ Do not split a single state machine across layers or mix UI batch workflows with
 
 ### Testing & Build Verification
 
-- **Deterministic suite (`tests/deterministic/`):** Covers parser extraction, assembly/authority, post-processors, orchestration/resolution, identity/transport and stream-property persistence, playback bridging, logging/redaction, and resource/lifecycle bounds using synthetic inputs and contract-valid internal inputs.
-- **Live suite (`tests/live/`):** Happy-path smoke tests against real Bandcamp URLs (`ctest --preset tests-live`), excluded from CI (`tests-ci`).
-- **Formatting:** Format C++ with `cmake --preset dev && cmake --build --preset format` (clang-format 22 from the dev container, using the repository `.clang-format`). CI fails on violations via `format-check`.
-- Validate code changes with the sanitized deterministic suite:
+- **Deterministic isolation vs. live smoke checks:** All behavioral, boundary, resilience, and failure-mode coverage belongs in the offline deterministic suite (`tests/deterministic/`) using synthetic responses at the HTTP boundary and contract-valid inputs at internal seams. The live suite (`tests/live/`, run via `ctest --preset tests-live`) is a non-gating happy-path smoke check against real Bandcamp pages solely to detect upstream format drift.
+- **Verification gate:** Every code change must conform to `.clang-format` (`cmake --preset dev && cmake --build --preset format`, verified via `format-check`) and pass the sanitizer-instrumented deterministic suite:
 
 ```sh
 cmake --preset tests-sanitize
