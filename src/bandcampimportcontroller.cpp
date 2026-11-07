@@ -440,7 +440,8 @@ void BandcampImportController::finishIfReady()
         return;
     }
     m_finished = true;
-    const BandcampImportSummary summary{m_operationId, m_added, m_failed, m_cancelled, m_stopReason};
+    const BandcampImportSummary summary{m_operationId, m_added,      m_failed,
+                                        m_cancelled,   m_stopReason, m_createdPlaylistId};
     qCInfo(BANDCAMP_UI).noquote() << formatTraceEvent(
         CorrelationContext{}, QStringLiteral("import_completed"),
         {DiagnosticField::number(QStringLiteral("succeeded"), summary.added),
@@ -489,6 +490,7 @@ bool BandcampImportController::prepareDestination(const BandcampScopeResult& sco
             return false;
         }
         guard->m_destinationId      = *created;
+        guard->m_createdPlaylistId  = *created;
         guard->m_pendingNewPlaylist = false;
     }
     const bool writable = guard->destinationWritable(guard->m_destinationId);

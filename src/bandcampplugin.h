@@ -55,6 +55,7 @@ private:
     void showAddUrlDialog();
     void onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool forceNewPlaylist);
     void refreshSelectedTracks(const Fooyin::TrackList& tracks);
+    [[nodiscard]] bool operationRunning() const;
 
     // Kept alive for as long as the service that uses it.
     std::shared_ptr<NetworkAccessManager> m_network;

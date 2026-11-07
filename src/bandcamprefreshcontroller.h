@@ -60,6 +60,10 @@ public:
     ~BandcampRefreshController() override;
     void start(qint64 nowMs);
     void cancel();
+    [[nodiscard]] bool isFinished() const
+    {
+        return m_finished;
+    }
 
 signals:
     void progressChanged(const Fooyin::Bandcamp::BandcampOperationProgress& progress);

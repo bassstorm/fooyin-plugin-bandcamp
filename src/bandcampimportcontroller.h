@@ -40,6 +40,7 @@ struct BandcampImportSummary
     qsizetype failed{0};
     qsizetype cancelled{0};
     QString stopReason;
+    Fooyin::UId createdPlaylistId;
 };
 
 class BandcampImportController final : public QObject
@@ -58,6 +59,10 @@ public:
 
     void start();
     void cancel();
+    [[nodiscard]] bool isFinished() const
+    {
+        return m_finished;
+    }
     void acceptScopeResult(const BandcampScopeResult& result);
     void acceptProgress(const BandcampOperationProgress& progress);
     void finishResolution(const BandcampOperationSummary& summary);
@@ -97,6 +102,7 @@ private:
     BandcampOperationId m_operationId{0};
     QList<BandcampPageUrl> m_submittedPages;
     Fooyin::UId m_destinationId;
+    Fooyin::UId m_createdPlaylistId;
     QPointer<QObject> m_libraryOwner;
     BandcampPlaylistApi m_playlistApi;
     CancelOperation m_cancelOperation;

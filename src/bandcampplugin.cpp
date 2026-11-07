@@ -31,6 +31,7 @@
 #include <QDateTime>
 #include <QMainWindow>
 #include <QMenu>
+#include <QMessageBox>
 
 #include <utility>
 
@@ -112,6 +113,21 @@ void BandcampPlugin::trackDialog(QDialog* dialog)
     QObject::connect(dialog, &QObject::destroyed, this, [this, dialog]() { m_dialogs.removeAll(dialog); });
 }
 
+bool BandcampPlugin::operationRunning() const
+{
+    for(const QPointer<BandcampImportController>& controller : m_imports) {
+        if(controller && !controller->isFinished()) {
+            return true;
+        }
+    }
+    for(const QPointer<BandcampRefreshController>& operation : m_refreshes) {
+        if(operation && !operation->isFinished()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QString BandcampPlugin::inputName() const
 {
     return tr("Bandcamp");
@@ -164,6 +180,12 @@ void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
     if(!m_service || !hasSelectedBandcampTracks(tracks)) {
         return;
     }
+    if(operationRunning()) {
+        QMessageBox::information(Utils::getMainWindow(), tr("Bandcamp"),
+                                 tr("A Bandcamp import or stream refresh is already running. Wait for it to finish "
+                                    "or cancel it first."));
+        return;
+    }
     FySettings fySettings;
     const auto settings = loadBandcampSettings(fySettings);
     const QPointer<Fooyin::PlaylistInteractor> interactor{m_playlistInteractor};
@@ -183,12 +205,18 @@ void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
     connect(operation, &BandcampRefreshController::finished, dialog, &BandcampProgressDialog::finishRefresh);
     connect(operation, &BandcampRefreshController::finished, operation, &QObject::deleteLater);
     connect(dialog, &QDialog::finished, operation, &BandcampRefreshController::cancel);
-    dialog->open();
+    dialog->show();
     operation->start(QDateTime::currentMSecsSinceEpoch());
 }
 
 void BandcampPlugin::showAddUrlDialog()
 {
+    if(operationRunning()) {
+        QMessageBox::information(Utils::getMainWindow(), tr("Bandcamp"),
+                                 tr("A Bandcamp import or stream refresh is already running. Wait for it to finish "
+                                    "or cancel it first."));
+        return;
+    }
     auto* dialog = new BandcampUrlDialog(Utils::getMainWindow());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     trackDialog(dialog);
@@ -225,7 +253,7 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         trackDialog(dialog);
         dialog->showRejection(rejected->error);
-        dialog->open();
+        dialog->show();
         return;
     }
 
@@ -267,9 +295,11 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
         }
         return playlist->id();
     };
-    playlistApi.insert = [interactor](const Fooyin::UId& playlistId, const Fooyin::TrackList& tracks) {
-        if(interactor) {
-            interactor->tracksToPlaylist(tracks, playlistId);
+    // The interactor's tracksToPlaylist() also activates the target playlist on every batch, which steals focus
+    // during long imports. Appending through the handler writes in the background only.
+    playlistApi.insert = [handler](const Fooyin::UId& playlistId, const Fooyin::TrackList& tracks) {
+        if(handler && !tracks.empty()) {
+            handler->appendToPlaylist(playlistId, tracks);
         }
     };
 
@@ -309,8 +339,14 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
     QObject::connect(controller, &BandcampImportController::finished, dialog, &BandcampProgressDialog::finish);
     QObject::connect(controller, &BandcampImportController::finished, controller,
                      [controller]() { controller->deleteLater(); });
+    QObject::connect(controller, &BandcampImportController::finished, this,
+                     [selection = m_playlistSelection](const BandcampImportSummary& summary) {
+                         if(selection && summary.createdPlaylistId.isValid() && summary.added > 0) {
+                             selection->changeCurrentPlaylist(summary.createdPlaylistId);
+                         }
+                     });
     QObject::connect(dialog, &QDialog::finished, controller, &BandcampImportController::cancel);
-    dialog->open();
+    dialog->show();
     controller->start();
 }
 } // namespace Fooyin::Bandcamp

@@ -2,6 +2,8 @@
 
 #include <QDialogButtonBox>
 #include <QLabel>
+#include <QMessageBox>
+#include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -62,8 +64,27 @@ void BandcampProgressDialog::updateProgress(const BandcampOperationProgress& pro
     }
 }
 
+void BandcampProgressDialog::reject()
+{
+    if(!m_running) {
+        QDialog::reject();
+        return;
+    }
+
+    const QPointer<BandcampProgressDialog> guard{this};
+    const auto answer
+        = QMessageBox::question(this, windowTitle(),
+                                m_mode == BandcampDialogMode::Refresh ? tr("Cancel the running stream refresh?")
+                                                                      : tr("Cancel the running import?"),
+                                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if(guard && answer == QMessageBox::Yes) {
+        QDialog::reject();
+    }
+}
+
 void BandcampProgressDialog::finishRefresh(const BandcampRefreshSummary& summary)
 {
+    m_running = false;
     m_status->setText(tr("Refresh finished (unique selected Bandcamp tracks): %1 updated, %2 unchanged, "
                          "%3 failed, %4 cancelled.")
                           .arg(summary.updated)
@@ -88,6 +109,7 @@ void BandcampProgressDialog::showIntegrationError(const QString& reason)
 
 void BandcampProgressDialog::finish(const BandcampImportSummary& summary)
 {
+    m_running    = false;
     QString text = tr("Import finished: %1 added, %2 failed, %3 cancelled.")
                        .arg(summary.added)
                        .arg(summary.failed)
@@ -102,6 +124,7 @@ void BandcampProgressDialog::finish(const BandcampImportSummary& summary)
 
 void BandcampProgressDialog::showRejection(const ResolutionError& error)
 {
+    m_running = false;
     m_status->setText(tr("Import could not start: %1").arg(error.reason));
     m_progress->hide();
     m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Close"));

@@ -30,10 +30,14 @@ public:
     void finishRefresh(const BandcampRefreshSummary& summary);
     void showRejection(const ResolutionError& error);
 
+    // Confirms before cancelling while the operation is still running.
+    void reject() override;
+
 private:
     BandcampDialogMode m_mode;
     QLabel* m_status{nullptr};
     QProgressBar* m_progress{nullptr};
     QDialogButtonBox* m_buttons{nullptr};
+    bool m_running{true};
 };
 } // namespace Fooyin::Bandcamp

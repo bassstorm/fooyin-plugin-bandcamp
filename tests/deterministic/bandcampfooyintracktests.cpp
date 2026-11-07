@@ -344,6 +344,7 @@ private slots:
     void guardsCallbacksAndObjectLifetimes();
     void correlatesAndRedactsEffectiveTransportChanges();
     void importsIntoCapturedUiPlaylist();
+    void reportsCreatedPlaylistForOpeningAfterImport();
     void importsPlaylistOnlyResidentMetadata();
     void createsNewForForcedAndInitiallyUnsuitableDestinations();
     void preservesOrderedAlbumBlocksAndRepeatedScopes();
@@ -1357,6 +1358,27 @@ void FooyinTrackTests::importsIntoCapturedUiPlaylist()
     QCOMPARE(playlists.createCalls, 0);
     QCOMPARE(playlists.insertedPlaylists, QList<Fooyin::UId>{selectedPlaylist});
     QVERIFY(playbackPlaylist != selectedPlaylist);
+}
+
+void FooyinTrackTests::reportsCreatedPlaylistForOpeningAfterImport()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    BandcampImportController controller{
+        1, {{BandcampPageKind::Album, AlbumSource, {}}}, true, {}, library.api, playlists.api, {}};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(1));
+    controller.finishResolution({1, 1, 1, 0, 0});
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QCOMPARE(summary.added, 1);
+    QCOMPARE(playlists.createCalls, 1);
+    QVERIFY(summary.createdPlaylistId.isValid());
+    QCOMPARE(playlists.insertedPlaylists, QList<Fooyin::UId>{summary.createdPlaylistId});
 }
 
 void FooyinTrackTests::importsPlaylistOnlyResidentMetadata()
