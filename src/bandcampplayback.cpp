@@ -2,6 +2,7 @@
 
 #include "bandcamplogging.h"
 #include "bandcampplaybackpreparation.h"
+#include "bandcampremotestream.h"
 #include "bandcampsettings.h"
 #include "bandcamptrackuri.h"
 
@@ -84,6 +85,7 @@ void playbackDiagnostic(qint64 trackId, const QString& event, const QString& rea
     qCWarning(BANDCAMP_TRACKS).noquote() << formatTraceEvent(context, event,
                                                              {DiagnosticField::text(QStringLiteral("reason"), reason)});
 }
+
 } // namespace
 
 struct BandcampPlaybackBridge::State
@@ -94,6 +96,9 @@ struct BandcampPlaybackBridge::State
     std::mutex remoteIoMutex;
     QPointer<Fooyin::SettingsManager> settings;
     FooyinLibraryApi libraryApi;
+    QPointer<BandcampLibraryGateway> persistenceGateway;
+    QPointer<QObject> persistenceContext;
+    std::mutex persistenceMutex;
     std::atomic_bool shuttingDown{false};
     std::stop_source shutdownSource;
     std::mutex waitersMutex;
@@ -165,8 +170,8 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
     }
     waiter->changed.notify_all();
 
-    auto* operation
-        = new BandcampPlaybackPreparation{state->service, track, options, state->libraryApi, state->service};
+    auto* operation = new BandcampPlaybackPreparation{
+        state->service, track, options, state->libraryApi, state->service, state->persistenceGateway.data()};
     {
         const std::scoped_lock lock{state->operationsMutex, waiter->mutex};
         if(state->shuttingDown.load(std::memory_order_acquire) || waiter->cancelled || waiter->completed) {
@@ -240,14 +245,17 @@ void cancelPreparation(const std::weak_ptr<BandcampPlaybackBridge::State>& weakS
 BandcampPlaybackBridge::BandcampPlaybackBridge(BandcampResolutionService* service,
                                                std::shared_ptr<Fooyin::AudioLoader> audioLoader,
                                                Fooyin::RemoteIoService* remoteIo, Fooyin::SettingsManager* settings,
-                                               FooyinLibraryApi libraryApi)
+                                               FooyinLibraryApi libraryApi, BandcampLibraryGateway* persistenceGateway,
+                                               QObject* persistenceContext)
     : m_state{std::make_shared<State>()}
 {
-    m_state->service     = service;
-    m_state->audioLoader = std::move(audioLoader);
-    m_state->remoteIo    = remoteIo;
-    m_state->settings    = settings;
-    m_state->libraryApi  = std::move(libraryApi);
+    m_state->service            = service;
+    m_state->audioLoader        = std::move(audioLoader);
+    m_state->remoteIo           = remoteIo;
+    m_state->settings           = settings;
+    m_state->libraryApi         = std::move(libraryApi);
+    m_state->persistenceGateway = persistenceGateway;
+    m_state->persistenceContext = persistenceContext;
 }
 
 BandcampPlaybackBridge::~BandcampPlaybackBridge() = default;
@@ -355,6 +363,35 @@ BandcampPlaybackBridge::Preparation BandcampPlaybackBridge::prepare(const Fooyin
     return Failure{reason};
 }
 
+void BandcampPlaybackBridge::persistStreamProperties(const Fooyin::Track& track,
+                                                     const BandcampStreamProperties& properties) const
+{
+    const auto state = m_state;
+    if(state->shuttingDown.load(std::memory_order_acquire) || properties.isEmpty()) {
+        return;
+    }
+    const auto id = parseBandcampTrackUri(track.filepath());
+    if(!id) {
+        return;
+    }
+    const CorrelationContext correlation{.trackId = *id};
+    const std::scoped_lock lock{state->persistenceMutex};
+    if(state->shuttingDown.load(std::memory_order_acquire) || !state->persistenceGateway
+       || !state->persistenceContext) {
+        return;
+    }
+    const QPointer<BandcampLibraryGateway> gateway{state->persistenceGateway};
+    const QPointer<QObject> context{state->persistenceContext};
+    QMetaObject::invokeMethod(
+        context,
+        [gateway, context, id = *id, properties, correlation]() mutable {
+            if(gateway && context) {
+                gateway->updateStreamProperties(id, properties, context, correlation, [](FooyinTrackCommitOutcome) { });
+            }
+        },
+        Qt::QueuedConnection);
+}
+
 void BandcampPlaybackBridge::shutdown()
 {
     const auto state = m_state;
@@ -379,6 +416,11 @@ void BandcampPlaybackBridge::shutdown()
     {
         const std::scoped_lock lock{state->remoteIoMutex};
         state->remoteIo.clear();
+    }
+    {
+        const std::scoped_lock lock{state->persistenceMutex};
+        state->persistenceGateway.clear();
+        state->persistenceContext.clear();
     }
     auto cancelOperations = [state]() {
         std::vector<QPointer<BandcampPlaybackPreparation>> operations;
@@ -543,6 +585,13 @@ public:
             return {};
         }
         m_trackId.store(*id, std::memory_order_release);
+        {
+            const std::scoped_lock lock{m_changedTrackMutex};
+            m_sourceTrack     = track;
+            m_changedTrack    = {};
+            m_hasChangedTrack = false;
+            m_streamFormat.reset();
+        }
         m_delegateFailureLogged.store(false, std::memory_order_release);
         m_delegateFault.store(false, std::memory_order_release);
         if(!m_bridge) {
@@ -574,17 +623,14 @@ public:
             }
 
             const QString safeUrl = QStringLiteral("https://bandcamp.invalid/track.mp3");
-            Fooyin::Track decoderTrack{track};
-            decoderTrack.setFilePath(safeUrl);
-            decoderTrack.removeExtraProperty(StreamProviderProperty);
-            decoderTrack.removeExtraProperty(BandcampSourceUrlProperty);
-            decoderTrack.removeExtraProperty(BandcampStreamUrlProperty);
-            decoderTrack.removeExtraProperty(BandcampExpiresAtProperty);
-            decoderTrack.removeExtraProperty(BandcampTrackIdProperty);
+            Fooyin::Track decoderTrack{safeUrl};
+            decoderTrack.setMetadataWasRead(true);
             Fooyin::AudioSource decoderSource;
             if(!openRemoteSource(transport.streamUrl, m_deadline)) {
-                playbackDiagnostic(*id, QStringLiteral("playback_stream_open_failed"),
-                                   QStringLiteral("The Bandcamp stream could not be opened."));
+                if(!abortToken().stop_requested()) {
+                    playbackDiagnostic(*id, QStringLiteral("playback_stream_open_failed"),
+                                       QStringLiteral("The Bandcamp stream could not be opened."));
+                }
                 return {};
             }
             decoderSource.filepath           = safeUrl;
@@ -628,7 +674,9 @@ public:
                 decoderSource.remoteOpenTimeout = m_hostOpenTimeout > std::chrono::milliseconds{0}
                                                     ? std::min(m_hostOpenTimeout, remainingOpenTime)
                                                     : remainingOpenTime;
-                const auto format               = inner->init(decoderSource, decoderTrack, options);
+                // Request source encoding even when the host did not request metadata updates.
+                const auto format
+                    = inner->init(decoderSource, decoderTrack, options | Fooyin::AudioDecoder::UpdateTracks);
                 if(format) {
                     if(m_remoteDevice) {
                         m_remoteDevice->setReconnectOnFinishedEnabled(false);
@@ -637,6 +685,16 @@ public:
                         stop();
                         return {};
                     }
+                    {
+                        const std::scoped_lock lock{m_changedTrackMutex};
+                        m_streamFormat = *format;
+                    }
+                    BandcampStreamProperties properties = bandcampDecoderStreamProperties(
+                        inner->trackHasChanged() ? inner->changedTrack() : Fooyin::Track{}, *format);
+                    if(properties.bitrate <= 0) {
+                        properties.bitrate = inner->bitrate();
+                    }
+                    publishStreamProperties(properties);
                     return format;
                 }
 
@@ -709,6 +767,13 @@ public:
         m_device.reset();
         m_hostOpenTimeout = {};
         m_trackId.store(0, std::memory_order_release);
+        {
+            const std::scoped_lock lock{m_changedTrackMutex};
+            m_sourceTrack     = {};
+            m_changedTrack    = {};
+            m_hasChangedTrack = false;
+            m_streamFormat.reset();
+        }
     }
 
     void seek(uint64_t positionMs) override
@@ -769,12 +834,16 @@ public:
 
     [[nodiscard]] bool trackHasChanged() const override
     {
-        return false;
+        refreshInnerStreamProperties();
+        const std::scoped_lock lock{m_changedTrackMutex};
+        return m_hasChangedTrack;
     }
 
     [[nodiscard]] Fooyin::Track changedTrack() const override
     {
-        return {};
+        refreshInnerStreamProperties();
+        const std::scoped_lock lock{m_changedTrackMutex};
+        return m_hasChangedTrack ? m_changedTrack : Fooyin::Track{};
     }
 
     [[nodiscard]] std::optional<TimedTrackChange> takeTimedTrackChange() override
@@ -810,6 +879,56 @@ protected:
     }
 
 private:
+    void refreshInnerStreamProperties() const
+    {
+        const auto inner = innerDecoder();
+        if(!inner) {
+            return;
+        }
+        try {
+            if(!inner->trackHasChanged()) {
+                return;
+            }
+            std::optional<Fooyin::AudioFormat> format;
+            {
+                const std::scoped_lock lock{m_changedTrackMutex};
+                format = m_streamFormat;
+            }
+            if(!format) {
+                return;
+            }
+            BandcampStreamProperties properties = bandcampDecoderStreamProperties(inner->changedTrack(), *format);
+            if(properties.bitrate <= 0) {
+                properties.bitrate = inner->bitrate();
+            }
+            publishStreamProperties(properties);
+        }
+        catch(...) {
+            reportDelegateFailure(QStringLiteral("playback_track_update_failed"));
+        }
+    }
+
+    void publishStreamProperties(const BandcampStreamProperties& properties) const
+    {
+        Fooyin::Track source;
+        bool changed = false;
+        {
+            const std::scoped_lock lock{m_changedTrackMutex};
+            source                = m_sourceTrack;
+            Fooyin::Track updated = m_hasChangedTrack ? m_changedTrack : m_sourceTrack;
+            applyBandcampStreamProperties(updated, properties);
+            if(bandcampStreamProperties(updated)
+               != bandcampStreamProperties(m_hasChangedTrack ? m_changedTrack : m_sourceTrack)) {
+                m_changedTrack    = std::move(updated);
+                m_hasChangedTrack = true;
+                changed           = true;
+            }
+        }
+        if(changed && m_bridge) {
+            m_bridge->persistStreamProperties(source, properties);
+        }
+    }
+
     [[nodiscard]] bool attemptStopped() const
     {
         return abortToken().stop_requested() || m_delegateFault.load(std::memory_order_acquire)
@@ -859,17 +978,15 @@ private:
             if(abortToken().stop_requested() || std::chrono::steady_clock::now() >= deadline) {
                 return false;
             }
-            remote.remoteDevice->setReconnectOnFinishedEnabled(false);
-            remote.remoteDevice->setReadCancellationToken(abortToken());
             bool ready = false;
             if(remote.device->isOpen() || remote.device->open(QIODevice::ReadOnly)) {
-                // Wait for response data before the first read. Qt caches isSequential() on the first
-                // read or peek, so an early read leaves seeks failing on range-capable streams.
-                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    deadline - std::chrono::steady_clock::now());
-                if(remaining > std::chrono::milliseconds{0}
-                   && remote.device->waitForReadyRead(static_cast<int>(
-                       std::clamp<std::int64_t>(remaining.count(), 1, std::numeric_limits<int>::max())))) {
+                remote.remoteDevice->setReconnectOnFinishedEnabled(false);
+                remote.remoteDevice->setReadCancellationToken(abortToken());
+                const auto timeout      = remote.openTimeout > std::chrono::milliseconds{0}
+                                            ? remote.openTimeout
+                                            : std::chrono::milliseconds{DecoderInitTimeoutMs};
+                const auto openDeadline = std::min(deadline, std::chrono::steady_clock::now() + timeout);
+                if(waitForRemoteStreamData(*remote.remoteDevice, abortToken(), openDeadline)) {
                     remote.remoteDevice->setNonBlockingReadsEnabled(true);
                     ready = !remote.device->peek(1).isEmpty();
                     remote.remoteDevice->setNonBlockingReadsEnabled(false);
@@ -896,6 +1013,11 @@ private:
     }
 
     std::shared_ptr<BandcampPlaybackBridge> m_bridge;
+    mutable std::mutex m_changedTrackMutex;
+    mutable Fooyin::Track m_sourceTrack;
+    mutable Fooyin::Track m_changedTrack;
+    mutable bool m_hasChangedTrack{false};
+    std::optional<Fooyin::AudioFormat> m_streamFormat;
     mutable std::mutex m_innerMutex;
     std::shared_ptr<Fooyin::AudioDecoder> m_inner;
     std::unique_ptr<QIODevice> m_device;

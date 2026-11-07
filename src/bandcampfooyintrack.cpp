@@ -12,6 +12,14 @@
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::Bandcamp {
+namespace {
+int sourceBitDepth(const QString& encoding, int depth)
+{
+    // Lossy decoders report PCM precision, not a source bit depth.
+    return encoding == u"Lossy"_s ? -1 : depth;
+}
+} // namespace
+
 BandcampResolvedTrackLookup::BandcampResolvedTrackLookup(const BandcampResolvedData& data)
 {
     if(const auto* album = std::get_if<BandcampAlbum>(&data)) {
@@ -62,13 +70,73 @@ Fooyin::Track makeFooyinTrack(const BandcampResolvedTrack& resolved,
     if(source.durationMs != 0) {
         track.setDuration(static_cast<uint64_t>(source.durationMs));
     }
-    track.setCodec(u"MP3"_s);
-
     track.setMetadataWasRead(true);
     setBandcampTransport(track, source);
     track.generateHash();
     track.clearWasModified();
     return track;
+}
+
+Fooyin::Track makeFooyinImportTrack(const BandcampImportTrack& imported,
+                                    std::shared_ptr<Fooyin::TrackMetadataStore> metadataStore)
+{
+    Fooyin::Track track = makeFooyinTrack(imported.resolved, std::move(metadataStore));
+    applyBandcampStreamProperties(track, imported.streamProperties);
+    track.generateHash();
+    track.clearWasModified();
+    return track;
+}
+
+bool BandcampStreamProperties::isEmpty() const
+{
+    return codec.isEmpty() && encoding.isEmpty() && sampleRate <= 0 && channels <= 0 && bitDepth <= 0 && bitrate <= 0;
+}
+
+BandcampStreamProperties bandcampStreamProperties(const Fooyin::Track& track)
+{
+    return {
+        .codec      = track.codec(),
+        .encoding   = track.encoding(),
+        .sampleRate = track.sampleRate(),
+        .channels   = track.channels(),
+        .bitDepth   = track.bitDepth(),
+        .bitrate    = track.bitrate(),
+    };
+}
+
+BandcampStreamProperties bandcampDecoderStreamProperties(const Fooyin::Track& track, const Fooyin::AudioFormat& format)
+{
+    return {
+        .codec      = track.codec(),
+        .encoding   = track.encoding(),
+        .sampleRate = format.sampleRate(),
+        .channels   = format.channelCount(),
+        .bitDepth   = sourceBitDepth(track.encoding(), format.bitdepth()),
+        .bitrate    = track.bitrate(),
+    };
+}
+
+void applyBandcampStreamProperties(Fooyin::Track& track, const BandcampStreamProperties& properties)
+{
+    if(!properties.codec.isEmpty()) {
+        track.setCodec(properties.codec);
+    }
+    if(!properties.encoding.isEmpty()) {
+        track.setEncoding(properties.encoding);
+    }
+    if(properties.sampleRate > 0) {
+        track.setSampleRate(properties.sampleRate);
+    }
+    if(properties.channels > 0) {
+        track.setChannels(properties.channels);
+    }
+    if(properties.bitDepth > 0) {
+        track.setBitDepth(properties.bitDepth);
+    }
+    track.setBitDepth(sourceBitDepth(track.encoding(), track.bitDepth()));
+    if(properties.bitrate > 0) {
+        track.setBitrate(properties.bitrate);
+    }
 }
 
 void setBandcampTransport(Fooyin::Track& track, const BandcampTrack& source)

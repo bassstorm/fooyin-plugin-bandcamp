@@ -72,28 +72,44 @@ class BandcampLibraryGateway final : public QObject
 public:
     using Completion = std::function<void(FooyinTrackCommitOutcome)>;
 
+    struct StreamPropertiesUpdate
+    {
+        qint64 trackId{0};
+        BandcampStreamProperties properties;
+    };
+
     explicit BandcampLibraryGateway(FooyinLibraryApi api, QObject* parent = nullptr);
     ~BandcampLibraryGateway() override;
 
+    // Cancels the request with this token without withdrawing other clients' requests.
+    void cancelRequest(quint64 token);
     void cancel();
-    void commit(QList<BandcampResolvedTrack> incoming, QObject* callbackContext, CorrelationContext correlation,
-                Completion completion, int timeoutMs = LibraryWriteTimeoutMs);
-    void refreshTransport(BandcampResolvedTrack incoming, QObject* callbackContext, CorrelationContext correlation,
-                          Completion completion, int timeoutMs = LibraryWriteTimeoutMs);
+    quint64 commit(QList<BandcampResolvedTrack> incoming, QObject* callbackContext, CorrelationContext correlation,
+                   Completion completion, int timeoutMs = LibraryWriteTimeoutMs);
+    quint64 commitImport(QList<BandcampImportTrack> incoming, QObject* callbackContext, CorrelationContext correlation,
+                         Completion completion, int timeoutMs = LibraryWriteTimeoutMs);
+    quint64 updateStreamProperties(qint64 trackId, BandcampStreamProperties properties, QObject* callbackContext,
+                                   CorrelationContext correlation, Completion completion,
+                                   int timeoutMs = LibraryWriteTimeoutMs);
+    quint64 refreshTransport(BandcampResolvedTrack incoming, QObject* callbackContext, CorrelationContext correlation,
+                             Completion completion, int timeoutMs = LibraryWriteTimeoutMs);
 
 private:
-    void enqueue(QList<BandcampResolvedTrack> incoming, int timeoutMs, QObject* callbackContext,
-                 CorrelationContext correlation, Completion completion, bool refreshOnly);
+    [[nodiscard]] quint64 enqueue(QList<BandcampImportTrack> incoming, int timeoutMs, QObject* callbackContext,
+                                  CorrelationContext correlation, Completion completion, bool refreshOnly,
+                                  std::optional<StreamPropertiesUpdate> propertiesUpdate = std::nullopt);
     struct CommitRequest
     {
         quint64 token{0};
-        QList<BandcampResolvedTrack> incoming;
+        QList<BandcampImportTrack> incoming;
         int timeoutMs{0};
         QPointer<QObject> callbackContext;
         CorrelationContext correlation;
         Completion completion;
         QMetaObject::Connection receiverDestroyed;
         bool refreshOnly{false};
+        bool reportCancellation{false};
+        std::optional<StreamPropertiesUpdate> propertiesUpdate;
     };
 
     struct ActiveCommit

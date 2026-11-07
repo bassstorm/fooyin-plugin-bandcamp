@@ -55,7 +55,8 @@ class BandcampRefreshController final : public QObject
     Q_OBJECT
 public:
     BandcampRefreshController(BandcampResolutionService* service, Fooyin::TrackList selected, OperationOptions options,
-                              FooyinLibraryApi libraryApi, QObject* parent = nullptr);
+                              FooyinLibraryApi libraryApi, QObject* parent = nullptr,
+                              BandcampLibraryGateway* sharedGateway = nullptr);
     ~BandcampRefreshController() override;
     void start(qint64 nowMs);
     void cancel();
@@ -71,6 +72,7 @@ private:
     void settle(qint64 id, BandcampRefreshOutcome outcome, bool alreadyLogged = false);
     void finishIfReady();
     void withdrawSource();
+    void cancelGatewayRequest();
     void failPending(BandcampRefreshFailure error);
     void stopWithFailure(BandcampRefreshFailure error);
 
@@ -78,7 +80,9 @@ private:
     Fooyin::TrackList m_selected;
     OperationOptions m_options;
     FooyinLibraryApi m_libraryApi;
-    BandcampLibraryGateway* m_gateway{nullptr};
+    QPointer<BandcampLibraryGateway> m_gateway;
+    quint64 m_gatewayRequest{0};
+    bool m_ownsGateway{false};
     QHash<QString, QList<qint64>> m_consumers;
     QSet<qint64> m_unsettled;
     qsizetype m_anonymousUnsettled{0};

@@ -27,12 +27,14 @@ bool hasSelectedBandcampTracks(const Fooyin::TrackList& selection)
 
 BandcampRefreshController::BandcampRefreshController(BandcampResolutionService* service, Fooyin::TrackList selected,
                                                      OperationOptions options, FooyinLibraryApi libraryApi,
-                                                     QObject* parent)
+                                                     QObject* parent, BandcampLibraryGateway* sharedGateway)
     : QObject{parent}
     , m_service{service}
     , m_selected{std::move(selected)}
     , m_options{options}
     , m_libraryApi{std::move(libraryApi)}
+    , m_gateway{sharedGateway}
+    , m_ownsGateway{!sharedGateway}
 {
     if(service) {
         connect(service, &BandcampResolutionService::scopeResolved, this, &BandcampRefreshController::acceptScope);
@@ -64,9 +66,7 @@ BandcampRefreshController::~BandcampRefreshController()
 {
     m_finished = true;
     withdrawSource();
-    if(m_gateway) {
-        m_gateway->cancel();
-    }
+    cancelGatewayRequest();
 }
 
 void BandcampRefreshController::start(qint64 nowMs)
@@ -211,31 +211,39 @@ void BandcampRefreshController::pump()
     const auto context = CorrelationContext{.albumId = track.album ? track.album->id : 0, .trackId = id};
     m_writingTrackId   = id;
     const QPointer<BandcampRefreshController> guard{this};
+    if(!m_gateway && !m_ownsGateway) {
+        m_writingTrackId = 0;
+        stopWithFailure(
+            {BandcampRefreshError::SourceUnavailable, QStringLiteral("The library service is unavailable.")});
+        return;
+    }
     if(!m_gateway) {
         m_gateway = new BandcampLibraryGateway{std::move(m_libraryApi), this};
     }
-    m_gateway->refreshTransport(std::move(track), this, context, [guard, id](FooyinTrackCommitOutcome outcome) {
-        if(!guard) {
-            return;
-        }
-        if(const auto* success = std::get_if<FooyinTrackCommitSuccess>(&outcome)) {
-            guard->settle(id, success->updatedResidentCount > 0 ? BandcampRefreshSuccess::Updated
-                                                                : BandcampRefreshSuccess::Unchanged);
-        }
-        else if(std::get<FooyinTrackCommitFailure>(outcome).code == FooyinTrackCommitErrorCode::Cancelled) {
-            guard->settle(id, BandcampRefreshCancelled{});
-        }
-        else {
-            guard->settle(id,
-                          BandcampRefreshFailure{BandcampRefreshError::WriteFailed,
-                                                 std::get<FooyinTrackCommitFailure>(outcome).reason},
-                          true);
-        }
-        if(guard) {
-            guard->m_writingTrackId = 0;
-            guard->pump();
-        }
-    });
+    m_gatewayRequest
+        = m_gateway->refreshTransport(std::move(track), this, context, [guard, id](FooyinTrackCommitOutcome outcome) {
+              if(!guard) {
+                  return;
+              }
+              guard->m_gatewayRequest = 0;
+              if(const auto* success = std::get_if<FooyinTrackCommitSuccess>(&outcome)) {
+                  guard->settle(id, success->updatedResidentCount > 0 ? BandcampRefreshSuccess::Updated
+                                                                      : BandcampRefreshSuccess::Unchanged);
+              }
+              else if(std::get<FooyinTrackCommitFailure>(outcome).code == FooyinTrackCommitErrorCode::Cancelled) {
+                  guard->settle(id, BandcampRefreshCancelled{});
+              }
+              else {
+                  guard->settle(id,
+                                BandcampRefreshFailure{BandcampRefreshError::WriteFailed,
+                                                       std::get<FooyinTrackCommitFailure>(outcome).reason},
+                                true);
+              }
+              if(guard) {
+                  guard->m_writingTrackId = 0;
+                  guard->pump();
+              }
+          });
 }
 
 void BandcampRefreshController::settle(qint64 id, BandcampRefreshOutcome outcome, bool alreadyLogged)
@@ -283,6 +291,20 @@ void BandcampRefreshController::withdrawSource()
     }
 }
 
+void BandcampRefreshController::cancelGatewayRequest()
+{
+    const quint64 token = std::exchange(m_gatewayRequest, 0);
+    if(!m_gateway) {
+        return;
+    }
+    if(m_ownsGateway) {
+        m_gateway->cancel();
+    }
+    else {
+        m_gateway->cancelRequest(token);
+    }
+}
+
 void BandcampRefreshController::cancel()
 {
     if(m_finished || m_stopping) {
@@ -294,9 +316,7 @@ void BandcampRefreshController::cancel()
     if(!guard) {
         return;
     }
-    if(m_gateway) {
-        m_gateway->cancel();
-    }
+    cancelGatewayRequest();
     if(!guard) {
         return;
     }
@@ -346,9 +366,7 @@ void BandcampRefreshController::stopWithFailure(BandcampRefreshFailure error)
     if(!guard) {
         return;
     }
-    if(m_gateway) {
-        m_gateway->cancel();
-    }
+    cancelGatewayRequest();
     if(!guard) {
         return;
     }

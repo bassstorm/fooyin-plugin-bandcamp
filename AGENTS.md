@@ -15,7 +15,7 @@ Each stage of the pipeline has one clear owner and responsibility:
 | **Assembly & Admission** (`bandcampassembly.*`) | Reconciling track and parent-album candidates, enforcing authority rules, and validating required fields for the requested scope. | Raw HTML/JSON access or heuristic title/number cleanup. |
 | **Post-Processors** (`bandcamppostprocessor.*`) | Ordered semantic refinement of admitted album metadata (first) and track metadata (second). | Rejecting resources, removing tracks, changing identities/streams, or raw source access. |
 | **Resolver & Orchestrator** (`bandcampattemptsupervisor.*`, `bandcamplistingresolver.*`, `bandcampreleaseresolver.*`, `bandcamporchestrator.*`, `bandcampresolutionservice.*`) | Discography unfolding, request deduplication, parent acquisition, bounded parallelism, operation-scoped domain caching, and input-order preservation. | Source parsing or Fooyin database/playlist mutations. |
-| **Fooyin Integration** (`bandcampfooyintrack.*`, `bandcamplibrarygateway.*`, `bandcampimportcontroller.*`, `bandcamprefreshcontroller.*`, `bandcampplaybackpreparation.*`, `bandcampplayback.*`, `bandcampprogressdialog.*`, `bandcampplugin.*`) | Projecting domain tracks to Fooyin tracks, one-way snapshot transport writes, playlist import, stream refresh, and playback bridging. | Metadata normalization or Bandcamp source interpretation. |
+| **Fooyin Integration** (`bandcampfooyintrack.*`, `bandcamplibrarygateway.*`, `bandcampimportcontroller.*`, `bandcampstreamprobe.*`, `bandcamprefreshcontroller.*`, `bandcampplaybackpreparation.*`, `bandcampplayback.*`, `bandcampprogressdialog.*`, `bandcampplugin.*`) | Projecting domain tracks to Fooyin tracks, optional actual stream-property probing, one-way snapshot metadata/transport writes, playlist import, stream refresh, and playback bridging. | Metadata normalization or Bandcamp source interpretation. |
 
 Do not split a single state machine across layers or mix UI batch workflows with single-track audio-thread preparation.
 
@@ -48,6 +48,7 @@ Do not split a single state machine across layers or mix UI batch workflows with
 - **Never crash or block Fooyin.** Fooyin process stability takes precedence over completing an operation. No blocking network wait may run on the UI thread.
 - **Bound external resources.** Enforce explicit limits on response bytes, parser nesting/sizes, redirects, in-flight requests, per-attempt deadlines, and a bounded retry budget. Resource-limit violations return structured failures, never silent truncation.
 - **Deterministic async lifetimes.** Every async operation must reach **exactly one** terminal state (`Success`, `Failure`, or `Cancelled`). Guard `QObject::connect` lambdas with the true receiver lifetime, synchronize cross-thread state shared with the audio thread, and cancel/clean up child operations and dialogs deterministically on `shutdown()` and destruction.
+- **Background-worker teardown.** Work that survives plugin-object teardown must retain valid state and executable code until completion, without blocking the UI thread.
 - **Explicit outcomes over exceptions.** Use typed result/outcome values (`ResolutionOutcome`) for expected failures. Contain exceptions only at external library or top-level host decoder entry points.
 
 ---
@@ -85,7 +86,8 @@ Do not split a single state machine across layers or mix UI batch workflows with
 
 - **Canonical identity:** Every Fooyin Bandcamp track uses `bandcamp://track/<trackId>` as its immutable `filepath` whether imported from an album, track page, or discography.
 - **Separated transport state:** Mutable playback locators (`_STREAM_PROVIDER`, `_BANDCAMP_SOURCE_URL`, `_BANDCAMP_STREAM_URL`, `_BANDCAMP_EXPIRES_AT`) live in Fooyin `ExtraProperties`. `sourceUrl` is always the highest containing release (album URL for album members, track URL for standalone tracks).
-- **One-way snapshot persistence:** Re-importing or refreshing existing tracks snapshots resident records at commit start (preferring library residents, then the first matching playlist occurrence), preserves user-edited metadata and extra tags, and merges only transport properties.
+- **Observed stream properties:** Codec, encoding, sample rate, channel count, bit depth, and bitrate are Fooyin integration data discovered from actual decoder/read results. Never infer them from Bandcamp source fields; merge only observed values.
+- **One-way snapshot persistence:** Re-importing or refreshing existing tracks snapshots resident records at commit start (preferring library residents, then the first matching playlist occurrence), preserves user-edited metadata and extra tags, and merges only the submitted stream properties and/or transport properties.
 - **Refresh by release `sourceUrl`:** Manual refresh and playback preparation refresh streams that are expired, untrusted, or within the configured remaining-lifetime window by resolving deduplicated canonical `sourceUrl` releases and matching tracks by stable ID.
 
 ---
@@ -102,7 +104,7 @@ Do not split a single state machine across layers or mix UI batch workflows with
 
 ### Testing & Build Verification
 
-- **Deterministic suite (`tests/deterministic/`):** Covers parser extraction, assembly/authority, post-processors, orchestration/resolution, identity/transport persistence, playback bridging, logging/redaction, and resource/lifecycle bounds using synthetic inputs and contract-valid internal inputs.
+- **Deterministic suite (`tests/deterministic/`):** Covers parser extraction, assembly/authority, post-processors, orchestration/resolution, identity/transport and stream-property persistence, playback bridging, logging/redaction, and resource/lifecycle bounds using synthetic inputs and contract-valid internal inputs.
 - **Live suite (`tests/live/`):** Happy-path smoke tests against real Bandcamp URLs (`ctest --preset tests-live`), excluded from CI (`tests-ci`).
 - **Formatting:** Format C++ with `cmake --preset dev && cmake --build --preset format` (clang-format 22 from the dev container, using the repository `.clang-format`). CI fails on violations via `format-check`.
 - Validate code changes with the sanitized deterministic suite:

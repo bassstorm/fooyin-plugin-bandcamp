@@ -40,13 +40,15 @@ public:
 
     BandcampPlaybackBridge(BandcampResolutionService* service, std::shared_ptr<Fooyin::AudioLoader> audioLoader,
                            Fooyin::RemoteIoService* remoteIo, Fooyin::SettingsManager* settings,
-                           FooyinLibraryApi libraryApi);
+                           FooyinLibraryApi libraryApi, BandcampLibraryGateway* persistenceGateway = nullptr,
+                           QObject* persistenceContext = nullptr);
     ~BandcampPlaybackBridge();
 
     [[nodiscard]] std::shared_ptr<Fooyin::AudioLoader> audioLoader() const;
     [[nodiscard]] bool createRemoteStreamSource(const QUrl& url, Fooyin::RemoteStreamSource& source) const;
     [[nodiscard]] std::stop_token shutdownToken() const;
     [[nodiscard]] Preparation prepare(const Fooyin::Track& track, std::stop_token cancellation) const;
+    void persistStreamProperties(const Fooyin::Track& track, const BandcampStreamProperties& properties) const;
     void shutdown();
 
 private:

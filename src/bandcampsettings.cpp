@@ -28,6 +28,24 @@ int readClamped(const QSettings& settings, const char* key, int fallback, int mi
     }
     return static_cast<int>(clamped);
 }
+
+bool readBool(const QSettings& settings, const char* key, bool fallback)
+{
+    if(!settings.contains(key)) {
+        return fallback;
+    }
+
+    const QString value = settings.value(key).toString().trimmed().toLower();
+    if(value == QStringLiteral("true") || value == QStringLiteral("1")) {
+        return true;
+    }
+    if(value == QStringLiteral("false") || value == QStringLiteral("0")) {
+        return false;
+    }
+
+    qCWarning(BANDCAMP_SETTINGS) << "value" << key << "is not a boolean, using" << fallback;
+    return fallback;
+}
 } // namespace
 
 BandcampSettings loadBandcampSettings(const QSettings& settings)
@@ -46,6 +64,7 @@ BandcampSettings loadBandcampSettings(const QSettings& settings)
         = readClamped(settings, MaxAttemptsKey, DefaultAttemptsPerPage, MinAttemptsPerPage, MaxAttemptsPerPage);
     values.attemptCooldownMs = readClamped(settings, AttemptCooldownKey, DefaultAttemptCooldownMs, MinAttemptCooldownMs,
                                            MaxAttemptCooldownMs);
+    values.probeStreamsOnImport = readBool(settings, ProbeStreamsOnImportKey, false);
     return values;
 }
 
@@ -57,6 +76,7 @@ void saveBandcampSettings(QSettings& settings, const BandcampSettings& values)
     settings.setValue(PrePlaybackRefreshWindowKey, values.prePlaybackRefreshWindowMinutes);
     settings.setValue(MaxAttemptsKey, values.maxAttempts);
     settings.setValue(AttemptCooldownKey, values.attemptCooldownMs);
+    settings.setValue(ProbeStreamsOnImportKey, values.probeStreamsOnImport);
 }
 
 qint64 refreshWindowMilliseconds(int minutes)

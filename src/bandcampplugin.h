@@ -29,6 +29,7 @@ class PlaylistInteractor;
 namespace Fooyin::Bandcamp {
 class BandcampImportController;
 class BandcampRefreshController;
+class BandcampStreamProbe;
 class BandcampPlugin : public QObject,
                        public Plugin,
                        public CorePlugin,
@@ -60,6 +61,8 @@ private:
     // Owned by this plugin through the QObject parent tree.
     BandcampResolutionService* m_service{nullptr};
     QPointer<Fooyin::RemoteIoService> m_remoteIo;
+    BandcampStreamProbe* m_streamProbe{nullptr};
+    BandcampLibraryGateway* m_libraryGateway{nullptr};
     std::shared_ptr<BandcampPlaybackBridge> m_playbackBridge;
     QPointer<Fooyin::CurrentPlaylistController> m_playlistSelection;
     QPointer<Fooyin::PlaylistInteractor> m_playlistInteractor;

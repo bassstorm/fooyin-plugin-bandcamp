@@ -50,8 +50,11 @@ add_library(bandcamp_fooyin STATIC
     src/bandcamplibrarygateway.h
     src/bandcampimportcontroller.cpp
     src/bandcampimportcontroller.h
+    src/bandcampstreamprobe.cpp
+    src/bandcampstreamprobe.h
     src/bandcamprefreshcontroller.cpp
     src/bandcamprefreshcontroller.h
+    src/bandcampremotestream.h
 )
 set_target_properties(bandcamp_fooyin PROPERTIES
     AUTOMOC ON

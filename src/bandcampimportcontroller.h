@@ -2,6 +2,7 @@
 
 #include "bandcamplibrarygateway.h"
 #include "bandcampresolutionservice.h"
+#include "bandcampstreamprobe.h"
 
 #include <utils/id.h>
 
@@ -51,7 +52,8 @@ public:
     BandcampImportController(BandcampOperationId operationId, QList<BandcampPageUrl> submittedPages,
                              bool forceNewPlaylist, Fooyin::UId selectedPlaylistId, FooyinLibraryApi libraryApi,
                              BandcampPlaylistApi playlistApi, CancelOperation cancelOperation,
-                             QObject* parent = nullptr);
+                             BandcampStreamProbe* streamProbe = nullptr, bool probeStreams = false,
+                             QObject* parent = nullptr, BandcampLibraryGateway* sharedGateway = nullptr);
     ~BandcampImportController() override;
 
     void start();
@@ -70,15 +72,20 @@ private:
     enum class HandoffPhase : quint8
     {
         None,
+        Probing,
         Gateway,
         PreparingDestination,
         Inserting,
     };
 
     void pump();
+    void onProbe(const BandcampScopeResult& scope, QList<BandcampResolvedTrack> tracks,
+                 QList<BandcampStreamProbeResult> results);
+    void commitScope(const BandcampScopeResult& scope, QList<BandcampImportTrack> tracks);
     void onCommit(const BandcampScopeResult& scope, FooyinTrackCommitOutcome outcome);
     void failRun(QString reason, bool countCurrentScope, bool logFailure = true);
     void requestResolutionCancellation();
+    void cancelGatewayRequest();
     void clearPendingAsCancelled();
     void finishIfReady();
     [[nodiscard]] bool playlistOwnersAvailable() const;
@@ -93,7 +100,12 @@ private:
     QPointer<QObject> m_libraryOwner;
     BandcampPlaylistApi m_playlistApi;
     CancelOperation m_cancelOperation;
-    BandcampLibraryGateway* m_gateway{nullptr};
+    QPointer<BandcampLibraryGateway> m_gateway;
+    quint64 m_gatewayRequest{0};
+    bool m_ownsGateway{false};
+    QPointer<BandcampStreamProbe> m_streamProbe;
+    quint64 m_probeToken{0};
+    bool m_probeStreams{false};
     QQueue<BandcampScopeResult> m_pendingScopes;
     qsizetype m_added{0};
     qsizetype m_failed{0};

@@ -10,12 +10,14 @@
 namespace Fooyin::Bandcamp {
 BandcampPlaybackPreparation::BandcampPlaybackPreparation(BandcampResolutionService* service, Fooyin::Track track,
                                                          OperationOptions options, FooyinLibraryApi libraryApi,
-                                                         QObject* parent)
+                                                         QObject* parent, BandcampLibraryGateway* sharedGateway)
     : QObject{parent}
     , m_service{service}
     , m_track{std::move(track)}
     , m_options{options}
     , m_libraryApi{std::move(libraryApi)}
+    , m_gateway{sharedGateway}
+    , m_ownsGateway{!sharedGateway}
 {
     if(service) {
         connect(service, &BandcampResolutionService::scopeResolved, this, &BandcampPlaybackPreparation::acceptScope);
@@ -57,9 +59,7 @@ BandcampPlaybackPreparation::~BandcampPlaybackPreparation()
             m_service->cancel(m_operationId);
         }
     }
-    if(m_gateway) {
-        m_gateway->cancel();
-    }
+    cancelGatewayRequest();
 }
 
 void BandcampPlaybackPreparation::start(qint64 nowMs)
@@ -147,12 +147,23 @@ void BandcampPlaybackPreparation::acceptScope(const BandcampScopeResult& result)
     }
 
     m_writePending = true;
-    m_gateway      = new BandcampLibraryGateway{std::move(m_libraryApi), this};
-    const CorrelationContext context{.albumId = selected->album ? selected->album->id : 0, .trackId = m_trackId};
-    m_gateway->refreshTransport(std::move(*selected), this, context, [this](FooyinTrackCommitOutcome) {
+    if(!m_gateway && !m_ownsGateway) {
+        qCWarning(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+            CorrelationContext{.trackId = m_trackId}, QStringLiteral("playback_transport_persistence_unavailable"), {});
         m_writePending = false;
         finishIfReady();
-    });
+        return;
+    }
+    if(!m_gateway) {
+        m_gateway = new BandcampLibraryGateway{std::move(m_libraryApi), this};
+    }
+    const CorrelationContext context{.albumId = selected->album ? selected->album->id : 0, .trackId = m_trackId};
+    m_gatewayRequest
+        = m_gateway->refreshTransport(std::move(*selected), this, context, [this](FooyinTrackCommitOutcome) {
+              m_gatewayRequest = 0;
+              m_writePending   = false;
+              finishIfReady();
+          });
 }
 
 void BandcampPlaybackPreparation::cancel()
@@ -181,11 +192,23 @@ void BandcampPlaybackPreparation::cancel()
     if(!guard) {
         return;
     }
-    if(m_gateway) {
-        m_gateway->cancel();
-    }
+    cancelGatewayRequest();
     if(guard) {
         finishIfReady();
+    }
+}
+
+void BandcampPlaybackPreparation::cancelGatewayRequest()
+{
+    const quint64 token = std::exchange(m_gatewayRequest, 0);
+    if(!m_gateway) {
+        return;
+    }
+    if(m_ownsGateway) {
+        m_gateway->cancel();
+    }
+    else {
+        m_gateway->cancelRequest(token);
     }
 }
 

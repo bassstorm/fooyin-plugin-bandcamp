@@ -221,6 +221,7 @@ private slots:
         QCOMPARE(values.attemptCooldownMs, DefaultAttemptCooldownMs);
         QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Default);
         QCOMPARE(values.prePlaybackRefreshWindowMinutes, DefaultRefreshWindowMinutes);
+        QVERIFY(!values.probeStreamsOnImport);
     }
 
     void roundTrip()
@@ -228,8 +229,8 @@ private slots:
         const auto path = m_dir.filePath(u"roundtrip.ini"_s);
         {
             QSettings settings(path, QSettings::IniFormat);
-            saveBandcampSettings(settings,
-                                 {5, 25000, BandcampDiscographyOrder::Descending, MinRefreshWindowMinutes, 7, 1500});
+            saveBandcampSettings(
+                settings, {5, 25000, BandcampDiscographyOrder::Descending, MinRefreshWindowMinutes, 7, 1500, true});
         }
         QSettings settings(path, QSettings::IniFormat);
         const auto values = loadBandcampSettings(settings);
@@ -239,6 +240,7 @@ private slots:
         QCOMPARE(values.attemptCooldownMs, 1500);
         QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Descending);
         QCOMPARE(values.prePlaybackRefreshWindowMinutes, MinRefreshWindowMinutes);
+        QVERIFY(values.probeStreamsOnImport);
     }
 
     void outOfRangeIsClamped()
@@ -282,12 +284,14 @@ private slots:
         settings.setValue(AttemptCooldownKey, u"soon"_s);
         settings.setValue(DiscographyOrderKey, u"later"_s);
         settings.setValue(PrePlaybackRefreshWindowKey, u"never"_s);
+        settings.setValue(ProbeStreamsOnImportKey, u"sometimes"_s);
         const auto values = loadBandcampSettings(settings);
         QCOMPARE(values.parallelism, DefaultParallelism);
         QCOMPARE(values.attemptTimeoutMs, DefaultAttemptTimeoutMs);
         QCOMPARE(values.maxAttempts, DefaultAttemptsPerPage);
         QCOMPARE(values.attemptCooldownMs, DefaultAttemptCooldownMs);
         QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Default);
+        QVERIFY(!values.probeStreamsOnImport);
         QCOMPARE(values.prePlaybackRefreshWindowMinutes, DefaultRefreshWindowMinutes);
     }
 

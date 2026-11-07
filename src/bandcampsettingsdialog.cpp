@@ -2,6 +2,7 @@
 
 #include "bandcampsettings.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QGridLayout>
@@ -20,6 +21,7 @@ BandcampSettingsDialog::BandcampSettingsDialog(QWidget* parent)
     , m_attemptCooldown{new QSpinBox(this)}
     , m_discographyOrder{new QComboBox(this)}
     , m_refreshWindow{new QSpinBox(this)}
+    , m_probeStreams{new QCheckBox(tr("Probe stream properties during import"), this)}
 {
     setWindowTitle(tr("Bandcamp Settings"));
 
@@ -67,6 +69,8 @@ BandcampSettingsDialog::BandcampSettingsDialog(QWidget* parent)
     resilienceLayout->addWidget(m_attemptCooldown, 2, 1);
 
     auto* note = new QLabel(tr("Changes apply to the next submission."), this);
+    m_probeStreams->setToolTip(tr("Read stream headers with Fooyin decoders to discover codec and audio properties. "
+                                  "Probe failures do not prevent import."));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     QObject::connect(buttons, &QDialogButtonBox::accepted, this, &BandcampSettingsDialog::accept);
@@ -80,9 +84,10 @@ BandcampSettingsDialog::BandcampSettingsDialog(QWidget* parent)
     layout->addWidget(m_discographyOrder, 1, 1);
     layout->addWidget(refreshLabel, 2, 0);
     layout->addWidget(m_refreshWindow, 2, 1);
-    layout->addWidget(resilienceGroup, 3, 0, 1, 2);
-    layout->addWidget(note, 4, 0, 1, 2);
-    layout->addWidget(buttons, 5, 0, 1, 2);
+    layout->addWidget(m_probeStreams, 3, 0, 1, 2);
+    layout->addWidget(resilienceGroup, 4, 0, 1, 2);
+    layout->addWidget(note, 5, 0, 1, 2);
+    layout->addWidget(buttons, 6, 0, 1, 2);
 
     const BandcampSettings current = loadBandcampSettings(m_settings);
     m_parallelism->setValue(current.parallelism);
@@ -91,6 +96,7 @@ BandcampSettingsDialog::BandcampSettingsDialog(QWidget* parent)
     m_attemptCooldown->setValue(current.attemptCooldownMs / 1000);
     m_discographyOrder->setCurrentIndex(static_cast<int>(current.discographyOrder));
     m_refreshWindow->setValue(current.prePlaybackRefreshWindowMinutes);
+    m_probeStreams->setChecked(current.probeStreamsOnImport);
 }
 
 void BandcampSettingsDialog::accept()
@@ -102,6 +108,7 @@ void BandcampSettingsDialog::accept()
     values.attemptCooldownMs               = m_attemptCooldown->value() * 1000;
     values.discographyOrder                = static_cast<BandcampDiscographyOrder>(m_discographyOrder->currentIndex());
     values.prePlaybackRefreshWindowMinutes = m_refreshWindow->value();
+    values.probeStreamsOnImport            = m_probeStreams->isChecked();
     saveBandcampSettings(m_settings, values);
 
     QDialog::accept();

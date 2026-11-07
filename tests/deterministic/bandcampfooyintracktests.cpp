@@ -5,6 +5,9 @@
 #include "bandcamplogging.h"
 #include "bandcamptrackuri.h"
 
+#include <core/scripting/scriptparser.h>
+#include <core/scripting/scriptregistry.h>
+
 #include <QPromise>
 #include <QThread>
 #include <QtTest>
@@ -315,11 +318,21 @@ private slots:
     void canonicalTrackUriRoundTrips();
     void rejectsMalformedTrackUris();
     void projectsTrustedAlbumMetadataWithoutInference();
+    void projectsOnlyObservedStreamProperties();
+    void partialStreamObservationsPreserveSourceBitDepth_data();
+    void partialStreamObservationsPreserveSourceBitDepth();
+    void reimportRepairsPersistedLossyBitDepth_data();
+    void reimportRepairsPersistedLossyBitDepth();
     void standaloneProjectionLeavesParentFieldsAbsent();
     void parsesOnlyObservedBandcampExpiryForm();
     void preservesLargeRepeatedInputOccurrences();
     void mergesOnlyTransportAndPreservesResidentMetadata_data();
     void mergesOnlyTransportAndPreservesResidentMetadata();
+    void mergesObservedStreamPropertiesAndPreservesResidentState();
+    void updatesStreamPropertiesFromFirstPlaylistResident();
+    void logsStreamPropertyDeltasAtDebugWithoutTrace();
+    void serializesSharedGatewaySnapshotsAcrossWrites();
+    void cancelsOnlyTheRequestedGatewayWrite();
     void selectsLibraryThenFirstPlaylistOccurrence();
     void rejectsConflictingPersistedTrackIdMirror_data();
     void rejectsConflictingPersistedTrackIdMirror();
@@ -338,6 +351,11 @@ private slots:
     void stopsWhenDestinationChangesDuringPreparation();
     void waitsForGatewayBeforeFinishingResolutionImport();
     void cancellationWithdrawsPendingGatewayHandoff();
+    void unavailableProbeFallsBackAndLogsOncePerTrack();
+    void failedProbesStillAdmitResolvedScope();
+    void cancellationDuringProbeSkipsResolvedScope_data();
+    void cancellationDuringProbeSkipsResolvedScope();
+    void cancellationDuringProbePreservesAlreadyInsertedScopes();
     void deletingControllerFromPlaylistCallbackWithdrawsResolution();
     void cancellationDuringPlaylistCreationDoesNotInsert();
     void cancellationDuringInsertionDefersSummaryAndCountsAcceptedBlock();
@@ -399,7 +417,6 @@ void FooyinTrackTests::projectsTrustedAlbumMetadataWithoutInference()
     QCOMPARE(track.trackNumber(), u"4"_s);
     QCOMPARE(track.trackTotal(), u"8"_s);
     QCOMPARE(track.duration(), uint64_t{12345});
-    QCOMPARE(track.codec(), u"MP3"_s);
     QVERIFY(track.extraTag(u"COVERART"_s).isEmpty());
     QVERIFY(track.metadataWasRead());
     QVERIFY(!track.hash().isEmpty());
@@ -418,6 +435,131 @@ void FooyinTrackTests::projectsTrustedAlbumMetadataWithoutInference()
     auto missingTrackDate              = memberTrack();
     missingTrackDate.track.releaseDate = {};
     QVERIFY(project(missingTrackDate).date().isEmpty());
+}
+
+void FooyinTrackTests::projectsOnlyObservedStreamProperties()
+{
+    BandcampImportTrack imported{memberTrack(), {}};
+    imported.streamProperties.codec      = u"AAC"_s;
+    imported.streamProperties.sampleRate = 48'000;
+    imported.streamProperties.channels   = 2;
+    Fooyin::Track track                  = makeFooyinImportTrack(imported);
+
+    QCOMPARE(track.codec(), u"AAC"_s);
+    QCOMPARE(track.sampleRate(), 48'000);
+    QCOMPARE(track.channels(), 2);
+    QVERIFY(track.bitDepth() <= 0);
+    QCOMPARE(track.bitrate(), 0);
+
+    BandcampStreamProperties partial;
+    partial.bitDepth = 24;
+    applyBandcampStreamProperties(track, partial);
+    QCOMPARE(bandcampStreamProperties(track).bitDepth, 24);
+}
+
+void FooyinTrackTests::partialStreamObservationsPreserveSourceBitDepth_data()
+{
+    QTest::addColumn<QString>("residentEncoding");
+    QTest::addColumn<QString>("observedEncoding");
+    QTest::addColumn<int>("residentDepth");
+    QTest::addColumn<int>("observedDepth");
+    QTest::addColumn<int>("expectedDepth");
+    QTest::newRow("lossy-depth-only") << u"Lossy"_s << QString{} << 32 << 32 << -1;
+    QTest::newRow("lossy-encoding-only") << QString{} << u"Lossy"_s << 32 << 0 << -1;
+    QTest::newRow("lossy-empty-observation") << u"Lossy"_s << QString{} << 32 << 0 << -1;
+    QTest::newRow("lossless-depth-only") << u"Lossless"_s << QString{} << 16 << 24 << 24;
+    QTest::newRow("lossless-encoding-only") << QString{} << u"Lossless"_s << 24 << 0 << 24;
+    QTest::newRow("lossless-empty-observation") << u"Lossless"_s << QString{} << 24 << 0 << 24;
+    QTest::newRow("lossy-to-lossless") << u"Lossy"_s << u"Lossless"_s << -1 << 24 << 24;
+    QTest::newRow("unclassified") << QString{} << QString{} << 24 << 0 << 24;
+}
+
+void FooyinTrackTests::partialStreamObservationsPreserveSourceBitDepth()
+{
+    QFETCH(QString, residentEncoding);
+    QFETCH(QString, observedEncoding);
+    QFETCH(int, residentDepth);
+    QFETCH(int, observedDepth);
+    QFETCH(int, expectedDepth);
+    Fooyin::Track track = residentWithUserEdits(701);
+    track.setEncoding(residentEncoding);
+    track.setBitDepth(residentDepth);
+    BandcampStreamProperties properties;
+    properties.encoding = observedEncoding;
+    properties.bitDepth = observedDepth;
+    applyBandcampStreamProperties(track, properties);
+    QCOMPARE(track.bitDepth(), expectedDepth);
+    QCOMPARE(track.title(), u"User-edited title"_s);
+    QCOMPARE(track.hash(), u"user-stable-hash"_s);
+    Fooyin::ScriptRegistry registry;
+    registry.finalise();
+    Fooyin::ScriptParser scripting{&registry};
+    const QString displayedDepth = expectedDepth > 0 ? QString::number(expectedDepth) : QString{};
+    QCOMPARE(track.techInfo(u"BITDEPTH"_s), displayedDepth);
+    QCOMPARE(scripting.evaluate(u"[%bitdepth%]"_s, track), displayedDepth);
+}
+
+void FooyinTrackTests::reimportRepairsPersistedLossyBitDepth_data()
+{
+    QTest::addColumn<bool>("playlistOnly");
+    QTest::addColumn<bool>("observeEncoding");
+    QTest::newRow("library-failed-probe") << false << false;
+    QTest::newRow("playlist-failed-probe") << true << false;
+    QTest::newRow("library-observed-lossy") << false << true;
+    QTest::newRow("playlist-observed-lossy") << true << true;
+}
+
+void FooyinTrackTests::reimportRepairsPersistedLossyBitDepth()
+{
+    QFETCH(bool, playlistOnly);
+    QFETCH(bool, observeEncoding);
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    playlists.supplyResidents(library.api);
+    Fooyin::Track resident = residentWithUserEdits(702);
+    resident.setCodec(u"MP3"_s);
+    resident.setEncoding(observeEncoding ? QString{} : u"Lossy"_s);
+    resident.setBitDepth(32);
+    if(playlistOnly) {
+        playlists.residents = {{resident}};
+    }
+    else {
+        library.residents = {resident};
+    }
+    library.makeWriteAvailable();
+    BandcampLibraryGateway gateway{library.api};
+    QObject receiver;
+    bool completed = false;
+    FooyinTrackCommitOutcome outcome;
+    BandcampImportTrack imported{memberTrack(), {}};
+    if(observeEncoding) {
+        imported.streamProperties.encoding = u"Lossy"_s;
+        imported.streamProperties.bitDepth = 32;
+    }
+    gateway.commitImport({imported}, &receiver, {.trackId = 42}, [&](FooyinTrackCommitOutcome result) {
+        outcome   = std::move(result);
+        completed = true;
+    });
+    QTRY_COMPARE(library.writeCalls, 1);
+    const Fooyin::Track written = library.writeInputs.front().front();
+    QCOMPARE(written.id(), resident.id());
+    QCOMPARE(written.bitDepth(), -1);
+    QCOMPARE(written.encoding(), u"Lossy"_s);
+    QCOMPARE(written.title(), resident.title());
+    QCOMPARE(written.album(), resident.album());
+    QCOMPARE(written.extraTag(u"MOOD"_s), resident.extraTag(u"MOOD"_s));
+    QCOMPARE(written.extraProperties().value(u"_USER_PROPERTY"_s), u"retain me"_s);
+    QCOMPARE(written.hash(), resident.hash());
+    Fooyin::ScriptRegistry registry;
+    registry.finalise();
+    Fooyin::ScriptParser scripting{&registry};
+    QCOMPARE(written.techInfo(u"BITDEPTH"_s), QString{});
+    QCOMPARE(scripting.evaluate(u"[%bitdepth%]"_s, written), QString{});
+    library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+    QTRY_VERIFY(completed);
+    QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(outcome));
+    QCOMPARE(std::get<FooyinTrackCommitSuccess>(outcome).tracks.front().bitDepth(), -1);
+    QCOMPARE(resident.bitDepth(), 32);
 }
 
 void FooyinTrackTests::standaloneProjectionLeavesParentFieldsAbsent()
@@ -493,6 +635,7 @@ void FooyinTrackTests::mergesOnlyTransportAndPreservesResidentMetadata()
     if(playlistOnly) {
         playlists.residents = {{resident}};
     }
+
     else {
         library.residents.push_back(resident);
     }
@@ -553,6 +696,216 @@ void FooyinTrackTests::mergesOnlyTransportAndPreservesResidentMetadata()
     QCOMPARE(result.tracks.at(0).extraTag(u"COVERART"_s), QStringList{u"https://covers.example.org/user-art.jpg"_s});
     QCOMPARE(result.tracks.at(0).extraProperties().value(BandcampStreamUrlProperty), SignedStream);
     QCOMPARE(result.tracks.at(1).extraProperties().value(BandcampStreamUrlProperty), OtherSignedStream);
+}
+
+void FooyinTrackTests::mergesObservedStreamPropertiesAndPreservesResidentState()
+{
+    LibraryBoundary library;
+    Fooyin::Track resident = residentWithUserEdits(707);
+    resident.setBitDepth(24);
+    resident.setBitrate(320);
+    resident.setEncoding(u"User encoding"_s);
+    resident.clearWasModified();
+    library.residents.push_back(resident);
+    library.makeWriteAvailable();
+
+    BandcampLibraryGateway gateway{library.api};
+    QObject receiver;
+    bool completed = false;
+    FooyinTrackCommitOutcome outcome;
+    BandcampImportTrack imported{memberTrack(), {}};
+    imported.streamProperties.codec      = u"AAC"_s;
+    imported.streamProperties.sampleRate = 48'000;
+    imported.streamProperties.channels   = 2;
+    gateway.commitImport({imported}, &receiver, {.trackId = 42}, [&](FooyinTrackCommitOutcome result) {
+        outcome   = std::move(result);
+        completed = true;
+    });
+
+    QTRY_COMPARE(library.writeCalls, 1);
+    const Fooyin::Track written = library.writeInputs.front().front();
+    QCOMPARE(written.title(), u"User-edited title"_s);
+    QCOMPARE(written.extraTag(u"MOOD"_s), QStringList{u"User mood"_s});
+    QCOMPARE(written.extraProperties().value(BandcampStreamUrlProperty), SignedStream);
+    QCOMPARE(written.codec(), u"AAC"_s);
+    QCOMPARE(written.sampleRate(), 48'000);
+    QCOMPARE(written.channels(), 2);
+    QCOMPARE(written.bitDepth(), 24);
+    QCOMPARE(written.bitrate(), 320);
+    QCOMPARE(written.encoding(), u"User encoding"_s);
+
+    library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+    QTRY_VERIFY(completed);
+    QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(outcome));
+}
+
+void FooyinTrackTests::updatesStreamPropertiesFromFirstPlaylistResident()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    playlists.supplyResidents(library.api);
+    Fooyin::Track first  = residentWithUserEdits(711);
+    Fooyin::Track second = residentWithUserEdits(712);
+    second.setTitle(u"Second playlist occurrence"_s);
+    playlists.residents = {{first, second}};
+    library.makeWriteAvailable();
+
+    BandcampLibraryGateway gateway{library.api};
+    QObject receiver;
+    bool completed = false;
+    FooyinTrackCommitOutcome outcome;
+    BandcampStreamProperties properties;
+    properties.codec      = u"FLAC"_s;
+    properties.sampleRate = 96'000;
+    gateway.updateStreamProperties(42, properties, &receiver, {.trackId = 42}, [&](FooyinTrackCommitOutcome result) {
+        outcome   = std::move(result);
+        completed = true;
+    });
+
+    QTRY_COMPARE(library.writeCalls, 1);
+    QCOMPARE(playlists.snapshotCalls, 1);
+    QCOMPARE(library.writeInputs.front().size(), std::size_t{1});
+    const Fooyin::Track written = library.writeInputs.front().front();
+    QCOMPARE(written.id(), 711);
+    QCOMPARE(written.filepath(), u"bandcamp://track/42"_s);
+    QCOMPARE(written.title(), u"User-edited title"_s);
+    QCOMPARE(written.extraProperties().value(BandcampStreamUrlProperty), u"https://cdn.example.com/old.mp3?sig=old"_s);
+    QCOMPARE(written.codec(), u"FLAC"_s);
+    QCOMPARE(written.sampleRate(), 96'000);
+
+    library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+    QTRY_VERIFY(completed);
+    QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(outcome));
+}
+
+void FooyinTrackTests::logsStreamPropertyDeltasAtDebugWithoutTrace()
+{
+    LibraryBoundary library;
+    Fooyin::Track resident = residentWithUserEdits(713);
+    library.residents      = {resident};
+    library.makeWriteAvailable();
+
+    BandcampLibraryGateway gateway{library.api};
+    QObject receiver;
+    bool completed = false;
+    FooyinTrackCommitOutcome outcome;
+    BandcampStreamProperties properties;
+    properties.codec      = u"FLAC"_s;
+    properties.sampleRate = 96'000;
+
+    LogCapture logs{u"fy.bandcamp.tracks.debug=true\nfy.trace.bandcamp.tracks.debug=false"_s};
+    gateway.updateStreamProperties(42, properties, &receiver, {.trackId = 42}, [&](FooyinTrackCommitOutcome result) {
+        outcome   = std::move(result);
+        completed = true;
+    });
+
+    QTRY_COMPARE(library.writeCalls, 1);
+    const auto captured  = capturedLogsSnapshot();
+    const auto deltaLogs = std::count_if(captured.cbegin(), captured.cend(), [](const CapturedLog& log) {
+        return log.category == u"fy.bandcamp.tracks"_s
+            && log.message.startsWith(u"track=42 stream_properties_updated"_s);
+    });
+    QCOMPARE(deltaLogs, 1);
+    const auto delta = std::find_if(captured.cbegin(), captured.cend(), [](const CapturedLog& log) {
+        return log.category == u"fy.bandcamp.tracks"_s
+            && log.message.startsWith(u"track=42 stream_properties_updated"_s);
+    });
+    QVERIFY(delta != captured.cend());
+    QVERIFY(delta->message.contains(u"properties=codec,sample_rate"_s));
+    QVERIFY(std::none_of(captured.cbegin(), captured.cend(),
+                         [](const CapturedLog& log) { return log.category == u"fy.trace.bandcamp.tracks"_s; }));
+
+    library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+    QTRY_VERIFY(completed);
+    QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(outcome));
+}
+
+void FooyinTrackTests::serializesSharedGatewaySnapshotsAcrossWrites()
+{
+    LibraryBoundary library;
+    Fooyin::Track resident = residentWithUserEdits(714);
+    resident.setBitrate(320);
+    library.residents = {resident};
+    library.makeWriteAvailable();
+    library.makeWriteAvailable();
+
+    BandcampLibraryGateway gateway{library.api};
+    QObject receiver;
+    bool refreshCompleted    = false;
+    bool propertiesCompleted = false;
+    FooyinTrackCommitOutcome refreshOutcome;
+    FooyinTrackCommitOutcome propertiesOutcome;
+    BandcampResolvedTrack refreshed = memberTrack(42, OtherSignedStream);
+    gateway.refreshTransport(refreshed, &receiver, {.trackId = 42}, [&](FooyinTrackCommitOutcome result) {
+        refreshOutcome   = std::move(result);
+        refreshCompleted = true;
+    });
+    BandcampStreamProperties properties;
+    properties.codec   = u"AAC"_s;
+    properties.bitrate = 256;
+    gateway.updateStreamProperties(42, properties, &receiver, {.trackId = 42}, [&](FooyinTrackCommitOutcome result) {
+        propertiesOutcome   = std::move(result);
+        propertiesCompleted = true;
+    });
+
+    QTRY_COMPARE(library.writeCalls, 1);
+    const Fooyin::Track refreshedSnapshot = library.writeInputs.front().front();
+    QCOMPARE(refreshedSnapshot.extraProperties().value(BandcampStreamUrlProperty), OtherSignedStream);
+    QCOMPARE(refreshedSnapshot.bitrate(), 320);
+    library.residents = {refreshedSnapshot};
+    library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+
+    QTRY_COMPARE(library.writeCalls, 2);
+    const Fooyin::Track propertiesSnapshot = library.writeInputs.back().front();
+    QCOMPARE(propertiesSnapshot.extraProperties().value(BandcampStreamUrlProperty), OtherSignedStream);
+    QCOMPARE(propertiesSnapshot.codec(), u"AAC"_s);
+    QCOMPARE(propertiesSnapshot.bitrate(), 256);
+    QCOMPARE(propertiesSnapshot.title(), resident.title());
+    library.finishWrite(1, {Fooyin::WriteState::Completed, 1, 0});
+
+    QTRY_VERIFY(refreshCompleted);
+    QTRY_VERIFY(propertiesCompleted);
+    QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(refreshOutcome));
+    QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(propertiesOutcome));
+}
+
+void FooyinTrackTests::cancelsOnlyTheRequestedGatewayWrite()
+{
+    LibraryBoundary library;
+    library.residents = {residentWithUserEdits(715)};
+    library.makeWriteAvailable();
+
+    BandcampLibraryGateway gateway{library.api};
+    QObject receiver;
+    bool firstCompleted  = false;
+    bool secondCompleted = false;
+    FooyinTrackCommitOutcome firstOutcome;
+    FooyinTrackCommitOutcome secondOutcome;
+    BandcampStreamProperties firstProperties;
+    firstProperties.codec    = u"FLAC"_s;
+    const quint64 firstToken = gateway.updateStreamProperties(42, firstProperties, &receiver, {.trackId = 42},
+                                                              [&](FooyinTrackCommitOutcome result) {
+                                                                  firstOutcome   = std::move(result);
+                                                                  firstCompleted = true;
+                                                              });
+    BandcampStreamProperties secondProperties;
+    secondProperties.codec    = u"AAC"_s;
+    const quint64 secondToken = gateway.updateStreamProperties(42, secondProperties, &receiver, {.trackId = 42},
+                                                               [&](FooyinTrackCommitOutcome result) {
+                                                                   secondOutcome   = std::move(result);
+                                                                   secondCompleted = true;
+                                                               });
+    QVERIFY(firstToken > 0);
+    QVERIFY(secondToken > firstToken);
+    gateway.cancelRequest(firstToken);
+
+    QTRY_COMPARE(library.writeCalls, 1);
+    QCOMPARE(library.writeInputs.front().front().codec(), u"AAC"_s);
+    library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
+    QTRY_VERIFY(firstCompleted);
+    QTRY_VERIFY(secondCompleted);
+    QCOMPARE(std::get<FooyinTrackCommitFailure>(firstOutcome).code, FooyinTrackCommitErrorCode::Cancelled);
+    QVERIFY(std::holds_alternative<FooyinTrackCommitSuccess>(secondOutcome));
 }
 
 void FooyinTrackTests::selectsLibraryThenFirstPlaylistOccurrence()
@@ -1353,6 +1706,178 @@ void FooyinTrackTests::cancellationWithdrawsPendingGatewayHandoff()
 
     library.finishWrite(0, {Fooyin::WriteState::Completed, 1, 0});
     QCoreApplication::processEvents();
+}
+
+void FooyinTrackTests::unavailableProbeFallsBackAndLogsOncePerTrack()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    BandcampImportController controller{
+        19, {{BandcampPageKind::Album, AlbumSource, {}}}, true, {}, library.api, playlists.api, {}, nullptr, true};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+
+    LogCapture logs{u"fy.bandcamp.tracks.warning=true"_s};
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(19));
+    controller.finishResolution({19, 1, 1, 0, 0});
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QCOMPARE(summary.added, 1);
+    QCOMPARE(summary.failed, 0);
+    QCOMPARE(playlists.blocks.size(), 1);
+    QCOMPARE(playlists.blocks.front().size(), std::size_t{2});
+
+    const auto warnings = std::count_if(capturedLogs().cbegin(), capturedLogs().cend(), [](const CapturedLog& log) {
+        return log.category == u"fy.bandcamp.tracks"_s && log.message.startsWith(u"track="_s)
+            && log.message.contains(u"stream_probe_failed reason=remote_unavailable"_s);
+    });
+    QCOMPARE(warnings, 2);
+    for(const qint64 trackId : {71, 72}) {
+        const QString expected
+            = u"track="_s + QString::number(trackId) + u" stream_probe_failed reason=remote_unavailable"_s;
+        QCOMPARE(std::count_if(capturedLogs().cbegin(), capturedLogs().cend(),
+                               [&expected](const CapturedLog& log) {
+                                   return log.category == u"fy.bandcamp.tracks"_s && log.message.startsWith(expected);
+                               }),
+                 1);
+    }
+}
+
+void FooyinTrackTests::failedProbesStillAdmitResolvedScope()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    auto audioLoader = std::make_shared<Fooyin::AudioLoader>();
+    BandcampStreamProbe probe{audioLoader, nullptr};
+    BandcampImportController controller{
+        20, {{BandcampPageKind::Album, AlbumSource, {}}}, true, {}, library.api, playlists.api, {}, &probe, true};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(20));
+    controller.finishResolution({20, 1, 1, 0, 0});
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QCOMPARE(summary.added, qsizetype{1});
+    QCOMPARE(summary.failed, qsizetype{0});
+    QCOMPARE(summary.cancelled, qsizetype{0});
+    QCOMPARE(playlists.blocks.size(), 1);
+    QCOMPARE(playlists.blocks.front().size(), std::size_t{2});
+    for(const Fooyin::Track& track : playlists.blocks.front()) {
+        QVERIFY(track.codec().isEmpty());
+        QCOMPARE(track.sampleRate(), 0);
+        QVERIFY(track.bitDepth() <= 0);
+    }
+}
+
+void FooyinTrackTests::cancellationDuringProbeSkipsResolvedScope_data()
+{
+    QTest::addColumn<bool>("album");
+    QTest::addColumn<bool>("resolutionFinished");
+    QTest::newRow("album-resolution-pending") << true << false;
+    QTest::newRow("album-resolution-finished") << true << true;
+    QTest::newRow("track-resolution-pending") << false << false;
+    QTest::newRow("track-resolution-finished") << false << true;
+}
+
+void FooyinTrackTests::cancellationDuringProbeSkipsResolvedScope()
+{
+    QFETCH(bool, album);
+    QFETCH(bool, resolutionFinished);
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    auto audioLoader = std::make_shared<Fooyin::AudioLoader>();
+    BandcampStreamProbe probe{audioLoader, nullptr};
+    BandcampOperationId cancelledOperation = 0;
+    BandcampImportController controller{
+        18,
+        {{album ? BandcampPageKind::Album : BandcampPageKind::Track, album ? AlbumSource : TrackSource, {}},
+         {BandcampPageKind::Track, TrackSource, {}}},
+        true,
+        {},
+        library.api,
+        playlists.api,
+        [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; },
+        &probe,
+        true};
+    bool finished   = false;
+    int completions = 0;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+    QObject::connect(&controller, &BandcampImportController::finished, &controller,
+                     [&completions](const BandcampImportSummary&) { ++completions; });
+
+    controller.start();
+    controller.acceptScopeResult(album ? successfulAlbumScope(18) : successfulTrackScope(18));
+    controller.acceptScopeResult(successfulTrackScope(18, false, 1));
+    if(resolutionFinished) {
+        controller.finishResolution({18, 2, 2, 0, 0});
+    }
+    controller.cancel();
+    controller.cancel();
+    if(!resolutionFinished) {
+        QVERIFY(!finished);
+        controller.finishResolution({18, 2, 2, 0, 0});
+    }
+
+    QVERIFY(finished);
+    QCOMPARE(cancelledOperation, BandcampOperationId{18});
+    QCOMPARE(summary.added, qsizetype{0});
+    QCOMPARE(summary.failed, qsizetype{0});
+    QCOMPARE(summary.cancelled, qsizetype{2});
+    QCOMPARE(completions, 1);
+    QCOMPARE(playlists.createCalls, 0);
+    QVERIFY(playlists.blocks.isEmpty());
+    QCOMPARE(library.snapshotCalls, 0);
+    QCOMPARE(library.writeCalls, 0);
+    QTRY_VERIFY_WITH_TIMEOUT(probe.children().isEmpty(), 2000);
+    QCOMPARE(completions, 1);
+    QCOMPARE(library.snapshotCalls, 0);
+    QVERIFY(playlists.blocks.isEmpty());
+}
+
+void FooyinTrackTests::cancellationDuringProbePreservesAlreadyInsertedScopes()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    auto audioLoader = std::make_shared<Fooyin::AudioLoader>();
+    BandcampStreamProbe probe{audioLoader, nullptr};
+    BandcampImportController controller{21,
+                                        {{BandcampPageKind::Album, AlbumSource, {}},
+                                         {BandcampPageKind::Track, TrackSource, {}},
+                                         {BandcampPageKind::Album, AlbumSource, {}}},
+                                        true,
+                                        {},
+                                        library.api,
+                                        playlists.api,
+                                        {},
+                                        &probe,
+                                        true};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(21));
+    QTRY_COMPARE_WITH_TIMEOUT(playlists.blocks.size(), 1, 2000);
+    controller.acceptScopeResult(successfulTrackScope(21, false, 1));
+    controller.acceptScopeResult(successfulAlbumScope(21, 2));
+    controller.cancel();
+    controller.finishResolution({21, 3, 3, 0, 0});
+
+    QVERIFY(finished);
+    QCOMPARE(summary.added, qsizetype{1});
+    QCOMPARE(summary.failed, qsizetype{0});
+    QCOMPARE(summary.cancelled, qsizetype{2});
+    QTRY_VERIFY_WITH_TIMEOUT(probe.children().isEmpty(), 2000);
+    QCOMPARE(playlists.blocks.size(), 1);
+    QCOMPARE(playlists.blocks.front().size(), std::size_t{2});
+    QCOMPARE(playlists.blocks.front().front().filepath(), u"bandcamp://track/71"_s);
+    QCOMPARE(library.snapshotCalls, 1);
 }
 
 void FooyinTrackTests::deletingControllerFromPlaylistCallbackWithdrawsResolution()

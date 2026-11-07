@@ -7,6 +7,7 @@
 #include "bandcamprefreshcontroller.h"
 #include "bandcampsettings.h"
 #include "bandcampsettingsdialog.h"
+#include "bandcampstreamprobe.h"
 #include "bandcampurldialog.h"
 
 #include <core/coresettings.h>
@@ -49,12 +50,14 @@ protected:
 
 void BandcampPlugin::initialise(const CorePluginContext& context)
 {
-    m_network  = context.networkAccess;
-    m_service  = new BandcampResolutionService(m_network.get(), this);
-    m_remoteIo = new Fooyin::RemoteIoService(context.networkAccess, context.settingsManager, this);
-    m_playbackBridge
-        = std::make_shared<BandcampPlaybackBridge>(m_service, context.audioLoader, m_remoteIo, context.settingsManager,
-                                                   fooyinLibraryApi(context.library, context.playlistHandler));
+    m_network        = context.networkAccess;
+    m_service        = new BandcampResolutionService(m_network.get(), this);
+    m_remoteIo       = new Fooyin::RemoteIoService(context.networkAccess, context.settingsManager, this);
+    m_streamProbe    = new BandcampStreamProbe(context.audioLoader, m_remoteIo, this);
+    m_libraryGateway = new BandcampLibraryGateway{fooyinLibraryApi(context.library, context.playlistHandler), this};
+    m_playbackBridge = std::make_shared<BandcampPlaybackBridge>(
+        m_service, context.audioLoader, m_remoteIo, context.settingsManager,
+        fooyinLibraryApi(context.library, context.playlistHandler), m_libraryGateway, this);
 }
 
 BandcampPlugin::~BandcampPlugin()
@@ -87,6 +90,16 @@ void BandcampPlugin::shutdown()
 
     if(m_playbackBridge) {
         m_playbackBridge->shutdown();
+    }
+
+    if(m_streamProbe) {
+        m_streamProbe->shutdown();
+        delete std::exchange(m_streamProbe, nullptr);
+    }
+
+    if(m_libraryGateway) {
+        m_libraryGateway->cancel();
+        delete std::exchange(m_libraryGateway, nullptr);
     }
 
     delete m_remoteIo.data();
@@ -155,9 +168,12 @@ void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
     const auto settings = loadBandcampSettings(fySettings);
     const QPointer<Fooyin::PlaylistInteractor> interactor{m_playlistInteractor};
     auto* operation = new BandcampRefreshController{
-        m_service, tracks, makeOperationOptions(settings),
+        m_service,
+        tracks,
+        makeOperationOptions(settings),
         fooyinLibraryApi(interactor ? interactor->library() : nullptr, interactor ? interactor->handler() : nullptr),
-        this};
+        this,
+        m_libraryGateway};
     m_refreshes.append(operation);
     QObject::connect(operation, &QObject::destroyed, this, [this, operation]() { m_refreshes.removeAll(operation); });
     auto* dialog = new BandcampProgressDialog(BandcampDialogMode::Refresh, Utils::getMainWindow());
@@ -272,7 +288,10 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
                 service->cancel(operationId);
             }
         },
-        this};
+        m_streamProbe,
+        settings.probeStreamsOnImport,
+        this,
+        m_libraryGateway};
     m_imports.append(controller);
     QObject::connect(controller, &QObject::destroyed, this, [this, controller]() { m_imports.removeAll(controller); });
 

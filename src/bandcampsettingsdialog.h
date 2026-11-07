@@ -5,6 +5,7 @@
 #include <QDialog>
 
 class QComboBox;
+class QCheckBox;
 class QSpinBox;
 
 namespace Fooyin::Bandcamp {
@@ -25,5 +26,6 @@ private:
     QSpinBox* m_attemptCooldown;
     QComboBox* m_discographyOrder;
     QSpinBox* m_refreshWindow;
+    QCheckBox* m_probeStreams;
 };
 } // namespace Fooyin::Bandcamp

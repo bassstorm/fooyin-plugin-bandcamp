@@ -11,6 +11,7 @@ constexpr auto PrePlaybackRefreshWindowKey = "Bandcamp/PrePlaybackRefreshWindowM
 constexpr auto AttemptTimeoutKey           = "Bandcamp/AttemptTimeoutMs";
 constexpr auto MaxAttemptsKey              = "Bandcamp/MaxAttempts";
 constexpr auto AttemptCooldownKey          = "Bandcamp/AttemptCooldownMs";
+constexpr auto ProbeStreamsOnImportKey     = "Bandcamp/ProbeStreamsOnImport";
 
 constexpr int DefaultParallelism          = 2;
 constexpr int MinParallelism              = 1;
@@ -45,6 +46,7 @@ struct BandcampSettings
     int prePlaybackRefreshWindowMinutes{DefaultRefreshWindowMinutes};
     int maxAttempts{DefaultAttemptsPerPage};
     int attemptCooldownMs{DefaultAttemptCooldownMs};
+    bool probeStreamsOnImport{false};
 };
 
 struct OperationOptions

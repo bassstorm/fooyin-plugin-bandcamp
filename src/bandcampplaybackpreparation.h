@@ -13,7 +13,8 @@ class BandcampPlaybackPreparation final : public QObject
 
 public:
     BandcampPlaybackPreparation(BandcampResolutionService* service, Fooyin::Track track, OperationOptions options,
-                                FooyinLibraryApi libraryApi, QObject* parent = nullptr);
+                                FooyinLibraryApi libraryApi, QObject* parent = nullptr,
+                                BandcampLibraryGateway* sharedGateway = nullptr);
     ~BandcampPlaybackPreparation() override;
 
     void start(qint64 nowMs);
@@ -27,13 +28,16 @@ signals:
 private:
     void acceptScope(const BandcampScopeResult& result);
     void fail(const QString& reason, bool alreadyLogged = false);
+    void cancelGatewayRequest();
     void finishIfReady();
 
     QPointer<BandcampResolutionService> m_service;
     Fooyin::Track m_track;
     OperationOptions m_options;
     FooyinLibraryApi m_libraryApi;
-    BandcampLibraryGateway* m_gateway{nullptr};
+    QPointer<BandcampLibraryGateway> m_gateway;
+    quint64 m_gatewayRequest{0};
+    bool m_ownsGateway{false};
     BandcampOperationId m_operationId{0};
     qint64 m_trackId{0};
     bool m_started{false};

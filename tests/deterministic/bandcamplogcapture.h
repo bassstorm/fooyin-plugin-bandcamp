@@ -4,6 +4,8 @@
 #include <QLoggingCategory>
 #include <QString>
 
+#include <mutex>
+
 // Collects every Qt log message while in scope. Filter rules are applied for the scope and reset afterwards.
 struct CapturedLog
 {
@@ -17,8 +19,21 @@ inline QList<CapturedLog>& capturedLogs()
     return logs;
 }
 
+inline std::mutex& capturedLogsMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+inline QList<CapturedLog> capturedLogsSnapshot()
+{
+    const std::scoped_lock lock{capturedLogsMutex()};
+    return capturedLogs();
+}
+
 inline void captureLog(QtMsgType, const QMessageLogContext& context, const QString& message)
 {
+    const std::scoped_lock lock{capturedLogsMutex()};
     capturedLogs().append({QString::fromLatin1(context.category), message});
 }
 
@@ -28,6 +43,7 @@ public:
     explicit LogCapture(const QString& rules)
         : m_previous{qInstallMessageHandler(captureLog)}
     {
+        const std::scoped_lock lock{capturedLogsMutex()};
         capturedLogs().clear();
         QLoggingCategory::setFilterRules(rules);
     }
