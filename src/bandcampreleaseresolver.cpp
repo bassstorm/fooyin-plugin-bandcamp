@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <type_traits>
 #include <utility>
 
 namespace Fooyin::Bandcamp {
@@ -50,25 +51,28 @@ void logAdmittedTrack(const BandcampTrack& track, const QString& albumArtist, bo
     qCDebug(BANDCAMP_TRACKS).noquote() << formatTraceEvent(context, QStringLiteral("admitted"), fields);
 }
 
-void logResolvedAlbum(const BandcampAlbumMetadata& album, qsizetype trackCount, const CorrelationContext& context)
+void logResolvedAlbum(const BandcampAlbumMetadata& album, qsizetype trackCount, qint64 elapsedMs,
+                      const CorrelationContext& context)
 {
     qCInfo(BANDCAMP_RESOLVE).noquote() << formatTraceEvent(
-        context, QStringLiteral("resolved"),
+        context, QStringLiteral("release_resolve_completed"),
         {DiagnosticField::text(QStringLiteral("title"), album.title),
          DiagnosticField::text(QStringLiteral("artist"), album.artist),
          DiagnosticField::number(QStringLiteral("tracks"), static_cast<qint64>(trackCount)),
          DiagnosticField::text(QStringLiteral("releaseDate"), album.releaseDate.toString(Qt::ISODate)),
-         DiagnosticField::url(QStringLiteral("url"), QUrl(album.sourceUrl))});
+         DiagnosticField::url(QStringLiteral("url"), QUrl(album.sourceUrl)),
+         DiagnosticField::number(QStringLiteral("elapsedMs"), elapsedMs)});
 }
 
-void logResolvedTrack(const BandcampTrack& track, const CorrelationContext& context)
+void logResolvedTrack(const BandcampTrack& track, qint64 elapsedMs, const CorrelationContext& context)
 {
     qCInfo(BANDCAMP_RESOLVE).noquote() << formatTraceEvent(
-        context, QStringLiteral("resolved"),
+        context, QStringLiteral("release_resolve_completed"),
         {DiagnosticField::text(QStringLiteral("title"), track.title),
          DiagnosticField::text(QStringLiteral("artist"), track.artist),
          DiagnosticField::text(QStringLiteral("releaseDate"), track.releaseDate.toString(Qt::ISODate)),
-         DiagnosticField::url(QStringLiteral("url"), QUrl(track.sourceUrl))});
+         DiagnosticField::url(QStringLiteral("url"), QUrl(track.sourceUrl)),
+         DiagnosticField::number(QStringLiteral("elapsedMs"), elapsedMs)});
 }
 
 BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const ReleaseCandidate& primary,
@@ -101,7 +105,6 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
         for(const BandcampTrack& track : std::as_const(refined.album.tracks)) {
             logAdmittedTrack(track, refined.album.metadata.artist, false, albumContext.withTrack(track.id));
         }
-        logResolvedAlbum(refined.album.metadata, refined.album.tracks.size(), albumContext);
         return ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(refined.album)}};
     }
 
@@ -150,7 +153,6 @@ BandcampResolutionOutcome resolveScope(const BandcampPageUrl& page, const Releas
     else {
         logAdmittedTrack(refined.result.track, {}, true, resolvedContext);
     }
-    logResolvedTrack(refined.result.track, resolvedContext);
     return ResolutionSuccess<BandcampResolvedData>{BandcampResolvedData{std::move(refined.result)}};
 }
 
@@ -592,6 +594,27 @@ private:
         }
         m_reported = true;
         m_attempts.stop();
+        if(m_started) {
+            if(const auto* success = std::get_if<ResolutionSuccess<BandcampResolvedData>>(&outcome)) {
+                const qint64 elapsedMs = m_elapsed.elapsed();
+                std::visit(
+                    [this, elapsedMs](const auto& data) {
+                        using Data = std::decay_t<decltype(data)>;
+                        if constexpr(std::is_same_v<Data, BandcampAlbum>) {
+                            logResolvedAlbum(data.metadata, data.tracks.size(), elapsedMs,
+                                             m_context.withAlbum(data.metadata.id));
+                        }
+                        else {
+                            CorrelationContext context = m_context.withTrack(data.track.id);
+                            if(data.album) {
+                                context = context.withAlbum(data.album->id);
+                            }
+                            logResolvedTrack(data.track, elapsedMs, context);
+                        }
+                    },
+                    success->value);
+            }
+        }
         if(const auto* failure = std::get_if<ResolutionFailure>(&outcome)) {
             if(m_started) {
                 logResolutionFailure(m_context, failure->error, m_lastHttpStatus, m_attempts, m_elapsed.elapsed());

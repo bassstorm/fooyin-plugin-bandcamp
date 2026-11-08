@@ -146,6 +146,15 @@ void BandcampClient::startHop(RequestId id, const QUrl& url)
     request.setTransferTimeout(ClientTransferTimeoutMs);
 
     try {
+        const bool urlInPrefix = it->context.albumId <= 0 && it->context.trackId <= 0
+                              && it->context.resourceUrl.isValid()
+                              && cleanUrlForLog(it->context.resourceUrl) == cleanUrlForLog(url);
+        QList<DiagnosticField> startFields;
+        if(!urlInPrefix) {
+            startFields.append(DiagnosticField::url(QStringLiteral("url"), url));
+        }
+        qCDebug(BANDCAMP_TRACE_FETCH).noquote()
+            << formatTraceEvent(it->context, QStringLiteral("fetch_started"), startFields);
         QNetworkReply* reply = m_network->get(request);
         if(!reply) {
             settle(id,
@@ -274,7 +283,8 @@ void BandcampClient::onFinished(RequestId id, quint64 generation)
     fetchFields.append({DiagnosticField::number(QStringLiteral("status"), status),
                         DiagnosticField::number(QStringLiteral("bytes"), body.size()),
                         DiagnosticField::number(QStringLiteral("elapsedMs"), elapsed)});
-    qCDebug(BANDCAMP_TRACE_FETCH).noquote() << formatTraceEvent(context, QStringLiteral("fetch"), fetchFields);
+    qCDebug(BANDCAMP_TRACE_FETCH).noquote()
+        << formatTraceEvent(context, QStringLiteral("fetch_completed"), fetchFields);
     if(status == 0) {
         settle(id, BandcampFetchFailure{clientError(ResolutionErrorCode::FetchFailed, effectiveUrl,
                                                     QStringLiteral("httpStatus"),

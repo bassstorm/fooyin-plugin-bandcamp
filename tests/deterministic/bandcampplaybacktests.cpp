@@ -787,7 +787,7 @@ void PlaybackTests::streamProbeRetriesWithFreshRemoteSources()
              1);
     QCOMPARE(std::count_if(captured.cbegin(), captured.cend(),
                            [](const CapturedLog& log) {
-                               return log.category == u"fy.bandcamp.tracks"_s
+                               return log.category == u"fy.trace.bandcamp.tracks"_s
                                    && log.message.startsWith(u"track=458 stream_probe_completed elapsedMs="_s)
                                    && log.message.contains(u"codec="_s) && log.message.contains(u"bitrate="_s);
                            }),
@@ -1067,7 +1067,8 @@ void PlaybackTests::streamProbeCancellationIsSilent()
              1);
     QVERIFY(std::none_of(captured.cbegin(), captured.cend(), [](const CapturedLog& log) {
         return log.message.startsWith(u"track=466 stream_probe_failed"_s)
-            || log.message.startsWith(u"track=466 stream_probe_completed"_s);
+            || (log.category == u"fy.trace.bandcamp.tracks"_s
+                && log.message.startsWith(u"track=466 stream_probe_completed"_s));
     }));
 }
 

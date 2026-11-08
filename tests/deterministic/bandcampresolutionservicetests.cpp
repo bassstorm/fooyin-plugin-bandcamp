@@ -180,6 +180,54 @@ private slots:
         QCOMPARE(network.requested.size(), 4);
     }
 
+    void successfulReleasesLogCompletionAndElapsedMetadata()
+    {
+        LogCapture logs{u"fy.bandcamp.resolve.info=true"_s};
+        FakeNetworkManager network;
+        network.setResponder([](const QNetworkRequest& request) {
+            if(request.url().path() == u"/album/parent"_s) {
+                return FakeResponse{.body = AlbumDocument};
+            }
+            if(request.url().path() == u"/track/solo"_s) {
+                return FakeResponse{.body = StandaloneTrackDocument};
+            }
+            return FakeResponse{.status = 404};
+        });
+        BandcampResolutionService service{&network};
+
+        const ServiceRun run = resolve(service, {page(AlbumUrl), page(StandaloneUrl)});
+
+        QVERIFY(run.finished);
+        QCOMPARE(run.summary.succeeded, 2);
+        QStringList completed;
+        for(const CapturedLog& log : capturedLogs()) {
+            if(log.category == u"fy.bandcamp.resolve"_s && log.message.contains(u"release_resolve_completed"_s)) {
+                completed.append(log.message);
+            }
+        }
+        QCOMPARE(completed.size(), 2);
+        const auto album = std::find_if(completed.cbegin(), completed.cend(), [](const QString& line) {
+            return line.startsWith(u"album=40 release_resolve_completed "_s);
+        });
+        QVERIFY(album != completed.cend());
+        QVERIFY(album->contains(u"title=\"Parent album\""_s));
+        QVERIFY(album->contains(u"artist=\"Parent artist\""_s));
+        QVERIFY(album->contains(u"tracks=1"_s));
+        QVERIFY(album->contains(u"releaseDate=2020-01-01"_s));
+        QVERIFY(album->contains(u"url=https://artist.bandcamp.com/album/parent"_s));
+        QVERIFY(album->contains(u"elapsedMs="_s));
+
+        const auto track = std::find_if(completed.cbegin(), completed.cend(), [](const QString& line) {
+            return line.startsWith(u"track=9 release_resolve_completed "_s);
+        });
+        QVERIFY(track != completed.cend());
+        QVERIFY(track->contains(u"title=\"Solo title\""_s));
+        QVERIFY(track->contains(u"artist=\"Solo artist\""_s));
+        QVERIFY(track->contains(u"releaseDate=\"\""_s));
+        QVERIFY(track->contains(u"url=https://artist.bandcamp.com/track/solo"_s));
+        QVERIFY(track->contains(u"elapsedMs="_s));
+    }
+
     void standaloneTrackAdmittedLogUsesExactFields()
     {
         LogCapture logs{u"fy.bandcamp.tracks.debug=true"_s};

@@ -414,16 +414,18 @@ private slots:
         QVERIFY(std::holds_alternative<ResolutionSuccess<BandcampFetchResponse>>(*fetched.response));
         QCOMPARE(fetched.id, BandcampClient::RequestId{1});
 
-        // One completion-time metric replaces the old started/finished pair and carries the album key.
-        const QStringList fetches = traceLines(u"fetch"_s);
-        QCOMPARE(fetches.size(), 1);
-        const QString& line = fetches.first();
-        QVERIFY(line.startsWith(u"album=7 fetch "_s));
-        QVERIFY(line.contains(u"url=https://artist.bandcamp.com/album/record "_s));
-        QVERIFY(line.contains(u"status=200"_s));
-        QVERIFY(!line.contains(u"SECRET"_s));
-        QVERIFY(!line.contains(u"fragment"_s));
-        QVERIFY(!line.contains(u'\n'));
+        const QStringList started   = traceLines(u"fetch_started"_s);
+        const QStringList completed = traceLines(u"fetch_completed"_s);
+        QCOMPARE(started.size(), 1);
+        QCOMPARE(completed.size(), 1);
+        QVERIFY(started.first().startsWith(u"album=7 fetch_started "_s));
+        QVERIFY(started.first().contains(u"url=https://artist.bandcamp.com/album/record"_s));
+        QVERIFY(completed.first().startsWith(u"album=7 fetch_completed "_s));
+        QVERIFY(completed.first().contains(u"url=https://artist.bandcamp.com/album/record "_s));
+        QVERIFY(completed.first().contains(u"status=200"_s));
+        QVERIFY(!completed.first().contains(u"SECRET"_s));
+        QVERIFY(!completed.first().contains(u"fragment"_s));
+        QVERIFY(!completed.first().contains(u'\n'));
 
         for(const CapturedLog& log : capturedLogs()) {
             QVERIFY(!log.message.contains(u"SECRET"_s));
@@ -443,11 +445,14 @@ private slots:
         const Fetched fetched = fetchAndWait(client, AlbumUrl, context);
         QVERIFY(fetched.response.has_value());
 
-        const QStringList fetches = traceLines(u"fetch"_s);
-        QCOMPARE(fetches.size(), 1);
-        const QString& line = fetches.first();
-        QVERIFY(line.startsWith(u"url=https://artist.bandcamp.com/album/record fetch "_s));
-        QCOMPARE(line.count(u"url="_s), 1);
+        const QStringList started   = traceLines(u"fetch_started"_s);
+        const QStringList completed = traceLines(u"fetch_completed"_s);
+        QCOMPARE(started.size(), 1);
+        QCOMPARE(completed.size(), 1);
+        QVERIFY(started.first().startsWith(u"url=https://artist.bandcamp.com/album/record fetch_started"_s));
+        QCOMPARE(started.first().count(u"url="_s), 1);
+        QVERIFY(completed.first().startsWith(u"url=https://artist.bandcamp.com/album/record fetch_completed "_s));
+        QCOMPARE(completed.first().count(u"url="_s), 1);
     }
 
     void cancellationIsSilent()
@@ -462,7 +467,7 @@ private slots:
         const auto id   = client.fetch(AlbumUrl, [](BandcampFetchOutcome) { }, context);
         client.cancel(id);
 
-        QCOMPARE(traceLines(u"fetch"_s).size(), 0);
+        QCOMPARE(traceLines(u"fetch_completed"_s).size(), 0);
     }
 };
 

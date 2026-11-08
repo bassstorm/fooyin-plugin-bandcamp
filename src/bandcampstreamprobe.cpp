@@ -612,7 +612,7 @@ BandcampStreamProbeSubmission BandcampStreamProbe::probe(const QList<BandcampRes
                         const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                                    std::chrono::steady_clock::now() - start)
                                                    .count();
-                        qCDebug(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+                        qCDebug(BANDCAMP_TRACE_TRACKS).noquote() << formatTraceEvent(
                             CorrelationContext{.trackId = track.track.id}, QStringLiteral("stream_probe_completed"),
                             {DiagnosticField::number(QStringLiteral("elapsedMs"), elapsedMs),
                              DiagnosticField::text(QStringLiteral("codec"), result.properties.codec),
