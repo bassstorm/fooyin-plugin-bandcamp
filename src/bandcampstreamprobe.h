@@ -5,7 +5,6 @@
 #include <core/engine/audioloader.h>
 #include <core/network/remoteioservice.h>
 
-#include <QFutureWatcher>
 #include <QHash>
 #include <QObject>
 #include <QPointer>

@@ -8,13 +8,14 @@
 #include "bandcamppostprocessor.h"
 
 #include <QElapsedTimer>
-#include <QFutureWatcher>
 #include <QHash>
+#include <QMetaObject>
 #include <QNetworkAccessManager>
 #include <QPointer>
+#include <QRunnable>
 #include <QSet>
+#include <QThreadPool>
 #include <QTimer>
-#include <QtConcurrentRun>
 
 #include <algorithm>
 #include <atomic>
@@ -333,55 +334,48 @@ private:
     void parsePage(QByteArray body, QUrl effectiveUrl, bool parent)
     {
         m_workerActive = true;
-        auto* watcher  = new QFutureWatcher<ReleaseParseOutcome>(this);
         const QPointer<BandcampReleaseWorkflow> guard{this};
-        QObject::connect(watcher, &QFutureWatcherBase::finished, this, [guard, watcher, parent, effectiveUrl]() {
-            if(!guard) {
-                watcher->deleteLater();
-                return;
-            }
-            ReleaseParseOutcome outcome = ResolutionCancelled{};
-            try {
-                outcome = watcher->result();
-            }
-            catch(...) {
-                outcome = ResolutionFailure{
-                    makeResolutionError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, effectiveUrl, 0,
-                                        QStringLiteral("parser"), QStringLiteral("parser dependency failed"))};
-            }
-            watcher->deleteLater();
-            watcher->setParent(nullptr);
-            guard->m_workerActive = false;
-            guard->onParsed(parent, effectiveUrl, std::move(outcome));
-            if(!guard) {
-                return;
-            }
-            guard->settleIfIdle();
-        });
-
         const CorrelationContext context = m_context;
         const auto stop                  = m_stop;
         const auto parser                = m_parser;
         try {
-            watcher->setFuture(QtConcurrent::run([body = std::move(body), effectiveUrl, context, stop,
-                                                  parser]() mutable -> ReleaseParseOutcome {
+            QThreadPool::globalInstance()->start(QRunnable::create([guard, body = std::move(body), effectiveUrl, parent,
+                                                                    context, stop, parser]() mutable {
+                ReleaseParseOutcome outcome = ResolutionCancelled{};
                 try {
-                    ReleaseParseOutcome parsed = parser(body, effectiveUrl, context, stop.get());
-                    if(stop->load(std::memory_order_relaxed)) {
-                        return ResolutionCancelled{};
+                    if(!stop->load(std::memory_order_relaxed)) {
+                        outcome = parser(body, effectiveUrl, context, stop.get());
+                        if(stop->load(std::memory_order_relaxed)) {
+                            outcome = ResolutionCancelled{};
+                        }
                     }
-                    return parsed;
                 }
                 catch(...) {
-                    return ResolutionFailure{
+                    outcome = ResolutionFailure{
                         makeResolutionError(ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, effectiveUrl, 0,
                                             QStringLiteral("parser"), QStringLiteral("parser dependency failed"))};
                 }
+
+                if(!guard) {
+                    return;
+                }
+                QMetaObject::invokeMethod(
+                    guard,
+                    [guard, parent, effectiveUrl, outcome = std::move(outcome)]() mutable {
+                        if(!guard) {
+                            return;
+                        }
+                        guard->m_workerActive = false;
+                        guard->onParsed(parent, effectiveUrl, std::move(outcome));
+                        if(!guard) {
+                            return;
+                        }
+                        guard->settleIfIdle();
+                    },
+                    Qt::QueuedConnection);
             }));
         }
         catch(...) {
-            watcher->deleteLater();
-            watcher->setParent(nullptr);
             m_workerActive = false;
             const QPointer<BandcampReleaseWorkflow> guard{this};
             onParsed(parent, effectiveUrl,
@@ -484,61 +478,50 @@ private:
         m_currentUrl = context.resourceUrl;
 
         m_workerActive = true;
-        auto* watcher  = new QFutureWatcher<BandcampResolutionOutcome>(this);
         const QPointer<BandcampReleaseWorkflow> guard{this};
-        QObject::connect(watcher, &QFutureWatcherBase::finished, this, [guard, watcher]() {
-            if(!guard) {
-                watcher->deleteLater();
-                return;
-            }
-            BandcampResolutionOutcome outcome = ResolutionCancelled{};
-            try {
-                outcome = watcher->result();
-            }
-            catch(...) {
-                outcome = ResolutionFailure{makeResolutionError(ResolutionErrorCode::InvalidField,
-                                                                ResolutionStage::Refine, guard->m_context.resourceUrl,
-                                                                guard->primaryTrackId(), QStringLiteral("processor"),
-                                                                QStringLiteral("resolution dependency failed"))};
-            }
-            watcher->deleteLater();
-            watcher->setParent(nullptr);
-            guard->m_workerActive = false;
-            if(!guard->report(std::move(outcome)) || !guard) {
-                return;
-            }
-            guard->settleIfIdle();
-        });
-
         const BandcampPageUrl page = m_request.page;
         const auto stop            = m_stop;
         const bool needsParent     = parent.has_value();
         const QUrl resolutionUrl   = context.resourceUrl;
         const qint64 trackId       = context.trackId;
         try {
-            watcher->setFuture(QtConcurrent::run([page, primary = std::move(primary), parent = std::move(parent),
-                                                  context, stop, needsParent, resolutionUrl, trackId]() mutable {
+            QThreadPool::globalInstance()->start(QRunnable::create([guard, page, primary = std::move(primary),
+                                                                    parent = std::move(parent), context, stop,
+                                                                    needsParent, resolutionUrl, trackId]() mutable {
+                BandcampResolutionOutcome outcome = ResolutionCancelled{};
                 try {
-                    if(stop->load(std::memory_order_relaxed)) {
-                        return BandcampResolutionOutcome{ResolutionCancelled{}};
+                    if(!stop->load(std::memory_order_relaxed)) {
+                        outcome = resolveScope(page, primary, needsParent ? &*parent : nullptr, context, stop.get());
+                        if(stop->load(std::memory_order_relaxed)) {
+                            outcome = ResolutionCancelled{};
+                        }
                     }
-                    BandcampResolutionOutcome outcome
-                        = resolveScope(page, primary, needsParent ? &*parent : nullptr, context, stop.get());
-                    if(stop->load(std::memory_order_relaxed)) {
-                        return BandcampResolutionOutcome{ResolutionCancelled{}};
-                    }
-                    return outcome;
                 }
                 catch(...) {
-                    return BandcampResolutionOutcome{ResolutionFailure{makeResolutionError(
+                    outcome = BandcampResolutionOutcome{ResolutionFailure{makeResolutionError(
                         ResolutionErrorCode::InvalidField, ResolutionStage::Refine, resolutionUrl, trackId,
                         QStringLiteral("processor"), QStringLiteral("resolution dependency failed"))}};
                 }
+
+                if(!guard) {
+                    return;
+                }
+                QMetaObject::invokeMethod(
+                    guard,
+                    [guard, outcome = std::move(outcome)]() mutable {
+                        if(!guard) {
+                            return;
+                        }
+                        guard->m_workerActive = false;
+                        if(!guard->report(std::move(outcome)) || !guard) {
+                            return;
+                        }
+                        guard->settleIfIdle();
+                    },
+                    Qt::QueuedConnection);
             }));
         }
         catch(...) {
-            watcher->deleteLater();
-            watcher->setParent(nullptr);
             m_workerActive = false;
             if(report(ResolutionFailure{makeResolutionError(
                    ResolutionErrorCode::InvalidField, ResolutionStage::Refine, context.resourceUrl, context.trackId,

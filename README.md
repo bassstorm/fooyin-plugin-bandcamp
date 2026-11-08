@@ -33,7 +33,7 @@ Download the `.fyplugin` bundle from a release, then install it in Fooyin via
 ### Requirements
 
 - CMake 3.21 or newer and a C++23 compiler.
-- Qt 6 development files: Core, Concurrent, and Network.
+- Qt 6 development files: Core and Network.
 - Fooyin development files (set `Fooyin_ROOT` if not installed system-wide).
 
 ### Build

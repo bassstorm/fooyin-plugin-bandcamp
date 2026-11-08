@@ -15,7 +15,7 @@ set(BANDCAMP_PLUGIN_VERSION_SUFFIX "" CACHE STRING "Suffix appended to the proje
 set(BANDCAMP_PLUGIN_VERSION "${PROJECT_VERSION}${BANDCAMP_PLUGIN_VERSION_SUFFIX}")
 
 find_package(Fooyin REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Network)
 
 # Sanitizer flags are an interface target so every consumer of the core
 # library is instrumented and linked against the sanitizer runtime.
@@ -36,7 +36,7 @@ set_target_properties(bandcamp_core PROPERTIES
 )
 target_include_directories(bandcamp_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(bandcamp_core
-    PUBLIC Qt6::Core Qt6::Concurrent Qt6::Network bandcamp_sanitize
+    PUBLIC Qt6::Core Qt6::Network bandcamp_sanitize
 )
 
 add_library(bandcamp_fooyin STATIC
@@ -62,13 +62,13 @@ set_target_properties(bandcamp_fooyin PROPERTIES
 )
 target_include_directories(bandcamp_fooyin PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(bandcamp_fooyin
-    PUBLIC bandcamp_core Fooyin::Core Qt6::Core Qt6::Concurrent bandcamp_sanitize
+    PUBLIC bandcamp_core Fooyin::Core Qt6::Core bandcamp_sanitize
 )
 
 create_fooyin_plugin(
     bandcamp
     JSON_IN src/bandcamp.json.in
-    DEPENDS Fooyin::Gui Qt6::Concurrent bandcamp_core bandcamp_fooyin
+    DEPENDS Fooyin::Gui bandcamp_core bandcamp_fooyin
     SOURCES src/bandcampplugin.cpp
             src/bandcampplugin.h
             src/bandcampprogressdialog.cpp
@@ -78,6 +78,11 @@ create_fooyin_plugin(
             src/bandcampurldialog.cpp
             src/bandcampurldialog.h
 )
+
+# Fooyin's imported targets bring Qt Concurrent transitively; the plugin no longer uses it.
+if(UNIX AND NOT APPLE)
+    target_link_options(bandcamp PRIVATE "LINKER:--as-needed")
+endif()
 
 if(APPLE)
     set_property(TARGET bandcamp PROPERTY INSTALL_RPATH "@loader_path/..")

@@ -6,10 +6,11 @@
 #include "bandcamplogging.h"
 
 #include <QElapsedTimer>
-#include <QFutureWatcher>
+#include <QMetaObject>
 #include <QNetworkAccessManager>
 #include <QPointer>
-#include <QtConcurrentRun>
+#include <QRunnable>
+#include <QThreadPool>
 
 #include <utility>
 
@@ -183,58 +184,52 @@ struct BandcampListingResolver::Impl
 
     void parse(QByteArray body, QUrl effectiveUrl)
     {
-        workerActive  = true;
-        auto* watcher = new QFutureWatcher<BandcampListingParseOutcome>(owner);
+        workerActive = true;
         const QPointer<BandcampListingResolver> guard{owner};
-        QObject::connect(watcher, &QFutureWatcherBase::finished, owner, [guard, watcher]() {
-            if(!guard) {
-                watcher->deleteLater();
-                return;
-            }
-            BandcampListingParseOutcome outcome = ResolutionCancelled{};
-            try {
-                outcome = watcher->result();
-            }
-            catch(...) {
-                outcome = ResolutionFailure{makeResolutionError(
-                    ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, guard->m_impl->pageUrl, 0,
-                    QStringLiteral("listing"), QStringLiteral("listing parser dependency failed"))};
-            }
-            watcher->deleteLater();
-            watcher->setParent(nullptr);
-            guard->m_impl->workerActive = false;
-            if(!guard->m_impl->reported) {
-                guard->m_impl->report(std::move(outcome));
-                if(!guard) {
-                    return;
-                }
-            }
-            guard->m_impl->settleIfIdle();
-        });
-
         const CorrelationContext parseContext = context;
         const auto stopToken                  = stop;
         const auto pageParser                 = parser;
         try {
-            watcher->setFuture(
-                QtConcurrent::run([body = std::move(body), effectiveUrl = std::move(effectiveUrl), parseContext,
-                                   stopToken, pageParser]() mutable -> BandcampListingParseOutcome {
+            QThreadPool::globalInstance()->start(
+                QRunnable::create([guard, body = std::move(body), effectiveUrl = std::move(effectiveUrl), parseContext,
+                                   stopToken, pageParser]() mutable {
+                    BandcampListingParseOutcome outcome = ResolutionCancelled{};
                     try {
-                        const auto parsed = pageParser(body, effectiveUrl, parseContext, stopToken.get());
-                        return stopToken->load(std::memory_order_relaxed)
-                                 ? BandcampListingParseOutcome{ResolutionCancelled{}}
-                                 : parsed;
+                        if(!stopToken->load(std::memory_order_relaxed)) {
+                            outcome = pageParser(body, effectiveUrl, parseContext, stopToken.get());
+                            if(stopToken->load(std::memory_order_relaxed)) {
+                                outcome = ResolutionCancelled{};
+                            }
+                        }
                     }
                     catch(...) {
-                        return ResolutionFailure{makeResolutionError(
+                        outcome = ResolutionFailure{makeResolutionError(
                             ResolutionErrorCode::MalformedPage, ResolutionStage::Parse, effectiveUrl, 0,
                             QStringLiteral("listing"), QStringLiteral("listing parser dependency failed"))};
                     }
+
+                    if(!guard) {
+                        return;
+                    }
+                    QMetaObject::invokeMethod(
+                        guard,
+                        [guard, outcome = std::move(outcome)]() mutable {
+                            if(!guard) {
+                                return;
+                            }
+                            guard->m_impl->workerActive = false;
+                            if(!guard->m_impl->reported) {
+                                guard->m_impl->report(std::move(outcome));
+                                if(!guard) {
+                                    return;
+                                }
+                            }
+                            guard->m_impl->settleIfIdle();
+                        },
+                        Qt::QueuedConnection);
                 }));
         }
         catch(...) {
-            watcher->deleteLater();
-            watcher->setParent(nullptr);
             workerActive = false;
             const QPointer<BandcampListingResolver> guard{owner};
             report(ResolutionFailure{makeResolutionError(

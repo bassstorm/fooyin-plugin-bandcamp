@@ -9,9 +9,11 @@
 #include <core/network/remotestreamdevice.h>
 
 #include <QIODevice>
+#include <QMetaObject>
+#include <QRunnable>
 #include <QThreadPool>
+#include <QTimer>
 #include <QUrl>
-#include <QtConcurrent/QtConcurrentMap>
 
 #include <algorithm>
 #include <chrono>
@@ -21,6 +23,7 @@
 #include <stop_token>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace Fooyin::Bandcamp {
 namespace {
@@ -381,7 +384,15 @@ struct BandcampStreamProbe::Request
     QPointer<QObject> callbackContext;
     Completion completion;
     std::stop_source cancellation;
-    QPointer<QFutureWatcher<BandcampStreamProbeResult>> watcher;
+    std::mutex completionMutex;
+    std::mutex resultsMutex;
+    QList<BandcampStreamProbeResult> results;
+    std::vector<bool> itemCompleted;
+    qsizetype remaining{0};
+    bool completionScheduled{false};
+    std::atomic_bool disabled{false};
+    std::function<void(std::optional<BandcampStreamProbeFailure>)> finish;
+    QPointer<QTimer> deadlineTimer;
 };
 
 BandcampStreamProbe::BandcampStreamProbe(std::shared_ptr<Fooyin::AudioLoader> audioLoader,
@@ -410,69 +421,200 @@ BandcampStreamProbeSubmission BandcampStreamProbe::probe(const QList<BandcampRes
         }
         return {.rejection = BandcampStreamProbeFailure::CapacityRejected};
     }
-    const quint64 token      = m_nextToken++;
+    const quint64 token = m_nextToken++;
+
     auto request             = std::make_shared<Request>();
     request->callbackContext = callbackContext;
     request->completion      = std::move(completion);
-    auto* watcher            = new QFutureWatcher<BandcampStreamProbeResult>(this);
-    request->watcher         = watcher;
+    request->remaining       = tracks.size();
+    request->itemCompleted.resize(static_cast<size_t>(tracks.size()), false);
+    request->results.reserve(tracks.size());
+    for(const BandcampResolvedTrack& track : tracks) {
+        request->results.append(BandcampStreamProbeResult{.trackId = track.track.id});
+    }
     m_requests.insert(token, request);
 
     const auto state     = m_state;
     const auto stopToken = request->cancellation.get_token();
-    const QPointer<QFutureWatcher<BandcampStreamProbeResult>> watcherGuard{watcher};
-    QObject::connect(watcher, &QFutureWatcher<BandcampStreamProbeResult>::finished, this,
-                     [this, token, watcherGuard]() {
-                         auto request = m_requests.take(token);
-                         if(!request || m_shuttingDown) {
-                             if(watcherGuard) {
-                                 watcherGuard->deleteLater();
-                             }
-                             return;
-                         }
-                         QList<BandcampStreamProbeResult> result;
-                         if(request->watcher) {
-                             const auto future = request->watcher->future();
-                             result.reserve(future.resultCount());
-                             for(int index = 0; index < future.resultCount(); ++index) {
-                                 result.append(future.resultAt(index));
-                             }
-                         }
-                         if(request->watcher) {
-                             request->watcher->deleteLater();
-                         }
-                         if(request->callbackContext && request->completion) {
-                             request->completion(result);
-                         }
-                     });
+    const QPointer<BandcampStreamProbe> guard{this};
+    const QPointer<QObject> callbackGuard{callbackContext};
+    const std::weak_ptr<Request> weakRequest{request};
+
+    auto dispatchCompletion
+        = [guard, callbackGuard, token, weakRequest](QList<BandcampStreamProbeResult> results) mutable {
+              if(!guard) {
+                  return;
+              }
+              QMetaObject::invokeMethod(
+                  guard,
+                  [guard, callbackGuard, token, weakRequest, results = std::move(results)]() mutable {
+                      if(!guard) {
+                          return;
+                      }
+                      const auto request = weakRequest.lock();
+                      if(!request || guard->m_requests.value(token) != request) {
+                          return;
+                      }
+                      if(request->deadlineTimer) {
+                          request->deadlineTimer->stop();
+                          request->deadlineTimer->deleteLater();
+                          request->deadlineTimer.clear();
+                      }
+                      if(guard->m_shuttingDown || !callbackGuard) {
+                          guard->m_requests.remove(token);
+                          return;
+                      }
+                      const bool queued = QMetaObject::invokeMethod(
+                          callbackGuard,
+                          [guard, callbackGuard, token, weakRequest, results = std::move(results)]() mutable {
+                              if(!guard || !callbackGuard) {
+                                  return;
+                              }
+                              const auto request = weakRequest.lock();
+                              if(!request || request->disabled.load(std::memory_order_relaxed)) {
+                                  return;
+                              }
+                              Completion callback;
+                              {
+                                  const std::scoped_lock lock{request->completionMutex};
+                                  callback = std::move(request->completion);
+                              }
+                              if(callback && !request->disabled.load(std::memory_order_relaxed)) {
+                                  callback(std::move(results));
+                              }
+                              if(guard) {
+                                  QMetaObject::invokeMethod(
+                                      guard,
+                                      [guard, token]() {
+                                          if(guard) {
+                                              guard->m_requests.remove(token);
+                                          }
+                                      },
+                                      Qt::QueuedConnection);
+                              }
+                          },
+                          Qt::QueuedConnection);
+                      if(!queued) {
+                          guard->m_requests.remove(token);
+                      }
+                  },
+                  Qt::QueuedConnection);
+          };
+
+    auto finishBatch
+        = [weakRequest, dispatchCompletion](std::optional<BandcampStreamProbeFailure> unfinishedFailure) mutable {
+              const auto request = weakRequest.lock();
+              if(!request) {
+                  return;
+              }
+              QList<BandcampStreamProbeResult> results;
+              {
+                  const std::scoped_lock lock{request->resultsMutex};
+                  if(request->completionScheduled) {
+                      return;
+                  }
+                  if(unfinishedFailure) {
+                      for(size_t index = 0; index < request->itemCompleted.size(); ++index) {
+                          if(!request->itemCompleted[index]) {
+                              request->results[static_cast<qsizetype>(index)].failure = *unfinishedFailure;
+                          }
+                      }
+                  }
+                  request->completionScheduled = true;
+                  results                      = std::move(request->results);
+              }
+              dispatchCompletion(std::move(results));
+          };
+    request->finish = finishBatch;
+
+    auto completeItem = [weakRequest, finishBatch](qsizetype index, BandcampStreamProbeResult result) mutable {
+        const auto request = weakRequest.lock();
+        if(!request) {
+            return;
+        }
+        bool lastItem = false;
+        {
+            const std::scoped_lock lock{request->resultsMutex};
+            const size_t itemIndex = static_cast<size_t>(index);
+            if(request->completionScheduled || request->itemCompleted[itemIndex]) {
+                return;
+            }
+            request->results[index]           = std::move(result);
+            request->itemCompleted[itemIndex] = true;
+            lastItem                          = --request->remaining == 0;
+        }
+        if(lastItem) {
+            finishBatch(std::nullopt);
+        }
+    };
+
+    QObject::connect(callbackContext, &QObject::destroyed, this, [this, token, weakRequest]() {
+        if(const auto request = weakRequest.lock()) {
+            request->disabled.store(true, std::memory_order_relaxed);
+            if(request->deadlineTimer) {
+                request->deadlineTimer->stop();
+                request->deadlineTimer->deleteLater();
+                request->deadlineTimer.clear();
+            }
+            const std::scoped_lock lock{request->completionMutex};
+            request->completion = {};
+        }
+        m_requests.remove(token);
+    });
+
+    if(tracks.isEmpty()) {
+        finishBatch(std::nullopt);
+        return {.token = token};
+    }
+
+    auto* timer = new QTimer(this);
+    timer->setSingleShot(true);
+    request->deadlineTimer = timer;
+    QObject::connect(timer, &QTimer::timeout, this, [request]() {
+        request->cancellation.request_stop();
+        if(request->finish) {
+            request->finish(BandcampStreamProbeFailure::BatchDeadline);
+        }
+    });
+    timer->start(static_cast<int>(ProbeBatchTimeout.count() * 1000));
+
     const auto batchDeadline = std::chrono::steady_clock::now() + ProbeBatchTimeout;
-    // The task owns only immutable input and shared host/service state; it never
-    // captures the probe, request, watcher, or callback context.
-    watcher->setFuture(QtConcurrent::mapped(
-        &probePool(), tracks, [state, stopToken, batchDeadline](const BandcampResolvedTrack& track) {
-            BandcampStreamProbeResult result;
-            if(stopToken.stop_requested() || std::chrono::steady_clock::now() >= batchDeadline) {
-                result = BandcampStreamProbeResult{
-                    .trackId = track.track.id,
-                    .failure = stopToken.stop_requested() ? BandcampStreamProbeFailure::Cancelled
-                                                          : BandcampStreamProbeFailure::BatchDeadline,
-                };
-            }
-            else {
-                try {
-                    result = readProperties(state->audioLoader, state->remoteIo, state->mutex, track, stopToken,
-                                            batchDeadline);
-                }
-                catch(...) {
-                    result = BandcampStreamProbeResult{.trackId = track.track.id,
-                                                       .failure = BandcampStreamProbeFailure::DecoderException};
-                }
-            }
-            if(result.failure) {
-                logStreamProbeFailure(result.trackId, *result.failure);
-            }
-            return result;
-        }));
+    for(qsizetype index = 0; index < tracks.size(); ++index) {
+        const BandcampResolvedTrack track = tracks.at(index);
+        try {
+            probePool().start(
+                QRunnable::create([state, stopToken, batchDeadline, track, index, completeItem]() mutable {
+                    BandcampStreamProbeResult result;
+                    if(stopToken.stop_requested() || std::chrono::steady_clock::now() >= batchDeadline) {
+                        result = BandcampStreamProbeResult{
+                            .trackId = track.track.id,
+                            .failure = stopToken.stop_requested() ? BandcampStreamProbeFailure::Cancelled
+                                                                  : BandcampStreamProbeFailure::BatchDeadline,
+                        };
+                    }
+                    else {
+                        try {
+                            result = readProperties(state->audioLoader, state->remoteIo, state->mutex, track, stopToken,
+                                                    batchDeadline);
+                        }
+                        catch(...) {
+                            result = BandcampStreamProbeResult{.trackId = track.track.id,
+                                                               .failure = BandcampStreamProbeFailure::DecoderException};
+                        }
+                    }
+                    if(result.failure) {
+                        logStreamProbeFailure(result.trackId, *result.failure);
+                    }
+                    completeItem(index, std::move(result));
+                }));
+        }
+        catch(...) {
+            BandcampStreamProbeResult result{.trackId = track.track.id,
+                                             .failure = BandcampStreamProbeFailure::DecoderException};
+            logStreamProbeFailure(result.trackId, *result.failure);
+            completeItem(index, std::move(result));
+        }
+    }
     return {.token = token};
 }
 
@@ -481,6 +623,9 @@ void BandcampStreamProbe::cancel(quint64 token)
     const auto request = m_requests.value(token);
     if(request) {
         request->cancellation.request_stop();
+        if(request->finish) {
+            request->finish(BandcampStreamProbeFailure::Cancelled);
+        }
     }
 }
 
@@ -491,9 +636,18 @@ void BandcampStreamProbe::shutdown()
     }
     m_shuttingDown = true;
     for(const auto& request : std::as_const(m_requests)) {
+        request->disabled.store(true, std::memory_order_relaxed);
         request->callbackContext.clear();
-        request->completion = {};
+        {
+            const std::scoped_lock lock{request->completionMutex};
+            request->completion = {};
+        }
         request->cancellation.request_stop();
+        if(request->deadlineTimer) {
+            request->deadlineTimer->stop();
+            request->deadlineTimer->deleteLater();
+            request->deadlineTimer.clear();
+        }
     }
     m_requests.clear();
     {
