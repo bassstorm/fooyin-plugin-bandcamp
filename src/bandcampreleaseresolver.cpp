@@ -23,11 +23,6 @@
 
 namespace Fooyin::Bandcamp {
 namespace {
-QString cacheIdentity(const BandcampPageUrl& page)
-{
-    return QString::number(static_cast<unsigned int>(page.kind)) + QChar(u':') + page.url;
-}
-
 ResolutionError parentFailure(const ResolutionError& cause, const QUrl& parentUrl, qint64 trackId,
                               ResolutionStage stage)
 {
@@ -742,7 +737,7 @@ struct BandcampReleaseResolver::Impl
         }
         while(nextRequest < pending.size() && active.size() < options.parallelism) {
             const BandcampReleaseRequest request = pending.at(nextRequest);
-            const QString identity               = cacheIdentity(request.page);
+            const QString identity               = bandcampPageKey(request.page);
             if(cache.contains(identity)) {
                 qCDebug(BANDCAMP_TRACE_RESOLVE).noquote() << formatTraceEvent(
                     releaseRequestContext(request), QStringLiteral("domain_cache_hit"),

@@ -26,16 +26,32 @@ private slots:
         QCOMPARE(dialog.windowTitle(), u"Bandcamp Import"_s);
         QCOMPARE(status->text(), u"Starting Bandcamp import…"_s);
 
-        BandcampOperationProgress progress;
-        progress.phase         = BandcampOperationPhase::Resolving;
+        BandcampImportProgress progress;
+        progress.phase         = BandcampImportPhase::Resolving;
         progress.completedWork = 2;
         progress.totalWork     = 4;
         dialog.updateProgress(progress);
         QCOMPARE(progressBar->value(), 50);
         QCOMPARE(status->text(), u"Resolving releases… 2 of 4"_s);
-        progress.phase = BandcampOperationPhase::Finished;
+
+        progress.phase         = BandcampImportPhase::Probing;
+        progress.completedWork = 3;
         dialog.updateProgress(progress);
-        QCOMPARE(status->text(), u"Finishing import…"_s);
+        QCOMPARE(progressBar->value(), 75);
+        QCOMPARE(status->text(), u"Importing releases… 3 of 4"_s);
+
+        progress.phase = BandcampImportPhase::Committing;
+        dialog.updateProgress(progress);
+        QCOMPARE(progressBar->value(), 75);
+        QCOMPARE(status->text(), u"Adding releases to the playlist… 3 of 4"_s);
+
+        progress.phase         = BandcampImportPhase::Finished;
+        progress.completedWork = progress.totalWork;
+        dialog.updateProgress(progress);
+        QCOMPARE(status->text(), u"Adding releases to the playlist… 4 of 4"_s);
+        QCOMPARE(progressBar->value(), 100);
+        QCOMPARE(progressBar->minimum(), 0);
+        QCOMPARE(progressBar->maximum(), 100);
 
         dialog.finish(BandcampImportSummary{.added = 3, .failed = 1, .cancelled = 2});
         QCOMPARE(status->text(), u"Import finished: 3 added, 1 failed, 2 cancelled."_s);
@@ -57,7 +73,7 @@ private slots:
 
         BandcampOperationProgress progress;
         progress.phase = BandcampOperationPhase::Finished;
-        dialog.updateProgress(progress);
+        dialog.updateRefreshProgress(progress);
         QCOMPARE(status->text(), u"Finishing stream updates…"_s);
         dialog.finishRefresh(BandcampRefreshSummary{.updated = 2, .unchanged = 3, .failed = 1, .cancelled = 4});
         QCOMPARE(

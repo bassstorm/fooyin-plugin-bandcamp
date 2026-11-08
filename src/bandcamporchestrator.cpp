@@ -270,14 +270,9 @@ QVector<BandcampAssociatedOutcome> BandcampOrchestrator::cancelPending()
     return drain();
 }
 
-QString BandcampOrchestrator::requestKey(const BandcampPageUrl& page)
-{
-    return QString::number(static_cast<unsigned int>(page.kind)) + QChar(u':') + page.url;
-}
-
 QString BandcampOrchestrator::addRequest(const BandcampPageUrl& page, qint64 id)
 {
-    const QString key = requestKey(page);
+    const QString key = bandcampPageKey(page);
     if(!m_requestKeys.contains(key)) {
         m_requestKeys.insert(key);
         m_requests.append({key, page, id});

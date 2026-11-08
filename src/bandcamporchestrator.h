@@ -104,7 +104,6 @@ private:
         bool orderPrepared{false};
     };
 
-    static QString requestKey(const BandcampPageUrl& page);
     QString addRequest(const BandcampPageUrl& page, qint64 id = 0);
     void registerRequest(qsizetype groupIndex, const QString& key);
     void removeGroupRequests(qsizetype groupIndex);

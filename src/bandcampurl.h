@@ -26,6 +26,11 @@ struct BandcampPageUrl
     }
 };
 
+inline QString bandcampPageKey(const BandcampPageUrl& page)
+{
+    return QString::number(static_cast<unsigned int>(page.kind)) + QChar(u':') + page.url;
+}
+
 BandcampPageUrl parseBandcampPageUrl(const QString& text);
 QString pageKindName(BandcampPageKind kind);
 [[nodiscard]] bool isSupportedBandcampStreamUrl(const QString& text);

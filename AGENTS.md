@@ -14,10 +14,30 @@ Each stage of the pipeline has one clear owner and responsibility:
 | **Parser** (`bandcampparser.*`, `bandcamphtmlreader.*`) | Extracting Bandcamp `data-tralbum` JSON and discography listing structure into typed candidates with provenance. | Network requests, cross-page reconciliation, or final scope validity. |
 | **Assembly & Admission** (`bandcampassembly.*`) | Reconciling track and parent-album candidates, enforcing authority rules, and validating required fields for the requested scope. | Raw HTML/JSON access or heuristic title/number cleanup. |
 | **Post-Processors** (`bandcamppostprocessor.*`) | Ordered semantic refinement of admitted album metadata (first) and track metadata (second). | Rejecting resources, removing tracks, changing identities/streams, or raw source access. |
-| **Resolver & Orchestrator** (`bandcampattemptsupervisor.*`, `bandcamplistingresolver.*`, `bandcampreleaseresolver.*`, `bandcamporchestrator.*`, `bandcampresolutionservice.*`) | Discography unfolding, request deduplication, parent acquisition, bounded parallelism, operation-scoped domain caching, and input-order preservation. | Source parsing or Fooyin database/playlist mutations. |
-| **Fooyin Integration** (`bandcampfooyintrack.*`, `bandcamplibrarygateway.*`, `bandcampimportcontroller.*`, `bandcampstreamprobe.*`, `bandcamprefreshcontroller.*`, `bandcampplaybackpreparation.*`, `bandcampplayback.*`, `bandcampprogressdialog.*`, `bandcampplugin.*`) | Projecting domain tracks to Fooyin tracks, optional actual stream-property probing, one-way snapshot metadata/transport writes, playlist import, stream refresh, and playback bridging. | Metadata normalization or Bandcamp source interpretation. |
+| **Resolver & Orchestrator** (`bandcampattemptsupervisor.*`, `bandcamplistingresolver.*`, `bandcampreleaseresolver.*`, `bandcamporchestrator.*`, `bandcampresolutionservice.*`) | Discography discovery and unfolding, request deduplication, parent acquisition, bounded parallelism, operation-scoped domain caching, and canonical playlist ordering. | Source parsing, Fooyin database/playlist mutations, or stream-property probing. |
+| **Host Import Pipeline** (`bandcampimportpipeline.*`, `bandcampimportcontroller.*`) | Reactive import lifecycle (`StreamProbing`, `LibraryCommit`, `PlaylistInsert`), preserving playlist order with decoupled probe concurrency. | Bandcamp source parsing, resolution, or metadata normalization. |
+| **Fooyin Integration** (`bandcampfooyintrack.*`, `bandcamplibrarygateway.*`, `bandcampstreamprobe.*`, `bandcamprefreshcontroller.*`, `bandcampplaybackpreparation.*`, `bandcampplayback.*`, `bandcampprogressdialog.*`, `bandcampplugin.*`) | Projecting domain tracks to Fooyin tracks, stream-property probing, one-way snapshot metadata/transport writes, stream refresh, playback bridging, and UI integration. | Metadata normalization or Bandcamp source interpretation. |
 
 Do not split a single state machine across layers or mix UI batch workflows with single-track audio-thread preparation.
+
+```mermaid
+flowchart LR
+    subgraph Tier1["Tier 1: Domain Resolution Engine"]
+        DD["Stage 1: DiscographyDiscovery"] --> RR["Stage 2: ReleaseResolution"]
+        RR --> RO["Stage 3: ReleaseOrdering"]
+        RO --> SR["Output: BandcampScopeResult"]
+    end
+    subgraph Tier2["Tier 2: Host Import Pipeline"]
+        SR --> Q["ImportJob: Queued"]
+        Q --> SP["Stage 1: StreamProbing (concurrent)"]
+        SP --> LC["Stage 2: LibraryCommit (strictly serial)"]
+        LC --> PI["Stage 3: PlaylistInsert"]
+        PI --> OUT["Outcome: BandcampImportSummary"]
+        Q -. "probe disabled" .-> LC
+    end
+```
+
+The host import pipeline decouples stream-probing concurrency from strictly ordered playlist commits. Cancellation immediately discards uncommitted work and aborts in-flight probe and gateway operations.
 
 ### KISS & YAGNI
 

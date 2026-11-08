@@ -2,9 +2,10 @@
 
 #include "bandcamplogging.h"
 
-#include <QHash>
 #include <QThread>
+#include <QTimer>
 
+#include <memory>
 #include <utility>
 
 namespace Fooyin::Bandcamp {
@@ -26,9 +27,9 @@ BandcampImportController::BandcampImportController(BandcampOperationId operation
     , m_streamProbe{streamProbe}
     , m_probeStreams{probeStreams}
 {
+    m_progress.operationId     = operationId;
     const bool ownersAvailable = playlistOwnersAvailable();
-    if(m_initialFailure || !ownersAvailable || !m_playlistApi.inspect || !m_playlistApi.createNew
-       || !m_playlistApi.insert) {
+    if(!ownersAvailable || !m_playlistApi.inspect || !m_playlistApi.createNew || !m_playlistApi.insert) {
         m_initialFailure = true;
         m_stopReason     = tr("The playlist service is unavailable.");
     }
@@ -51,6 +52,10 @@ BandcampImportController::BandcampImportController(BandcampOperationId operation
                 break;
         }
     }
+    configurePipeline();
+    connect(&m_pipeline, &BandcampImportPipeline::progressChanged, this, &BandcampImportController::onPipelineProgress);
+    connect(&m_pipeline, &BandcampImportPipeline::jobFinished, this, &BandcampImportController::onPipelineJobFinished);
+    connect(&m_pipeline, &BandcampImportPipeline::becameIdle, this, &BandcampImportController::finishIfReady);
 }
 
 BandcampImportController::~BandcampImportController()
@@ -59,14 +64,139 @@ BandcampImportController::~BandcampImportController()
     m_finished                    = true;
     m_stopping                    = true;
     m_pendingScopes.clear();
-    m_handoffPhase = HandoffPhase::None;
-    if(m_streamProbe && m_probeToken != 0) {
-        m_streamProbe->cancel(m_probeToken);
-    }
-    cancelGatewayRequest();
+    m_pipeline.cancel();
     if(withdrawResolution) {
         requestResolutionCancellation();
     }
+}
+
+void BandcampImportController::configurePipeline()
+{
+    if(m_probeStreams) {
+        m_pipeline.setProbeHandler(
+            [this](const ImportJob& job, BandcampImportPipeline::ProbeCompletion completion) {
+                m_pendingProbeRetries.insert(job.id, PendingProbeRetry{job, std::move(completion)});
+                submitProbe(job.id);
+            },
+            [this](const ImportJob& job) { cancelProbe(job.id); });
+    }
+
+    m_pipeline.setCommitHandler(
+        [this](const ImportJob& job, BandcampImportPipeline::CommitCompletion completion) {
+            if(!m_gateway) {
+                completion(FooyinTrackCommitFailure{FooyinTrackCommitErrorCode::LibraryUnavailable, 0,
+                                                    QStringLiteral("library gateway unavailable")});
+                return;
+            }
+            CorrelationContext correlation{.resourceUrl = QUrl(job.scope.page.url)};
+            if(const auto* success = std::get_if<ResolutionSuccess<BandcampResolvedData>>(&job.scope.outcome)) {
+                if(const auto* album = std::get_if<BandcampAlbum>(&success->value)) {
+                    correlation.albumId = album->metadata.id;
+                }
+                else {
+                    const auto& track   = std::get<BandcampResolvedTrack>(success->value);
+                    correlation.albumId = track.album ? track.album->id : 0;
+                    correlation.trackId = track.track.id;
+                }
+            }
+
+            const QPointer<BandcampImportController> guard{this};
+            const quint64 jobId  = job.id;
+            auto submissionState = std::make_shared<std::pair<quint64, bool>>(0, false);
+            const quint64 token  = m_gateway->commitImport(
+                job.importTracks, this, correlation,
+                [guard, jobId, completion, submissionState](FooyinTrackCommitOutcome outcome) mutable {
+                    submissionState->second = true;
+                    if(guard) {
+                        if(submissionState->first != 0) {
+                            guard->m_gatewayTokens.remove(jobId);
+                        }
+                        completion(std::move(outcome));
+                    }
+                });
+            submissionState->first = token;
+            if(token != 0 && !submissionState->second) {
+                m_gatewayTokens.insert(jobId, token);
+                if(m_stopping) {
+                    cancelGatewayRequest(jobId);
+                }
+            }
+        },
+        [this](const ImportJob& job) { cancelGatewayRequest(job.id); });
+
+    m_pipeline.setInsertHandler([this](const ImportJob& job) {
+        if(m_stopping || m_finished) {
+            return false;
+        }
+        Fooyin::UId destination;
+        if(!prepareDestination(job.scope, destination)) {
+            return false;
+        }
+        if(m_stopping || m_finished) {
+            return false;
+        }
+        const auto insert = m_playlistApi.insert;
+        insert(destination, job.committedTracks);
+        return true;
+    });
+}
+
+void BandcampImportController::submitProbe(quint64 jobId)
+{
+    const auto pending = m_pendingProbeRetries.constFind(jobId);
+    if(pending == m_pendingProbeRetries.cend() || m_finished || m_stopping) {
+        return;
+    }
+
+    const ImportJob job   = pending->job;
+    const auto completion = pending->completion;
+    if(!m_streamProbe) {
+        QList<BandcampStreamProbeResult> results;
+        results.reserve(job.tracks.size());
+        for(const BandcampResolvedTrack& track : job.tracks) {
+            qCWarning(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+                CorrelationContext{.trackId = track.track.id}, QStringLiteral("stream_probe_failed"),
+                {DiagnosticField::text(QStringLiteral("reason"), QStringLiteral("remote_unavailable"))});
+            results.append({track.track.id, {}, BandcampStreamProbeFailure::RemoteUnavailable});
+        }
+        m_pendingProbeRetries.remove(jobId);
+        completion(std::move(results));
+        return;
+    }
+
+    const QPointer<BandcampImportController> guard{this};
+    const BandcampStreamProbeSubmission submission = m_streamProbe->probe(
+        job.tracks, this, [guard, jobId, completion](QList<BandcampStreamProbeResult> results) mutable {
+            if(!guard) {
+                return;
+            }
+            guard->m_probeTokens.remove(jobId);
+            guard->m_pendingProbeRetries.remove(jobId);
+            completion(std::move(results));
+        });
+    if(submission.token != 0) {
+        m_pendingProbeRetries.remove(jobId);
+        m_probeTokens.insert(jobId, submission.token);
+        return;
+    }
+
+    if(submission.rejection == BandcampStreamProbeFailure::CapacityRejected) {
+        QTimer::singleShot(50, this, [guard, jobId]() {
+            if(guard) {
+                guard->submitProbe(jobId);
+            }
+        });
+        return;
+    }
+
+    QList<BandcampStreamProbeResult> results;
+    results.reserve(job.tracks.size());
+    const auto failure = submission.rejection.value_or(BandcampStreamProbeFailure::Cancelled);
+    for(const BandcampResolvedTrack& track : job.tracks) {
+        results.append({track.track.id, {}, failure});
+    }
+    m_pendingProbeRetries.remove(jobId);
+    completion(std::move(results));
 }
 
 void BandcampImportController::start()
@@ -76,7 +206,15 @@ void BandcampImportController::start()
     }
     m_started = true;
     if(m_initialFailure) {
-        failRun(m_stopReason, false);
+        failRun(m_stopReason);
+        return;
+    }
+    const QPointer<BandcampImportController> guard{this};
+    while(!m_pendingScopes.isEmpty()) {
+        enqueueScope(m_pendingScopes.dequeue());
+        if(!guard) {
+            return;
+        }
     }
 }
 
@@ -85,34 +223,21 @@ void BandcampImportController::cancel()
     if(m_finished || m_stopping) {
         return;
     }
-
     const QPointer<BandcampImportController> guard{this};
     m_stopping = true;
-    clearPendingAsCancelled();
-    switch(m_handoffPhase) {
-        case HandoffPhase::Probing:
-        case HandoffPhase::Gateway:
-            ++m_cancelled;
-            m_handoffPhase = HandoffPhase::None;
-            break;
-        case HandoffPhase::PreparingDestination:
-            ++m_cancelled;
-            break;
-        case HandoffPhase::None:
-        case HandoffPhase::Inserting:
-            break;
-    }
-    const quint64 probeToken = std::exchange(m_probeToken, 0);
-    if(m_streamProbe && probeToken != 0) {
-        m_streamProbe->cancel(probeToken);
-    }
-    cancelGatewayRequest();
+    m_pipeline.cancel();
     if(!guard) {
         return;
     }
-    guard->requestResolutionCancellation();
+    while(!m_pendingScopes.isEmpty()) {
+        enqueueScope(m_pendingScopes.dequeue());
+        if(!guard) {
+            return;
+        }
+    }
+    requestResolutionCancellation();
     if(guard) {
-        guard->finishIfReady();
+        finishIfReady();
     }
 }
 
@@ -121,19 +246,24 @@ void BandcampImportController::acceptScopeResult(const BandcampScopeResult& resu
     if(result.operationId != m_operationId || m_finished) {
         return;
     }
-    if(m_stopping) {
-        ++m_cancelled;
+    if(!m_started) {
+        m_pendingScopes.enqueue(result);
         return;
     }
-
-    m_pendingScopes.enqueue(result);
-    pump();
+    enqueueScope(result);
 }
 
 void BandcampImportController::acceptProgress(const BandcampOperationProgress& progress)
 {
-    if(progress.operationId == m_operationId && !m_finished && !m_stopping) {
-        emit progressChanged(progress);
+    if(progress.operationId != m_operationId || m_finished) {
+        return;
+    }
+    m_progress  = progress;
+    m_totalWork = progress.totalWork;
+    const QPointer<BandcampImportController> guard{this};
+    m_pipeline.setTotalWork(m_totalWork);
+    if(guard) {
+        publishImportProgress();
     }
 }
 
@@ -143,259 +273,152 @@ void BandcampImportController::finishResolution(const BandcampOperationSummary& 
         return;
     }
     m_resolutionFinished = true;
-    if((m_handoffPhase != HandoffPhase::None || !m_pendingScopes.isEmpty()) && !m_importingEmitted) {
-        m_importingEmitted = true;
-        const QPointer<BandcampImportController> guard{this};
-        emit importing();
-        if(!guard) {
-            return;
-        }
+    const QPointer<BandcampImportController> guard{this};
+    publishImportProgress();
+    if(guard) {
+        finishIfReady();
     }
-    finishIfReady();
 }
 
-void BandcampImportController::pump()
+void BandcampImportController::enqueueScope(const BandcampScopeResult& scope)
 {
-    if(!m_started || m_finished || m_stopping || m_handoffPhase != HandoffPhase::None) {
-        return;
-    }
-
-    while(!m_pendingScopes.isEmpty()) {
-        const BandcampScopeResult scope = m_pendingScopes.dequeue();
-        if(std::holds_alternative<ResolutionFailure>(scope.outcome)) {
-            ++m_failed;
-            continue;
+    ImportJob job{scope};
+    if(const auto* success = std::get_if<ResolutionSuccess<BandcampResolvedData>>(&scope.outcome)) {
+        if(const auto* album = std::get_if<BandcampAlbum>(&success->value)) {
+            job.tracks.reserve(album->tracks.size());
+            for(const BandcampTrack& track : album->tracks) {
+                job.tracks.append({track, album->metadata});
+            }
         }
-        if(std::holds_alternative<ResolutionCancelled>(scope.outcome)) {
-            ++m_cancelled;
-            continue;
+        else {
+            job.tracks.append(std::get<BandcampResolvedTrack>(success->value));
         }
 
-        const QPointer<BandcampImportController> guard{this};
-        const bool available = playlistOwnersAvailable();
-        if(!guard) {
-            return;
-        }
-        if(QThread::currentThread() != thread() || !available) {
-            guard->failRun(tr("The playlist service is unavailable."), true);
-            return;
-        }
-        if(!guard->m_pendingNewPlaylist) {
-            const bool writable = guard->destinationWritable(guard->m_destinationId);
+        if(!m_stopping) {
+            const QPointer<BandcampImportController> guard{this};
+            if(QThread::currentThread() != thread() || !playlistOwnersAvailable()) {
+                job.admissionFailure = tr("The playlist service is unavailable.");
+            }
+            else if(!m_pendingNewPlaylist && !destinationWritable(m_destinationId)) {
+                job.admissionFailure = tr("The selected playlist is no longer available or writable.");
+            }
             if(!guard) {
                 return;
             }
-            if(!writable) {
-                guard->failRun(tr("The selected playlist is no longer available or writable."), true);
-                return;
-            }
         }
-
-        const BandcampResolvedData& data = std::get<ResolutionSuccess<BandcampResolvedData>>(scope.outcome).value;
-        QList<BandcampResolvedTrack> tracks;
-        if(const auto* album = std::get_if<BandcampAlbum>(&data)) {
-            tracks.reserve(album->tracks.size());
-            for(const BandcampTrack& track : album->tracks) {
-                tracks.append({track, album->metadata});
-            }
-        }
-        else {
-            const auto& resolvedTrack = std::get<BandcampResolvedTrack>(data);
-            tracks.append(resolvedTrack);
-        }
-
-        if(guard->m_probeStreams) {
-            const QList<BandcampResolvedTrack> fallbackTracks = tracks;
-            guard->m_handoffPhase                             = HandoffPhase::Probing;
-            if(!guard->m_streamProbe) {
-                QList<BandcampStreamProbeResult> results;
-                results.reserve(tracks.size());
-                for(const BandcampResolvedTrack& track : tracks) {
-                    qCWarning(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
-                        CorrelationContext{.trackId = track.track.id}, QStringLiteral("stream_probe_failed"),
-                        {DiagnosticField::text(QStringLiteral("reason"), QStringLiteral("remote_unavailable"))});
-                    results.append({track.track.id, {}, BandcampStreamProbeFailure::RemoteUnavailable});
-                }
-                guard->onProbe(scope, fallbackTracks, std::move(results));
-                return;
-            }
-            const auto submission = guard->m_streamProbe->probe(
-                tracks, guard, [guard, scope, tracks](QList<BandcampStreamProbeResult> results) mutable {
-                    if(guard) {
-                        guard->onProbe(scope, std::move(tracks), std::move(results));
-                    }
-                });
-            guard->m_probeToken = submission.token;
-            if(submission.token == 0) {
-                QList<BandcampStreamProbeResult> results;
-                results.reserve(fallbackTracks.size());
-                const auto failure = submission.rejection.value_or(BandcampStreamProbeFailure::Cancelled);
-                for(const BandcampResolvedTrack& track : fallbackTracks) {
-                    results.append({track.track.id, {}, failure});
-                }
-                guard->onProbe(scope, fallbackTracks, std::move(results));
-            }
-        }
-        else {
-            QList<BandcampImportTrack> imported;
-            imported.reserve(tracks.size());
-            for(BandcampResolvedTrack& track : tracks) {
-                imported.append({std::move(track), {}});
-            }
-            guard->commitScope(scope, std::move(imported));
-        }
-        return;
     }
-
-    finishIfReady();
+    m_pipeline.enqueue(std::move(job));
 }
 
-void BandcampImportController::onProbe(const BandcampScopeResult& scope, QList<BandcampResolvedTrack> tracks,
-                                       QList<BandcampStreamProbeResult> results)
+void BandcampImportController::onPipelineProgress(qsizetype completedWork, qsizetype totalWork)
 {
-    if(m_finished || m_stopping || m_handoffPhase != HandoffPhase::Probing) {
-        return;
-    }
-    m_probeToken = 0;
-    QHash<qint64, BandcampStreamProbeResult> resultsByTrack;
-    resultsByTrack.reserve(results.size());
-    for(BandcampStreamProbeResult& result : results) {
-        resultsByTrack.insert(result.trackId, std::move(result));
-    }
-    QList<BandcampImportTrack> imported;
-    imported.reserve(tracks.size());
-    for(BandcampResolvedTrack& track : tracks) {
-        BandcampStreamProperties observed;
-        const auto result = resultsByTrack.find(track.track.id);
-        if(result == resultsByTrack.end()) {
-            qCWarning(BANDCAMP_TRACKS).noquote() << formatTraceEvent(CorrelationContext{.trackId = track.track.id},
-                                                                     QStringLiteral("stream_probe_result_missing"), {});
-        }
-        else if(!result->failure) {
-            observed = std::move(result->properties);
-        }
-        imported.append({std::move(track), std::move(observed)});
-    }
-    commitScope(scope, std::move(imported));
+    m_pipelineCompletedWork = completedWork;
+    m_totalWork             = totalWork;
+    publishImportProgress();
 }
 
-void BandcampImportController::commitScope(const BandcampScopeResult& scope, QList<BandcampImportTrack> tracks)
+void BandcampImportController::onPipelineJobFinished(const ImportJob& job)
 {
-    if(m_finished || m_stopping || (m_handoffPhase != HandoffPhase::None && m_handoffPhase != HandoffPhase::Probing)) {
+    if(m_finished) {
         return;
     }
-    const auto* success = std::get_if<ResolutionSuccess<BandcampResolvedData>>(&scope.outcome);
-    if(!success) {
-        m_handoffPhase = HandoffPhase::None;
-        return;
-    }
-    CorrelationContext correlation{.resourceUrl = QUrl(scope.page.url)};
-    if(const auto* album = std::get_if<BandcampAlbum>(&success->value)) {
-        correlation.albumId = album->metadata.id;
-    }
-    else {
-        const auto& track   = std::get<BandcampResolvedTrack>(success->value);
-        correlation.albumId = track.album ? track.album->id : 0;
-        correlation.trackId = track.track.id;
-    }
-    m_handoffPhase = HandoffPhase::Gateway;
-    const QPointer<BandcampImportController> guard{this};
-    m_gatewayRequest = m_gateway->commitImport(std::move(tracks), this, correlation,
-                                               [guard, scope](FooyinTrackCommitOutcome outcome) mutable {
-                                                   if(guard) {
-                                                       guard->onCommit(scope, std::move(outcome));
-                                                   }
-                                               });
-}
-
-void BandcampImportController::onCommit(const BandcampScopeResult& scope, FooyinTrackCommitOutcome outcome)
-{
-    if(m_finished || m_handoffPhase != HandoffPhase::Gateway) {
-        return;
-    }
-    m_gatewayRequest = 0;
-    m_handoffPhase   = HandoffPhase::PreparingDestination;
-    if(m_stopping) {
-        m_handoffPhase = HandoffPhase::None;
-        finishIfReady();
-        return;
-    }
-
-    if(const auto* failure = std::get_if<FooyinTrackCommitFailure>(&outcome)) {
-        m_handoffPhase = HandoffPhase::None;
-        if(isFatalGatewayFailure(*failure)) {
-            failRun(tr("The library service is unavailable."), true, false);
+    QString fatalReason;
+    bool logFatalReason = true;
+    switch(job.stage) {
+        case ImportJobStage::Completed:
+            ++m_added;
+            break;
+        case ImportJobStage::Failed:
+            ++m_failed;
+            if(job.admissionFailure) {
+                fatalReason = *job.admissionFailure;
+            }
+            else if(!m_pendingFatalReason.isEmpty()) {
+                fatalReason = std::exchange(m_pendingFatalReason, {});
+            }
+            else if(job.commitFailure && isFatalGatewayFailure(*job.commitFailure)) {
+                fatalReason = tr("The library service is unavailable.");
+            }
+            logFatalReason = !job.commitFailure.has_value();
+            break;
+        case ImportJobStage::Cancelled:
+            ++m_cancelled;
+            break;
+        case ImportJobStage::Queued:
+        case ImportJobStage::Probing:
+        case ImportJobStage::Probed:
+        case ImportJobStage::Committing:
+        case ImportJobStage::Committed:
             return;
-        }
-        ++m_failed;
-        pump();
-        return;
     }
 
-    const FooyinTrackCommitSuccess& prepared = std::get<FooyinTrackCommitSuccess>(outcome);
-    Fooyin::UId destination;
+    m_committedCount = m_added + m_failed + m_cancelled;
     const QPointer<BandcampImportController> guard{this};
-    const bool destinationPrepared = guard->prepareDestination(scope, destination);
-    if(!guard) {
+    publishImportProgress();
+    if(!guard || fatalReason.isEmpty()) {
         return;
     }
-    if(guard->m_stopping || guard->m_finished) {
-        guard->m_handoffPhase = HandoffPhase::None;
-        guard->finishIfReady();
-        return;
-    }
-    if(!destinationPrepared) {
-        guard->m_handoffPhase = HandoffPhase::None;
-        guard->failRun(tr("A writable playlist could not be created."), true);
-        return;
-    }
-
-    const auto insert     = guard->m_playlistApi.insert;
-    guard->m_handoffPhase = HandoffPhase::Inserting;
-    insert(destination, prepared.tracks);
-    if(!guard) {
-        return;
-    }
-
-    ++guard->m_added;
-    guard->m_handoffPhase = HandoffPhase::None;
-    if(guard->m_stopping) {
-        guard->finishIfReady();
-    }
-    else {
-        guard->pump();
-    }
+    failRun(std::move(fatalReason), logFatalReason);
 }
 
-void BandcampImportController::failRun(QString reason, bool countCurrentScope, bool logFailure)
+void BandcampImportController::publishImportProgress()
+{
+    BandcampImportProgress progress;
+    progress.operationId = m_operationId;
+    progress.requested   = m_progress.requested;
+    progress.delivered   = m_progress.delivered;
+    progress.active      = m_progress.active;
+    progress.totalWork   = m_totalWork;
+    if(m_progress.phase == BandcampOperationPhase::Discovering) {
+        progress.phase         = BandcampImportPhase::Discovering;
+        progress.completedWork = m_progress.completedWork;
+    }
+    else if(!m_resolutionFinished) {
+        progress.phase         = BandcampImportPhase::Resolving;
+        progress.completedWork = m_progress.completedWork;
+    }
+    else if(m_probeStreams && m_pipelineCompletedWork < m_totalWork) {
+        progress.phase         = BandcampImportPhase::Probing;
+        progress.completedWork = m_pipelineCompletedWork;
+    }
+    else {
+        progress.phase         = BandcampImportPhase::Committing;
+        progress.completedWork = qMin(m_committedCount, m_totalWork);
+    }
+    emit progressChanged(progress);
+}
+
+void BandcampImportController::failRun(QString reason, bool logFailure)
 {
     if(m_finished || m_stopping) {
         return;
     }
-    if(countCurrentScope) {
-        ++m_failed;
-    }
+    const QPointer<BandcampImportController> guard{this};
     m_stopping   = true;
     m_stopReason = std::move(reason);
-    clearPendingAsCancelled();
+    m_pipeline.cancel();
+    if(!guard) {
+        return;
+    }
+    while(!m_pendingScopes.isEmpty()) {
+        enqueueScope(m_pendingScopes.dequeue());
+        if(!guard) {
+            return;
+        }
+    }
     const QString stopReason = m_stopReason;
     if(logFailure) {
         qCWarning(BANDCAMP_UI).noquote() << formatTraceEvent(
             CorrelationContext{}, QStringLiteral("import_stopped"),
             {DiagnosticField::text(QStringLiteral("reason"), stopReason)});
     }
-    const QPointer<BandcampImportController> guard{this};
-    cancelGatewayRequest();
-    if(!guard) {
-        return;
-    }
     emit integrationError(stopReason);
     if(!guard) {
         return;
     }
-    guard->requestResolutionCancellation();
+    requestResolutionCancellation();
     if(guard) {
-        guard->finishIfReady();
+        finishIfReady();
     }
 }
 
@@ -404,39 +427,42 @@ void BandcampImportController::requestResolutionCancellation()
     if(m_resolutionCancellationIssued) {
         return;
     }
-
     m_resolutionCancellationIssued        = true;
-    const BandcampOperationId operationId = m_operationId;
     const CancelOperation cancelOperation = m_cancelOperation;
-    if(!cancelOperation) {
-        return;
+    if(cancelOperation) {
+        cancelOperation(m_operationId);
     }
-    cancelOperation(operationId);
 }
 
-void BandcampImportController::cancelGatewayRequest()
+void BandcampImportController::cancelProbe(quint64 jobId)
 {
-    const quint64 token = std::exchange(m_gatewayRequest, 0);
+    if(m_pendingProbeRetries.remove(jobId) > 0) {
+        return;
+    }
+    const quint64 token = m_probeTokens.take(jobId);
+    if(m_streamProbe && token != 0) {
+        m_streamProbe->cancel(token);
+    }
+}
+
+void BandcampImportController::cancelGatewayRequest(quint64 jobId)
+{
+    const quint64 token = m_gatewayTokens.take(jobId);
     if(!m_gateway) {
         return;
     }
     if(m_ownsGateway) {
         m_gateway->cancel();
     }
-    else {
+    else if(token != 0) {
         m_gateway->cancelRequest(token);
     }
 }
 
-void BandcampImportController::clearPendingAsCancelled()
-{
-    m_cancelled += m_pendingScopes.size();
-    m_pendingScopes.clear();
-}
-
 void BandcampImportController::finishIfReady()
 {
-    if(m_finished || !m_resolutionFinished || m_handoffPhase != HandoffPhase::None || !m_pendingScopes.isEmpty()) {
+    if(m_finished || (m_stopping && !m_resolutionCancellationIssued) || !m_resolutionFinished || !m_pipeline.isIdle()
+       || !m_pendingScopes.isEmpty()) {
         return;
     }
     m_finished = true;
@@ -471,37 +497,33 @@ bool BandcampImportController::prepareDestination(const BandcampScopeResult& sco
         return false;
     }
     if(!available || QThread::currentThread() != thread()) {
-        guard->failRun(tr("The playlist service is unavailable."), true);
+        m_pendingFatalReason = tr("The playlist service is unavailable.");
         return false;
     }
-    if(guard->m_pendingNewPlaylist) {
-        const auto createNew = guard->m_playlistApi.createNew;
-        const QString name
-            = guard->newPlaylistName(std::get<ResolutionSuccess<BandcampResolvedData>>(scope.outcome).value);
+    if(m_pendingNewPlaylist) {
+        const auto createNew = m_playlistApi.createNew;
+        const QString name   = newPlaylistName(std::get<ResolutionSuccess<BandcampResolvedData>>(scope.outcome).value);
         const std::optional<Fooyin::UId> created = createNew(name);
-        if(!guard) {
-            return false;
-        }
-        if(guard->m_stopping || guard->m_finished) {
+        if(!guard || m_stopping || m_finished) {
             return false;
         }
         if(!created || !created->isValid()) {
-            guard->failRun(tr("A writable playlist could not be created."), true);
+            m_pendingFatalReason = tr("A writable playlist could not be created.");
             return false;
         }
-        guard->m_destinationId      = *created;
-        guard->m_createdPlaylistId  = *created;
-        guard->m_pendingNewPlaylist = false;
+        m_destinationId      = *created;
+        m_createdPlaylistId  = *created;
+        m_pendingNewPlaylist = false;
     }
-    const bool writable = guard->destinationWritable(guard->m_destinationId);
+    const bool writable = destinationWritable(m_destinationId);
     if(!guard) {
         return false;
     }
     if(!writable) {
-        guard->failRun(tr("The selected playlist is no longer available or writable."), true);
+        m_pendingFatalReason = tr("The selected playlist is no longer available or writable.");
         return false;
     }
-    id = guard->m_destinationId;
+    id = m_destinationId;
     return true;
 }
 

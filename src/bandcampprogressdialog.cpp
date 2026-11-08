@@ -32,34 +32,77 @@ BandcampProgressDialog::BandcampProgressDialog(BandcampDialogMode mode, QWidget*
     QObject::connect(m_buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 }
 
-void BandcampProgressDialog::updateProgress(const BandcampOperationProgress& progress)
+void BandcampProgressDialog::updateRefreshProgress(const BandcampOperationProgress& progress)
 {
+    BandcampImportProgress importProgress;
+    importProgress.operationId   = progress.operationId;
+    importProgress.requested     = progress.requested;
+    importProgress.delivered     = progress.delivered;
+    importProgress.active        = progress.active;
+    importProgress.completedWork = progress.completedWork;
+    importProgress.totalWork     = progress.totalWork;
     switch(progress.phase) {
         case BandcampOperationPhase::Discovering:
+            importProgress.phase = BandcampImportPhase::Discovering;
+            break;
+        case BandcampOperationPhase::Resolving:
+            importProgress.phase = BandcampImportPhase::Resolving;
+            break;
+        case BandcampOperationPhase::Finished:
+            importProgress.phase = BandcampImportPhase::Finished;
+            break;
+    }
+    updateProgress(importProgress);
+}
+
+void BandcampProgressDialog::updateProgress(const BandcampImportProgress& progress)
+{
+    const int percent = progress.totalWork <= 0
+                          ? 0
+                          : (progress.completedWork >= progress.totalWork
+                                 ? 100
+                                 : qMin(99, static_cast<int>(100.0L * progress.completedWork / progress.totalWork)));
+    switch(progress.phase) {
+        case BandcampImportPhase::Discovering:
             m_status->setText(tr("Discovering releases…"));
             m_progress->setRange(0, 0);
             break;
-        case BandcampOperationPhase::Resolving: {
+        case BandcampImportPhase::Resolving:
             if(progress.totalWork == 0) {
-                m_status->setText(tr("No releases to resolve."));
+                m_status->setText(m_mode == BandcampDialogMode::Import ? tr("No releases to import.")
+                                                                       : tr("No releases to resolve."));
                 m_progress->setRange(0, 0);
                 m_progress->hide();
                 break;
             }
             m_progress->show();
             m_progress->setRange(0, 100);
-            const int percent = progress.completedWork >= progress.totalWork
-                                  ? 100
-                                  : qMin(99, static_cast<int>(100.0L * progress.completedWork / progress.totalWork));
             m_progress->setValue(percent);
             m_status->setText(tr("Resolving releases… %1 of %2").arg(progress.completedWork).arg(progress.totalWork));
             break;
-        }
-        case BandcampOperationPhase::Finished:
-            m_status->setText(m_mode == BandcampDialogMode::Refresh ? tr("Finishing stream updates…")
-                                                                    : tr("Finishing import…"));
+        case BandcampImportPhase::Probing:
             m_progress->show();
-            m_progress->setRange(0, 0);
+            m_progress->setRange(0, 100);
+            m_progress->setValue(percent);
+            m_status->setText(tr("Importing releases… %1 of %2").arg(progress.completedWork).arg(progress.totalWork));
+            break;
+        case BandcampImportPhase::Committing:
+        case BandcampImportPhase::Finished:
+            if(m_mode == BandcampDialogMode::Refresh) {
+                m_status->setText(tr("Finishing stream updates…"));
+                m_progress->setRange(0, 0);
+                break;
+            }
+            if(progress.totalWork == 0) {
+                m_status->setText(tr("No releases to import."));
+                m_progress->hide();
+                break;
+            }
+            m_progress->show();
+            m_progress->setRange(0, 100);
+            m_progress->setValue(percent);
+            m_status->setText(
+                tr("Adding releases to the playlist… %1 of %2").arg(progress.completedWork).arg(progress.totalWork));
             break;
     }
 }
@@ -93,13 +136,6 @@ void BandcampProgressDialog::finishRefresh(const BandcampRefreshSummary& summary
                           .arg(summary.cancelled));
     m_progress->hide();
     m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Close"));
-}
-
-void BandcampProgressDialog::showImporting()
-{
-    m_status->setText(tr("Adding resolved releases to the playlist…"));
-    m_progress->show();
-    m_progress->setRange(0, 0);
 }
 
 void BandcampProgressDialog::showIntegrationError(const QString& reason)

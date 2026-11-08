@@ -1,11 +1,10 @@
 #pragma once
 
-#include "bandcamplibrarygateway.h"
-#include "bandcampresolutionservice.h"
-#include "bandcampstreamprobe.h"
+#include "bandcampimportpipeline.h"
 
 #include <utils/id.h>
 
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QQueue>
@@ -31,6 +30,26 @@ struct BandcampPlaylistApi
     std::function<BandcampPlaylistAvailability(const Fooyin::UId&)> inspect;
     std::function<std::optional<Fooyin::UId>(const QString&)> createNew;
     std::function<void(const Fooyin::UId&, const Fooyin::TrackList&)> insert;
+};
+
+enum class BandcampImportPhase : quint8
+{
+    Discovering,
+    Resolving,
+    Probing,
+    Committing,
+    Finished,
+};
+
+struct BandcampImportProgress
+{
+    BandcampOperationId operationId{0};
+    qsizetype requested{0};
+    qsizetype delivered{0};
+    qsizetype active{0};
+    BandcampImportPhase phase{BandcampImportPhase::Resolving};
+    qsizetype completedWork{0};
+    qsizetype totalWork{0};
 };
 
 struct BandcampImportSummary
@@ -68,30 +87,27 @@ public:
     void finishResolution(const BandcampOperationSummary& summary);
 
 signals:
-    void progressChanged(const Fooyin::Bandcamp::BandcampOperationProgress& progress);
-    void importing();
+    void progressChanged(const Fooyin::Bandcamp::BandcampImportProgress& progress);
     void integrationError(const QString& reason);
     void finished(const Fooyin::Bandcamp::BandcampImportSummary& summary);
 
 private:
-    enum class HandoffPhase : quint8
+    struct PendingProbeRetry
     {
-        None,
-        Probing,
-        Gateway,
-        PreparingDestination,
-        Inserting,
+        ImportJob job;
+        BandcampImportPipeline::ProbeCompletion completion;
     };
 
-    void pump();
-    void onProbe(const BandcampScopeResult& scope, QList<BandcampResolvedTrack> tracks,
-                 QList<BandcampStreamProbeResult> results);
-    void commitScope(const BandcampScopeResult& scope, QList<BandcampImportTrack> tracks);
-    void onCommit(const BandcampScopeResult& scope, FooyinTrackCommitOutcome outcome);
-    void failRun(QString reason, bool countCurrentScope, bool logFailure = true);
+    void configurePipeline();
+    void submitProbe(quint64 jobId);
+    void enqueueScope(const BandcampScopeResult& scope);
+    void onPipelineProgress(qsizetype completedWork, qsizetype totalWork);
+    void onPipelineJobFinished(const ImportJob& job);
+    void publishImportProgress();
+    void failRun(QString reason, bool logFailure = true);
     void requestResolutionCancellation();
-    void cancelGatewayRequest();
-    void clearPendingAsCancelled();
+    void cancelProbe(quint64 jobId);
+    void cancelGatewayRequest(quint64 jobId);
     void finishIfReady();
     [[nodiscard]] bool playlistOwnersAvailable() const;
     [[nodiscard]] bool destinationWritable(const Fooyin::UId& id) const;
@@ -107,24 +123,29 @@ private:
     BandcampPlaylistApi m_playlistApi;
     CancelOperation m_cancelOperation;
     QPointer<BandcampLibraryGateway> m_gateway;
-    quint64 m_gatewayRequest{0};
     bool m_ownsGateway{false};
     QPointer<BandcampStreamProbe> m_streamProbe;
-    quint64 m_probeToken{0};
-    bool m_probeStreams{false};
+    QHash<quint64, quint64> m_probeTokens;
+    QHash<quint64, PendingProbeRetry> m_pendingProbeRetries;
+    QHash<quint64, quint64> m_gatewayTokens;
+    BandcampImportPipeline m_pipeline;
     QQueue<BandcampScopeResult> m_pendingScopes;
+    BandcampOperationProgress m_progress;
+    qsizetype m_pipelineCompletedWork{0};
+    qsizetype m_totalWork{0};
     qsizetype m_added{0};
     qsizetype m_failed{0};
     qsizetype m_cancelled{0};
+    qsizetype m_committedCount{0};
     QString m_stopReason;
-    HandoffPhase m_handoffPhase{HandoffPhase::None};
+    QString m_pendingFatalReason;
+    bool m_probeStreams{false};
     bool m_pendingNewPlaylist{false};
     bool m_initialFailure{false};
     bool m_started{false};
     bool m_resolutionFinished{false};
     bool m_resolutionCancellationIssued{false};
     bool m_stopping{false};
-    bool m_importingEmitted{false};
     bool m_finished{false};
 };
 } // namespace Fooyin::Bandcamp

@@ -14,6 +14,8 @@
 #include <optional>
 
 namespace Fooyin::Bandcamp {
+inline constexpr qsizetype MaxProbeRequests = 2;
+
 enum class BandcampStreamProbeFailure : quint8
 {
     Cancelled,
@@ -43,7 +45,7 @@ struct BandcampStreamProbeSubmission
     std::optional<BandcampStreamProbeFailure> rejection;
 };
 
-class BandcampStreamProbe final : public QObject
+class BandcampStreamProbe : public QObject
 {
     Q_OBJECT
 
@@ -54,9 +56,9 @@ public:
                         QObject* parent = nullptr);
     ~BandcampStreamProbe() override;
 
-    [[nodiscard]] BandcampStreamProbeSubmission probe(const QList<BandcampResolvedTrack>& tracks,
-                                                      QObject* callbackContext, Completion completion);
-    void cancel(quint64 token);
+    [[nodiscard]] virtual BandcampStreamProbeSubmission probe(const QList<BandcampResolvedTrack>& tracks,
+                                                              QObject* callbackContext, Completion completion);
+    virtual void cancel(quint64 token);
     void shutdown();
 
 private:

@@ -3,6 +3,7 @@
 #include "bandcamplibrarygateway.h"
 #include "bandcamplogcapture.h"
 #include "bandcamplogging.h"
+#include "bandcampstreamprobe.h"
 #include "bandcamptrackuri.h"
 
 #include <core/scripting/scriptparser.h>
@@ -12,6 +13,7 @@
 #include <QThread>
 #include <QtTest>
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -89,6 +91,54 @@ Fooyin::Track residentWithUserEdits(int databaseId)
     track.clearWasModified();
     return track;
 }
+
+class PendingStreamProbe final : public BandcampStreamProbe
+{
+public:
+    explicit PendingStreamProbe(QObject* parent = nullptr)
+        : BandcampStreamProbe(nullptr, nullptr, parent)
+    { }
+
+    BandcampStreamProbeSubmission probe(const QList<BandcampResolvedTrack>& tracks, QObject* callbackContext,
+                                        Completion completion) override
+    {
+        const quint64 token = m_nextToken++;
+        m_pending.append([callbackContext, completion = std::move(completion), tracks]() {
+            if(!callbackContext) {
+                return;
+            }
+            QList<BandcampStreamProbeResult> results;
+            results.reserve(tracks.size());
+            for(const auto& track : tracks) {
+                results.append({track.track.id, {}, std::nullopt});
+            }
+            completion(std::move(results));
+        });
+        return {token, std::nullopt};
+    }
+
+    void cancel(quint64) override
+    {
+        m_pending.clear();
+    }
+
+    void completePending()
+    {
+        auto pending = std::move(m_pending);
+        for(auto& complete : pending) {
+            complete();
+        }
+    }
+
+    [[nodiscard]] bool hasPending() const
+    {
+        return !m_pending.isEmpty();
+    }
+
+private:
+    quint64 m_nextToken{1};
+    QList<std::function<void()>> m_pending;
+};
 
 class LibraryBoundary
 {
@@ -346,6 +396,9 @@ private slots:
     void importsIntoCapturedUiPlaylist();
     void reportsCreatedPlaylistForOpeningAfterImport();
     void importsPlaylistOnlyResidentMetadata();
+    void reportsImportProgressAfterResolutionOrProbe_data();
+    void reportsImportProgressAfterResolutionOrProbe();
+    void countsFailedAndCancelledReleasesAsCompleted();
     void createsNewForForcedAndInitiallyUnsuitableDestinations();
     void preservesOrderedAlbumBlocksAndRepeatedScopes();
     void advancesAfterFailuresAndLeavesEmptyImportsUncreated();
@@ -354,6 +407,7 @@ private slots:
     void cancellationWithdrawsPendingGatewayHandoff();
     void unavailableProbeFallsBackAndLogsOncePerTrack();
     void failedProbesStillAdmitResolvedScope();
+    void capacityRejectedProbeRetriesWhenSlotFrees();
     void cancellationDuringProbeSkipsResolvedScope_data();
     void cancellationDuringProbeSkipsResolvedScope();
     void cancellationDuringProbePreservesAlreadyInsertedScopes();
@@ -1420,6 +1474,93 @@ void FooyinTrackTests::importsPlaylistOnlyResidentMetadata()
     }
 }
 
+void FooyinTrackTests::reportsImportProgressAfterResolutionOrProbe_data()
+{
+    QTest::addColumn<bool>("probeStreams");
+    QTest::newRow("without-probing") << false;
+    QTest::newRow("with-probing") << true;
+}
+
+void FooyinTrackTests::reportsImportProgressAfterResolutionOrProbe()
+{
+    QFETCH(bool, probeStreams);
+
+    LibraryBoundary host;
+    PlaylistBoundary playlists;
+    playlists.supplyResidents(host.api);
+    const Fooyin::UId destination = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    PendingStreamProbe probe;
+    BandcampImportController controller{22, {}, false, destination, host.api, playlists.api, {}, &probe, probeStreams};
+    QList<BandcampImportProgress> progressUpdates;
+    QObject::connect(&controller, &BandcampImportController::progressChanged, &controller,
+                     [&progressUpdates](const BandcampImportProgress& progress) { progressUpdates.append(progress); });
+    controller.start();
+
+    BandcampOperationProgress resolutionProgress;
+    resolutionProgress.operationId = 22;
+    resolutionProgress.phase       = BandcampOperationPhase::Resolving;
+    resolutionProgress.totalWork   = 1;
+    controller.acceptProgress(resolutionProgress);
+    QCOMPARE(progressUpdates.last().completedWork, qsizetype{0});
+    QCOMPARE(progressUpdates.last().phase, BandcampImportPhase::Resolving);
+
+    controller.acceptScopeResult(successfulTrackScope(22));
+    QCOMPARE(progressUpdates.last().completedWork, qsizetype{0});
+    QCOMPARE(progressUpdates.last().totalWork, qsizetype{1});
+    QCOMPARE(progressUpdates.last().phase, BandcampImportPhase::Resolving);
+    QCOMPARE(playlists.blocks.size(), 0);
+
+    if(probeStreams) {
+        QVERIFY(probe.hasPending());
+    }
+
+    controller.finishResolution({22, 1, 1, 0, 0});
+    if(probeStreams) {
+        QCOMPARE(progressUpdates.last().phase, BandcampImportPhase::Probing);
+        QCOMPARE(progressUpdates.last().completedWork, qsizetype{0});
+        QCOMPARE(progressUpdates.last().totalWork, qsizetype{1});
+
+        probe.completePending();
+        QCOMPARE(progressUpdates.last().phase, BandcampImportPhase::Committing);
+        QCOMPARE(progressUpdates.last().completedWork, qsizetype{0});
+    }
+    else {
+        QCOMPARE(progressUpdates.last().phase, BandcampImportPhase::Committing);
+        QCOMPARE(progressUpdates.last().completedWork, qsizetype{0});
+    }
+
+    QTRY_COMPARE_WITH_TIMEOUT(playlists.blocks.size(), 1, 3000);
+    QCOMPARE(progressUpdates.last().completedWork, qsizetype{1});
+    QCOMPARE(progressUpdates.last().phase, BandcampImportPhase::Committing);
+}
+
+void FooyinTrackTests::countsFailedAndCancelledReleasesAsCompleted()
+{
+    LibraryBoundary host;
+    PlaylistBoundary playlists;
+    BandcampImportController controller{23, {}, true, {}, host.api, playlists.api, {}};
+    QList<BandcampImportProgress> progressUpdates;
+    QObject::connect(&controller, &BandcampImportController::progressChanged, &controller,
+                     [&progressUpdates](const BandcampImportProgress& progress) { progressUpdates.append(progress); });
+    controller.start();
+
+    BandcampOperationProgress resolutionProgress;
+    resolutionProgress.operationId = 23;
+    resolutionProgress.phase       = BandcampOperationPhase::Resolving;
+    resolutionProgress.totalWork   = 2;
+    controller.acceptProgress(resolutionProgress);
+    controller.acceptScopeResult(failedScope(23));
+    BandcampScopeResult cancelled{23, 1, {BandcampPageKind::Track, TrackSource, {}}, ResolutionCancelled{}};
+    controller.acceptScopeResult(cancelled);
+    QCOMPARE(progressUpdates.last().completedWork, qsizetype{0});
+    QCOMPARE(progressUpdates.last().phase, BandcampImportPhase::Resolving);
+
+    controller.finishResolution({23, 2, 0, 1, 1});
+    QCOMPARE(progressUpdates.last().completedWork, qsizetype{2});
+    QCOMPARE(progressUpdates.last().phase, BandcampImportPhase::Committing);
+    QVERIFY(controller.isFinished());
+}
+
 void FooyinTrackTests::createsNewForForcedAndInitiallyUnsuitableDestinations()
 {
     const QList<BandcampPlaylistAvailability> unsuitable{
@@ -1793,6 +1934,58 @@ void FooyinTrackTests::failedProbesStillAdmitResolvedScope()
         QVERIFY(track.codec().isEmpty());
         QCOMPARE(track.sampleRate(), 0);
         QVERIFY(track.bitDepth() <= 0);
+    }
+}
+
+void FooyinTrackTests::capacityRejectedProbeRetriesWhenSlotFrees()
+{
+    LibraryBoundary library;
+    PlaylistBoundary playlists;
+    auto audioLoader = std::make_shared<Fooyin::AudioLoader>();
+    BandcampStreamProbe probe{audioLoader, nullptr};
+    QObject externalContext;
+    bool firstCompleted  = false;
+    bool secondCompleted = false;
+    const auto firstSubmission
+        = probe.probe({standaloneTrack(901)}, &externalContext,
+                      [&firstCompleted](QList<BandcampStreamProbeResult>) { firstCompleted = true; });
+    const auto secondSubmission
+        = probe.probe({standaloneTrack(902)}, &externalContext,
+                      [&secondCompleted](QList<BandcampStreamProbeResult>) { secondCompleted = true; });
+    QVERIFY(firstSubmission.token > 0);
+    QVERIFY(secondSubmission.token > 0);
+
+    const Fooyin::UId destination = playlists.addPlaylist(BandcampPlaylistAvailability::Writable);
+    BandcampImportController controller{24, {}, false, destination, library.api, playlists.api, {}, &probe, true};
+    bool finished = false;
+    BandcampImportSummary summary;
+    connectImportCompletion(controller, finished, summary);
+    LogCapture logs{u"fy.bandcamp.tracks.debug=true\nfy.trace.bandcamp.tracks.debug=true"_s};
+
+    controller.start();
+    controller.acceptScopeResult(successfulAlbumScope(24));
+    controller.finishResolution({24, 1, 1, 0, 0});
+
+    QTRY_VERIFY_WITH_TIMEOUT(firstCompleted && secondCompleted, 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 2000);
+    QCOMPARE(summary.added, qsizetype{1});
+    QCOMPARE(summary.failed, qsizetype{0});
+    QCOMPARE(playlists.blocks.size(), 1);
+
+    const auto captured = capturedLogsSnapshot();
+    for(const qint64 trackId : {71, 72}) {
+        const QString capacityMessage
+            = u"track="_s + QString::number(trackId) + u" stream_probe_failed reason=capacity_rejected"_s;
+        const QString startedMessage = u"track="_s + QString::number(trackId) + u" stream_probe_started"_s;
+        const auto capacityLog = std::find_if(captured.cbegin(), captured.cend(), [&capacityMessage](const auto& log) {
+            return log.category == u"fy.bandcamp.tracks"_s && log.message.startsWith(capacityMessage);
+        });
+        const auto startedLog  = std::find_if(captured.cbegin(), captured.cend(), [&startedMessage](const auto& log) {
+            return log.category == u"fy.trace.bandcamp.tracks"_s && log.message.startsWith(startedMessage);
+        });
+        QVERIFY(capacityLog != captured.cend());
+        QVERIFY(startedLog != captured.cend());
+        QVERIFY(capacityLog < startedLog);
     }
 }
 

@@ -32,7 +32,6 @@ constexpr auto ProbeBatchTimeout         = std::chrono::seconds{12};
 constexpr qsizetype MaxDecoderCandidates = 16;
 constexpr qint64 MaxProbeReadBytes       = 1024 * 1024;
 const auto ProbePath                     = QStringLiteral("https://bandcamp.invalid/stream");
-constexpr qsizetype MaxProbeRequests     = 2;
 
 QString streamProbeFailureName(BandcampStreamProbeFailure failure)
 {
@@ -383,6 +382,8 @@ struct BandcampStreamProbe::Request
 {
     QPointer<QObject> callbackContext;
     Completion completion;
+    CorrelationContext correlation;
+    std::chrono::steady_clock::time_point startedAt{std::chrono::steady_clock::now()};
     std::stop_source cancellation;
     std::mutex completionMutex;
     std::mutex resultsMutex;
@@ -426,7 +427,12 @@ BandcampStreamProbeSubmission BandcampStreamProbe::probe(const QList<BandcampRes
     auto request             = std::make_shared<Request>();
     request->callbackContext = callbackContext;
     request->completion      = std::move(completion);
-    request->remaining       = tracks.size();
+    if(!tracks.isEmpty()) {
+        const BandcampResolvedTrack& firstTrack = tracks.front();
+        request->correlation                    = firstTrack.album ? CorrelationContext{.albumId = firstTrack.album->id}
+                                                                   : CorrelationContext{.trackId = firstTrack.track.id};
+    }
+    request->remaining = tracks.size();
     request->itemCompleted.resize(static_cast<size_t>(tracks.size()), false);
     request->results.reserve(tracks.size());
     for(const BandcampResolvedTrack& track : tracks) {
@@ -464,14 +470,20 @@ BandcampStreamProbeSubmission BandcampStreamProbe::probe(const QList<BandcampRes
                           guard->m_requests.remove(token);
                           return;
                       }
-                      const bool queued = QMetaObject::invokeMethod(
+                      const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                 std::chrono::steady_clock::now() - request->startedAt)
+                                                 .count();
+                      qCDebug(BANDCAMP_TRACKS).noquote()
+                          << formatTraceEvent(request->correlation, QStringLiteral("release_probe_completed"),
+                                              {DiagnosticField::number(QStringLiteral("elapsedMs"), elapsedMs),
+                                               DiagnosticField::number(QStringLiteral("trackCount"), results.size())});
+
+                      // Free the request slot before user code can synchronously enqueue another probe.
+                      guard->m_requests.remove(token);
+                      QMetaObject::invokeMethod(
                           callbackGuard,
-                          [guard, callbackGuard, token, weakRequest, results = std::move(results)]() mutable {
-                              if(!guard || !callbackGuard) {
-                                  return;
-                              }
-                              const auto request = weakRequest.lock();
-                              if(!request || request->disabled.load(std::memory_order_relaxed)) {
+                          [guard, callbackGuard, request, results = std::move(results)]() mutable {
+                              if(!guard || !callbackGuard || request->disabled.load(std::memory_order_relaxed)) {
                                   return;
                               }
                               Completion callback;
@@ -482,21 +494,8 @@ BandcampStreamProbeSubmission BandcampStreamProbe::probe(const QList<BandcampRes
                               if(callback && !request->disabled.load(std::memory_order_relaxed)) {
                                   callback(std::move(results));
                               }
-                              if(guard) {
-                                  QMetaObject::invokeMethod(
-                                      guard,
-                                      [guard, token]() {
-                                          if(guard) {
-                                              guard->m_requests.remove(token);
-                                          }
-                                      },
-                                      Qt::QueuedConnection);
-                              }
                           },
                           Qt::QueuedConnection);
-                      if(!queued) {
-                          guard->m_requests.remove(token);
-                      }
                   },
                   Qt::QueuedConnection);
           };
@@ -584,6 +583,10 @@ BandcampStreamProbeSubmission BandcampStreamProbe::probe(const QList<BandcampRes
         try {
             probePool().start(
                 QRunnable::create([state, stopToken, batchDeadline, track, index, completeItem]() mutable {
+                    const auto start = std::chrono::steady_clock::now();
+                    qCDebug(BANDCAMP_TRACE_TRACKS).noquote() << formatTraceEvent(
+                        CorrelationContext{.trackId = track.track.id}, QStringLiteral("stream_probe_started"),
+                        {DiagnosticField::url(QStringLiteral("url"), QUrl{track.track.streamUrl, QUrl::StrictMode})});
                     BandcampStreamProbeResult result;
                     if(stopToken.stop_requested() || std::chrono::steady_clock::now() >= batchDeadline) {
                         result = BandcampStreamProbeResult{
@@ -604,6 +607,16 @@ BandcampStreamProbeSubmission BandcampStreamProbe::probe(const QList<BandcampRes
                     }
                     if(result.failure) {
                         logStreamProbeFailure(result.trackId, *result.failure);
+                    }
+                    else {
+                        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                   std::chrono::steady_clock::now() - start)
+                                                   .count();
+                        qCDebug(BANDCAMP_TRACKS).noquote() << formatTraceEvent(
+                            CorrelationContext{.trackId = track.track.id}, QStringLiteral("stream_probe_completed"),
+                            {DiagnosticField::number(QStringLiteral("elapsedMs"), elapsedMs),
+                             DiagnosticField::text(QStringLiteral("codec"), result.properties.codec),
+                             DiagnosticField::number(QStringLiteral("bitrate"), result.properties.bitrate)});
                     }
                     completeItem(index, std::move(result));
                 }));

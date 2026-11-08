@@ -11,6 +11,7 @@ add_executable(bandcamp_deterministic_tests
     bandcamporchestratortests.cpp
     bandcampresolutionservicetests.cpp
     bandcampfooyintracktests.cpp
+    bandcampimportpipelinetests.cpp
     bandcamprefreshcontrollertests.cpp
     bandcampplaybacktests.cpp
 )
@@ -38,3 +39,31 @@ add_test(NAME bandcamp.plugin-input
     COMMAND bandcamp_plugin_input_tests "$<TARGET_FILE:bandcamp>"
 )
 set_tests_properties(bandcamp.plugin-input PROPERTIES TIMEOUT 120)
+
+add_test(NAME bandcamp.import-pipeline
+    COMMAND bandcamp_deterministic_tests --import-pipeline-tests
+)
+add_test(NAME bandcamp.import-controller
+    COMMAND bandcamp_deterministic_tests --fooyin-track-tests
+        importsIntoCapturedUiPlaylist
+        reportsCreatedPlaylistForOpeningAfterImport
+        importsPlaylistOnlyResidentMetadata
+        reportsImportProgressAfterResolutionOrProbe
+        countsFailedAndCancelledReleasesAsCompleted
+        createsNewForForcedAndInitiallyUnsuitableDestinations
+        preservesOrderedAlbumBlocksAndRepeatedScopes
+        advancesAfterFailuresAndLeavesEmptyImportsUncreated
+        stopsWhenDestinationChangesDuringPreparation
+        waitsForGatewayBeforeFinishingResolutionImport
+        cancellationWithdrawsPendingGatewayHandoff
+        unavailableProbeFallsBackAndLogsOncePerTrack
+        failedProbesStillAdmitResolvedScope
+        capacityRejectedProbeRetriesWhenSlotFrees
+        cancellationDuringProbeSkipsResolvedScope
+        cancellationDuringProbePreservesAlreadyInsertedScopes
+        deletingControllerFromPlaylistCallbackWithdrawsResolution
+        cancellationDuringPlaylistCreationDoesNotInsert
+        cancellationDuringInsertionDefersSummaryAndCountsAcceptedBlock
+        deletingControllerFromIntegrationErrorWithdrawsResolution
+)
+set_tests_properties(bandcamp.import-pipeline bandcamp.import-controller PROPERTIES TIMEOUT 120)

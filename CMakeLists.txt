@@ -50,6 +50,8 @@ add_library(bandcamp_fooyin STATIC
     src/bandcamplibrarygateway.h
     src/bandcampimportcontroller.cpp
     src/bandcampimportcontroller.h
+    src/bandcampimportpipeline.cpp
+    src/bandcampimportpipeline.h
     src/bandcampstreamprobe.cpp
     src/bandcampstreamprobe.h
     src/bandcamprefreshcontroller.cpp

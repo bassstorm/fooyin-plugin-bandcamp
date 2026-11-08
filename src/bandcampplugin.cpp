@@ -201,7 +201,8 @@ void BandcampPlugin::refreshSelectedTracks(const Fooyin::TrackList& tracks)
     auto* dialog = new BandcampProgressDialog(BandcampDialogMode::Refresh, Utils::getMainWindow());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     trackDialog(dialog);
-    connect(operation, &BandcampRefreshController::progressChanged, dialog, &BandcampProgressDialog::updateProgress);
+    connect(operation, &BandcampRefreshController::progressChanged, dialog,
+            &BandcampProgressDialog::updateRefreshProgress);
     connect(operation, &BandcampRefreshController::finished, dialog, &BandcampProgressDialog::finishRefresh);
     connect(operation, &BandcampRefreshController::finished, operation, &QObject::deleteLater);
     connect(dialog, &QDialog::finished, operation, &BandcampRefreshController::cancel);
@@ -333,7 +334,6 @@ void BandcampPlugin::onUrlsSubmitted(const QList<BandcampPageUrl>& urls, bool fo
                      [controller](const BandcampOperationSummary& summary) { controller->finishResolution(summary); });
     QObject::connect(controller, &BandcampImportController::progressChanged, dialog,
                      &BandcampProgressDialog::updateProgress);
-    QObject::connect(controller, &BandcampImportController::importing, dialog, &BandcampProgressDialog::showImporting);
     QObject::connect(controller, &BandcampImportController::integrationError, dialog,
                      &BandcampProgressDialog::showIntegrationError);
     QObject::connect(controller, &BandcampImportController::finished, dialog, &BandcampProgressDialog::finish);

@@ -23,8 +23,8 @@ class BandcampProgressDialog : public QDialog
 public:
     explicit BandcampProgressDialog(BandcampDialogMode mode, QWidget* parent = nullptr);
 
-    void updateProgress(const BandcampOperationProgress& progress);
-    void showImporting();
+    void updateProgress(const BandcampImportProgress& progress);
+    void updateRefreshProgress(const BandcampOperationProgress& progress);
     void showIntegrationError(const QString& reason);
     void finish(const BandcampImportSummary& summary);
     void finishRefresh(const BandcampRefreshSummary& summary);
