@@ -7,9 +7,15 @@
   },
   "configurePresets": [
     {
+      "name": "common",
+      "hidden": true,
+      "generator": "Ninja"
+    },
+    {
       "name": "dev",
       "displayName": "Development build",
-      "binaryDir": "${sourceDir}/build"
+      "binaryDir": "${sourceDir}/build",
+      "inherits": [ "common" ]
     },
     {
       "name": "tests",
@@ -17,7 +23,8 @@
       "binaryDir": "${sourceDir}/build-tests",
       "cacheVariables": {
         "BANDCAMP_PLUGIN_BUILD_TESTS": "ON"
-      }
+      },
+      "inherits": [ "common" ]
     },
     {
       "name": "tests-sanitize",
@@ -31,19 +38,11 @@
     {
       "name": "release",
       "displayName": "Release build",
-      "binaryDir": "${sourceDir}/build-release",
+      "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
-      }
-    },
-    {
-      "name": "snapshot",
-      "displayName": "Snapshot build",
-      "binaryDir": "${sourceDir}/build-snapshot",
-      "cacheVariables": {
-        "BANDCAMP_PLUGIN_VERSION_SUFFIX": "-snapshot"
       },
-      "inherits": [ "release" ]
+      "inherits": [ "common" ]
     }
   ],
   "buildPresets": [
@@ -78,12 +77,7 @@
     {
       "name": "release-bundle",
       "configurePreset": "release",
-      "targets": [ "bandcamp_bundle" ]
-    },
-    {
-      "name": "snapshot-bundle",
-      "configurePreset": "snapshot",
-      "targets": [ "bandcamp_bundle" ]
+      "targets": [ "package_plugin" ]
     }
   ],
   "testPresets": [

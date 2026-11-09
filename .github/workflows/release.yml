@@ -14,29 +14,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  check-branch:
-    name: Check branch
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Require default branch
-        if: github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
-        run: |
-          echo "::error::Releases are cut from ${{ github.event.repository.default_branch }}, not ${GITHUB_REF_NAME}"
-          exit 1
-
   build:
-    needs: check-branch
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     uses: ./.github/workflows/build.yml
     permissions:
       contents: read
-      packages: read
     with:
-      preset: release
+      upload_bundle: true
+      snapshot: false
 
   publish:
     name: Publish release
     needs: build
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       # Starts CI for the version-bump commit.
@@ -44,6 +34,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+      BUNDLE: ${{ needs.build.outputs.bundle }}
       TAG: v${{ needs.build.outputs.version }}
 
     steps:
@@ -57,14 +49,16 @@ jobs:
       - name: Download bundle
         uses: actions/download-artifact@v8
         with:
-          name: ${{ needs.build.outputs.artifact }}
+          name: plugin-bundle
           path: dist
 
       - name: Create release
         run: |
+          bundle="dist/${BUNDLE}"
+          test -f "$bundle"
           previous="$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 \
             --json tagName --jq '.[0].tagName // empty')"
-          gh release create "$TAG" dist/*.fyplugin \
+          gh release create "$TAG" "$bundle" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
             --generate-notes \
@@ -83,7 +77,7 @@ jobs:
         run: |
           IFS=. read -r major minor patch <<< "$RELEASED"
           next="${major}.${minor}.$((patch + 1))"
-          sed -i -E "s/^([[:space:]]*VERSION )${RELEASED//./\\.}$/\1${next}/" CMakeLists.txt
+          sed -i -E "s/^([[:space:]]*VERSION )${RELEASED//./\\.}$/\\1${next}/" CMakeLists.txt
           if [ "$(git diff --numstat)" != "$(printf '1\t1\tCMakeLists.txt')" ]; then
             echo "::error::${TAG} is published, but project(VERSION ${RELEASED}) was not found on ${BRANCH}. Bump it manually."
             exit 1

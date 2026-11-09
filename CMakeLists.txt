@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.21)
 
 project(
     bandcamp
@@ -8,14 +8,15 @@ project(
 )
 
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(BANDCAMP_PLUGIN_BUILD_TESTS "Build the Bandcamp deterministic and live tests" OFF)
 option(BANDCAMP_PLUGIN_SANITIZE "Instrument test targets with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
-set(BANDCAMP_PLUGIN_VERSION_SUFFIX "" CACHE STRING "Suffix appended to the project version in the plugin manifest and bundle name, e.g. -snapshot")
+set(BANDCAMP_PLUGIN_VERSION_SUFFIX "" CACHE STRING "Suffix appended to the project version in the plugin manifest and bundle name, e.g. .<hash>")
 set(BANDCAMP_PLUGIN_VERSION "${PROJECT_VERSION}${BANDCAMP_PLUGIN_VERSION_SUFFIX}")
 
 find_package(Fooyin REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Core Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Network Widgets)
 
 # Sanitizer flags are an interface target so every consumer of the core
 # library is instrumented and linked against the sanitizer runtime.
@@ -27,12 +28,42 @@ if(BANDCAMP_PLUGIN_SANITIZE AND NOT MSVC)
     target_link_options(bandcamp_sanitize INTERFACE ${_bandcamp_sanitize_flags})
 endif()
 
-set(BANDCAMP_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
-include(cmake/BandcampCoreSources.cmake)
-add_library(bandcamp_core STATIC ${BANDCAMP_CORE_SOURCES})
-set_target_properties(bandcamp_core PROPERTIES
-    AUTOMOC ON
-    POSITION_INDEPENDENT_CODE ON
+add_library(bandcamp_core STATIC
+    src/bandcampclient.cpp
+    src/bandcampclient.h
+    src/bandcampattemptsupervisor.cpp
+    src/bandcampattemptsupervisor.h
+    src/bandcampdiagnostics.cpp
+    src/bandcampdiagnostics.h
+    src/bandcamplogging.cpp
+    src/bandcamplogging.h
+    src/bandcamplistingresolver.cpp
+    src/bandcamplistingresolver.h
+    src/bandcampmodel.h
+    src/bandcamporchestrator.cpp
+    src/bandcamporchestrator.h
+    src/bandcampreleaseresolver.cpp
+    src/bandcampreleaseresolver.h
+    src/bandcampassembly.cpp
+    src/bandcampassembly.h
+    src/bandcampparser.cpp
+    src/bandcampparser.h
+    src/bandcamphtmlreader.cpp
+    src/bandcamphtmlreader_p.h
+    src/bandcampdirtytitle.cpp
+    src/bandcampdirtytitle.h
+    src/bandcampoutcome.cpp
+    src/bandcampoutcome.h
+    src/bandcamppostprocessor.cpp
+    src/bandcamppostprocessor.h
+    src/bandcampresolutionservice.cpp
+    src/bandcampresolutionservice.h
+    src/bandcamptrackuri.cpp
+    src/bandcamptrackuri.h
+    src/bandcampsettings.cpp
+    src/bandcampsettings.h
+    src/bandcampurl.cpp
+    src/bandcampurl.h
 )
 target_include_directories(bandcamp_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(bandcamp_core
@@ -56,15 +87,13 @@ add_library(bandcamp_fooyin STATIC
     src/bandcampstreamprobe.h
     src/bandcamprefreshcontroller.cpp
     src/bandcamprefreshcontroller.h
+    src/bandcampprogressdialog.cpp
+    src/bandcampprogressdialog.h
     src/bandcampremotestream.h
-)
-set_target_properties(bandcamp_fooyin PROPERTIES
-    AUTOMOC ON
-    POSITION_INDEPENDENT_CODE ON
 )
 target_include_directories(bandcamp_fooyin PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(bandcamp_fooyin
-    PUBLIC bandcamp_core Fooyin::Core Qt6::Core bandcamp_sanitize
+    PUBLIC bandcamp_core Fooyin::Core Qt6::Core Qt6::Widgets bandcamp_sanitize
 )
 
 create_fooyin_plugin(
@@ -73,93 +102,18 @@ create_fooyin_plugin(
     DEPENDS Fooyin::Gui bandcamp_core bandcamp_fooyin
     SOURCES src/bandcampplugin.cpp
             src/bandcampplugin.h
-            src/bandcampprogressdialog.cpp
-            src/bandcampprogressdialog.h
             src/bandcampsettingsdialog.cpp
             src/bandcampsettingsdialog.h
             src/bandcampurldialog.cpp
             src/bandcampurldialog.h
 )
 
-# Fooyin's imported targets bring Qt Concurrent transitively; the plugin no longer uses it.
-if(UNIX AND NOT APPLE)
-    target_link_options(bandcamp PRIVATE "LINKER:--as-needed")
-endif()
-
-if(APPLE)
-    set_property(TARGET bandcamp PROPERTY INSTALL_RPATH "@loader_path/..")
-elseif(UNIX)
-    set_property(TARGET bandcamp PROPERTY INSTALL_RPATH "$ORIGIN/..")
-endif()
-
-# One .fyplugin bundle covers every platform Fooyin supports; Fooyin installs the
-# entry matching the running host.
-string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _bandcamp_arch)
-if(_bandcamp_arch MATCHES "^(x86_64|amd64)$")
-    set(_bandcamp_arch x64)
-elseif(_bandcamp_arch MATCHES "^(aarch64|arm64)$")
-    set(_bandcamp_arch arm64)
-endif()
-if(WIN32)
-    set(_bandcamp_os windows)
-elseif(APPLE)
-    set(_bandcamp_os macos)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
-    set(_bandcamp_os freebsd)
-else()
-    set(_bandcamp_os linux)
-endif()
-set(_bandcamp_host_platform "${_bandcamp_os}-${_bandcamp_arch}")
-
-# Platform directories recognised by Fooyin's plugin installer.
-set(_bandcamp_platforms
-    linux-x64 linux-arm64
-    windows-x64 windows-arm64
-    macos-x64 macos-arm64
-    freebsd-x64 freebsd-arm64
+create_fooyin_plugin_bundle(
+    bandcamp
+    NAME "fooyin-bandcamp-${BANDCAMP_PLUGIN_VERSION}"
+    FILES README.md
+    LICENSE_FILES LICENSE
 )
-if(NOT _bandcamp_host_platform IN_LIST _bandcamp_platforms)
-    message(WARNING "No Fooyin bundle directory for ${_bandcamp_host_platform}; the bundle will contain no Bandcamp module")
-endif()
-
-set(_bandcamp_stage "${CMAKE_CURRENT_BINARY_DIR}/bundle")
-set(_bandcamp_bundle "${CMAKE_CURRENT_BINARY_DIR}/fooyin-bandcamp-${BANDCAMP_PLUGIN_VERSION}.fyplugin")
-
-# Each platform stages into its own directory. Only the host platform gets the
-# built module; other platforms are no-op stubs that leave an empty directory.
-set(_bandcamp_stage_targets)
-foreach(_bandcamp_bundle_platform IN LISTS _bandcamp_platforms)
-    set(_bandcamp_target "bandcamp_bundle_${_bandcamp_bundle_platform}")
-    set(_bandcamp_platform_dir "${_bandcamp_stage}/${_bandcamp_bundle_platform}")
-    if(_bandcamp_bundle_platform STREQUAL _bandcamp_host_platform)
-        add_custom_target(
-            ${_bandcamp_target}
-            COMMAND ${CMAKE_COMMAND} -E rm -rf "${_bandcamp_platform_dir}"
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${_bandcamp_platform_dir}"
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:bandcamp> "${_bandcamp_platform_dir}/"
-            VERBATIM
-        )
-        add_dependencies(${_bandcamp_target} bandcamp)
-    else()
-        add_custom_target(
-            ${_bandcamp_target}
-            COMMAND ${CMAKE_COMMAND} -E rm -rf "${_bandcamp_platform_dir}"
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${_bandcamp_platform_dir}"
-            COMMAND ${CMAKE_COMMAND} -E echo "Bandcamp plugin has no ${_bandcamp_bundle_platform} build yet; directory left empty"
-            VERBATIM
-        )
-    endif()
-    list(APPEND _bandcamp_stage_targets ${_bandcamp_target})
-endforeach()
-
-add_custom_target(
-    bandcamp_bundle
-    COMMAND ${CMAKE_COMMAND} -E chdir "${_bandcamp_stage}"
-            ${CMAKE_COMMAND} -E tar cf "${_bandcamp_bundle}" --format=zip ${_bandcamp_platforms}
-    VERBATIM
-    COMMENT "Creating Fooyin plugin bundle ${_bandcamp_bundle}"
-)
-add_dependencies(bandcamp_bundle ${_bandcamp_stage_targets})
 
 if(BANDCAMP_PLUGIN_BUILD_TESTS)
     enable_testing()
@@ -168,7 +122,7 @@ if(BANDCAMP_PLUGIN_BUILD_TESTS)
 endif()
 
 # The dev container pins this clang-format major; builds elsewhere skip the targets.
-find_program(BANDCAMP_CLANG_FORMAT NAMES clang-format-22)
+find_program(BANDCAMP_CLANG_FORMAT NAMES clang-format-20)
 if(BANDCAMP_CLANG_FORMAT)
     file(GLOB_RECURSE _bandcamp_format_sources CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
@@ -187,5 +141,5 @@ if(BANDCAMP_CLANG_FORMAT)
         VERBATIM
     )
 else()
-    message(STATUS "clang-format-22 not found; clang-format and clang-format-check targets are unavailable")
+    message(STATUS "clang-format-20 not found; clang-format and clang-format-check targets are unavailable")
 endif()
