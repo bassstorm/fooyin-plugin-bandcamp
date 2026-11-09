@@ -75,6 +75,13 @@ public:
         QTimer::singleShot(m_response.delayMs, this, [this]() { beginDelivery(); });
     }
 
+    ~FakeReply() override
+    {
+        // Detach before ~QObject drains posted events: a functor destroyed there can release the manager,
+        // whose child deletion would otherwise delete this reply a second time.
+        setParent(nullptr);
+    }
+
     void abort() override
     {
         if(m_finished || m_aborted) {
