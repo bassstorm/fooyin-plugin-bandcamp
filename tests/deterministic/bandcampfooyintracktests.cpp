@@ -1761,7 +1761,9 @@ void FooyinTrackTests::stopsWhenDestinationChangesDuringPreparation()
                                         selected,
                                         library.api,
                                         playlists.api,
-                                        [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
+                                        [&cancelledOperation](BandcampOperationId id) {
+                                            cancelledOperation = id;
+                                        }};
     bool finished = false;
     BandcampImportSummary summary;
     connectImportCompletion(controller, finished, summary);
@@ -1780,14 +1782,15 @@ void FooyinTrackTests::stopsWhenDestinationChangesDuringPreparation()
 
     PlaylistBoundary unavailable;
     unavailable.owner.reset();
-    BandcampImportController unavailableController{
-        12,
-        {{BandcampPageKind::Track, TrackSource, {}}},
-        true,
-        {},
-        library.api,
-        unavailable.api,
-        [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
+    BandcampImportController unavailableController{12,
+                                                   {{BandcampPageKind::Track, TrackSource, {}}},
+                                                   true,
+                                                   {},
+                                                   library.api,
+                                                   unavailable.api,
+                                                   [&cancelledOperation](BandcampOperationId id) {
+                                                       cancelledOperation = id;
+                                                   }};
     bool unavailableFinished = false;
     BandcampImportSummary unavailableSummary;
     connectImportCompletion(unavailableController, unavailableFinished, unavailableSummary);
@@ -1846,7 +1849,9 @@ void FooyinTrackTests::cancellationWithdrawsPendingGatewayHandoff()
                                         selected,
                                         library.api,
                                         playlists.api,
-                                        [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
+                                        [&cancelledOperation](BandcampOperationId id) {
+                                            cancelledOperation = id;
+                                        }};
     bool finished = false;
     BandcampImportSummary summary;
     connectImportCompletion(controller, finished, summary);
@@ -2113,7 +2118,9 @@ void FooyinTrackTests::deletingControllerFromPlaylistCallbackWithdrawsResolution
         {},
         library.api,
         playlists.api,
-        [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
+        [&cancelledOperation](BandcampOperationId id) {
+            cancelledOperation = id;
+        }};
     QPointer<BandcampImportController> guard{controller};
     bool finished = false;
     BandcampImportSummary summary;
@@ -2221,15 +2228,16 @@ void FooyinTrackTests::deletingControllerFromIntegrationErrorWithdrawsResolution
     BandcampOperationId cancelledOperation = 0;
     bool finished                          = false;
     int integrationErrors                  = 0;
-    controller
-        = new BandcampImportController{17,
-                                       {{BandcampPageKind::Album, AlbumSource, {}}},
-                                       true,
-                                       {},
-                                       library.api,
-                                       playlists.api,
-                                       [&cancelledOperation](BandcampOperationId id) { cancelledOperation = id; }};
-    guard = controller;
+    controller                             = new BandcampImportController{17,
+                                                                          {{BandcampPageKind::Album, AlbumSource, {}}},
+                                              true,
+                                                                          {},
+                                              library.api,
+                                              playlists.api,
+                                              [&cancelledOperation](BandcampOperationId id) {
+                                                  cancelledOperation = id;
+                                              }};
+    guard                                  = controller;
     QObject::connect(controller, &BandcampImportController::integrationError, &connectionContext,
                      [&controller, &integrationErrors](const QString&) {
                          ++integrationErrors;

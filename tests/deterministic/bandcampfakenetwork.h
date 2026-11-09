@@ -257,7 +257,7 @@ protected:
         const FakeResponse response = m_responder ? m_responder(request) : FakeResponse{};
         auto* reply                 = new FakeReply{request, response, this, [this](qint64 size) {
                                         m_largestReadRequest = std::max(m_largestReadRequest, size);
-                                                    }};
+                                    }};
         m_replies.append(reply);
         return reply;
     }

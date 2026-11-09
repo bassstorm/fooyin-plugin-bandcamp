@@ -175,7 +175,9 @@ BandcampStreamProbeResult readProperties(const std::shared_ptr<Fooyin::AudioLoad
     }
 
     std::stop_source probeCancellation;
-    std::stop_callback cancelProbe{cancellation, [&probeCancellation]() { probeCancellation.request_stop(); }};
+    std::stop_callback cancelProbe{cancellation, [&probeCancellation]() {
+                                       probeCancellation.request_stop();
+                                   }};
     const auto probeDeadline  = std::min(batchDeadline, std::chrono::steady_clock::now() + ProbeTimeout);
     const auto probeToken     = probeCancellation.get_token();
     const auto stoppedFailure = [&]() {
@@ -279,7 +281,9 @@ BandcampStreamProbeResult readProperties(const std::shared_ptr<Fooyin::AudioLoad
 
         Fooyin::Track decoderTrack{ProbePath};
         decoderTrack.setMetadataWasRead(true);
-        std::stop_callback abortOnCancel{probeToken, [decoder]() { decoder->requestAbort(); }};
+        std::stop_callback abortOnCancel{probeToken, [decoder]() {
+                                             decoder->requestAbort();
+                                         }};
         try {
             const auto format = decoder->init(source, decoderTrack, Fooyin::AudioDecoder::UpdateTracks);
             if(!format) {

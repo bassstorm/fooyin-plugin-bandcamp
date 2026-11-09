@@ -151,7 +151,7 @@ void beginPreparation(const std::shared_ptr<BandcampPlaybackBridge::State>& stat
     OperationOptions options = makeOperationOptions(loaded);
     options.maxAttempts      = PlaybackAttemptsPerPage;
     const auto deadline      = std::chrono::steady_clock::now()
-                             + std::chrono::milliseconds{playbackWaiterBudgetMs(options.attemptTimeoutMs)};
+                        + std::chrono::milliseconds{playbackWaiterBudgetMs(options.attemptTimeoutMs)};
     {
         const std::scoped_lock lock{waiter->mutex};
         if(state->shuttingDown.load(std::memory_order_acquire)) {
@@ -601,7 +601,9 @@ public:
         }
 
         const auto shutdownToken = m_bridge->shutdownToken();
-        std::stop_callback shutdownWake{shutdownToken, [this]() { requestAbort(); }};
+        std::stop_callback shutdownWake{shutdownToken, [this]() {
+                                            requestAbort();
+                                        }};
         if(shutdownToken.stop_requested()) {
             playbackDiagnostic(*id, QStringLiteral("playback_prepare_failed"),
                                QStringLiteral("Playback is shutting down."));
