@@ -1,0 +1,79 @@
+name: Build
+
+# Reusable build: checks formatting, runs the sanitized deterministic suite, and packages a bundle.
+on:
+  workflow_call:
+    inputs:
+      upload_bundle:
+        description: Upload the packaged plugin bundle as an artifact
+        required: false
+        type: boolean
+        default: false
+      snapshot:
+        description: Append commit hash to version for snapshot packaging
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: Plugin version as recorded in the bundle manifest
+        value: ${{ jobs.build.outputs.version }}
+      bundle:
+        description: Name of the packaged plugin bundle
+        value: ${{ jobs.build.outputs.bundle }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      FOOYIN_VERSION: 0.15.0
+    outputs:
+      version: ${{ steps.bundle.outputs.version }}
+      bundle: ${{ steps.bundle.outputs.bundle }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: bash scripts/setup-ci.sh "${FOOYIN_VERSION}"
+
+      - name: Check format
+        run: |
+          set -euo pipefail
+          cmake --preset dev
+          cmake --build --preset format-check
+
+      - name: Run tests
+        run: |
+          set -euo pipefail
+          cmake --preset tests-sanitize
+          cmake --build --preset tests-sanitize
+          ctest --preset tests-ci --output-on-failure
+
+      - name: Package bundle
+        id: bundle
+        run: |
+          set -euo pipefail
+          suffix=""
+          if [ "${{ inputs.snapshot }}" = "true" ]; then
+            suffix=".${GITHUB_SHA::8}"
+          fi
+          cmake --preset release -DBANDCAMP_PLUGIN_VERSION_SUFFIX="$suffix"
+          cmake --build --preset release-bundle
+          version="$(jq -er .Version build/release/bandcamp.json)"
+          bundle="fooyin-bandcamp-${version}-linux-x64.fyplugin"
+          test -f "build/release/${bundle}"
+          {
+            echo "version=${version}"
+            echo "bundle=${bundle}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload bundle
+        if: inputs.upload_bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugin-bundle
+          path: build/release/${{ steps.bundle.outputs.bundle }}
+          if-no-files-found: error

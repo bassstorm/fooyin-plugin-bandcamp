@@ -1,0 +1,12 @@
+{
+    "Name": "Bandcamp",
+    "Version": "${BANDCAMP_PLUGIN_VERSION}",
+    "Author": "bassstorm",
+    "Copyright": "Copyright © 2026, Maksim Liauchuk <maksim_liauchuk@fastmail.fm>",
+    "License": [
+        "MIT License — Permissive use, modification, and distribution; provided “as is,” without warranty."
+    ],
+    "Category": "Online Services",
+    "Description": "Stream music from Bandcamp",
+    "Url": "https://github.com/bassstorm/fooyin-plugin-bandcamp"
+}

@@ -1,0 +1,14 @@
+{
+    "id": "fooyin",
+    "version": "1.2.0",
+    "name": "Fooyin",
+    "description": "Installs the official Fooyin SDK release archive and keeps a shallow source checkout",
+    "documentationURL": "https://github.com/bassstorm/fooyin-plugin-bandcamp/tree/main/.devcontainer",
+    "options": {
+        "version": {
+            "type": "string",
+            "default": "latest",
+            "description": "Fooyin release version to install (for example v0.15.0). 'latest' resolves to the newest GitHub release."
+        }
+    }
+}

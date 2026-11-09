@@ -1,0 +1,131 @@
+#pragma once
+
+#include "bandcampmodel.h"
+#include "bandcampoutcome.h"
+#include "bandcampparser.h"
+#include "bandcampsettings.h"
+#include "bandcampurl.h"
+
+#include <QHash>
+#include <QList>
+#include <QObject>
+#include <QSet>
+#include <QString>
+#include <QVector>
+#include <QtGlobal>
+
+#include <optional>
+
+namespace Fooyin::Bandcamp {
+using BandcampOperationId       = quint64;
+using BandcampResolutionOutcome = ResolutionOutcome<BandcampResolvedData>;
+
+class BandcampWorkflowSlots : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit BandcampWorkflowSlots(QObject* parent = nullptr);
+
+    [[nodiscard]] bool tryAcquire();
+    void release();
+
+signals:
+    void capacityAvailable();
+
+private:
+    int m_active{0};
+};
+
+struct BandcampReleaseRequest
+{
+    QString key;
+    BandcampPageUrl page;
+    // Album or track ID from a discography listing item; 0 when unknown until the page is parsed.
+    qint64 id{0};
+};
+
+struct BandcampListingRequest
+{
+    qsizetype inputOrdinal{0};
+    QUrl url;
+};
+
+struct BandcampAssociatedOutcome
+{
+    qsizetype ordinal{0};
+    BandcampPageUrl page;
+    BandcampResolutionOutcome outcome;
+};
+
+class BandcampOrchestrator
+{
+public:
+    explicit BandcampOrchestrator(const QList<BandcampPageUrl>& pages,
+                                  BandcampDiscographyOrder order = BandcampDiscographyOrder::Default);
+
+    [[nodiscard]] const QVector<BandcampReleaseRequest>& requests() const;
+    [[nodiscard]] qsizetype occurrenceCount() const;
+    [[nodiscard]] qsizetype deliveredCount() const;
+    [[nodiscard]] bool isDiscoveryComplete() const;
+    [[nodiscard]] bool isComplete() const;
+
+    std::optional<BandcampListingRequest> nextDiscography();
+    [[nodiscard]] std::optional<ResolutionError> beginListingPage(qsizetype inputOrdinal, const QUrl& url);
+    [[nodiscard]] std::optional<ResolutionError> appendListingBatch(qsizetype inputOrdinal,
+                                                                    const BandcampListingBatch& batch);
+    QVector<BandcampAssociatedOutcome> completeDiscography(qsizetype inputOrdinal);
+    QVector<BandcampAssociatedOutcome> failDiscography(qsizetype inputOrdinal,
+                                                       const BandcampResolutionOutcome& outcome);
+    QVector<BandcampAssociatedOutcome> associate(const QString& key, const BandcampResolutionOutcome& outcome);
+    QVector<BandcampAssociatedOutcome> cancelPending();
+
+private:
+    struct Occurrence
+    {
+        QString key;
+        BandcampPageUrl page;
+        qint64 expectedId{0};
+        std::optional<BandcampResolutionOutcome> immediateOutcome;
+    };
+
+    struct Group
+    {
+        BandcampPageUrl inputPage;
+        QVector<Occurrence> occurrences;
+        QVector<qsizetype> outputOrder;
+        QSet<QString> requestKeys;
+        QSet<QString> pendingKeys;
+        QSet<QString> seenListingPages;
+        QUrl requestedListingPage;
+        qsizetype nextOutput{0};
+        bool discography{false};
+        bool discoveryComplete{false};
+        bool orderPrepared{false};
+    };
+
+    QString addRequest(const BandcampPageUrl& page, qint64 id = 0);
+    void registerRequest(qsizetype groupIndex, const QString& key);
+    void removeGroupRequests(qsizetype groupIndex);
+    void recordOutcome(const QString& key, const BandcampResolutionOutcome& outcome);
+    const BandcampResolutionOutcome* outcomeRef(const Occurrence& occurrence) const;
+    std::optional<BandcampResolutionOutcome> outcomeFor(const Occurrence& occurrence) const;
+    BandcampResolutionOutcome validateListingIdentity(const Occurrence& occurrence,
+                                                      const BandcampResolutionOutcome& outcome) const;
+    QDate releaseDate(const BandcampResolutionOutcome& outcome) const;
+    QDate releaseDate(const Occurrence& occurrence) const;
+    QVector<BandcampAssociatedOutcome> drain();
+
+    QVector<BandcampReleaseRequest> m_requests;
+    QVector<Group> m_groups;
+    QSet<QString> m_requestKeys;
+    QHash<QString, BandcampResolutionOutcome> m_outcomes;
+    QHash<QString, QVector<qsizetype>> m_requestGroups;
+    BandcampDiscographyOrder m_order{BandcampDiscographyOrder::Default};
+    qsizetype m_occurrenceCount{0};
+    qsizetype m_pendingDiscoveries{0};
+    qsizetype m_nextDiscovery{0};
+    qsizetype m_nextGroup{0};
+    qsizetype m_delivered{0};
+};
+} // namespace Fooyin::Bandcamp

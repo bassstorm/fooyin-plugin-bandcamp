@@ -1,0 +1,408 @@
+#include "bandcampparser.h"
+#include "bandcampsettings.h"
+#include "bandcamptestpages.h"
+#include "bandcampurl.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QLoggingCategory>
+#include <QSettings>
+#include <QTemporaryDir>
+#include <QtTest>
+
+#include <cstdint>
+#include <iterator>
+#include <limits>
+#include <random>
+
+using namespace Qt::StringLiterals;
+using namespace Fooyin::Bandcamp;
+using namespace BandcampTestPages;
+
+namespace {
+const QUrl AlbumUrl{u"https://offland.bandcamp.com/album/parallels"_s};
+const QUrl TrackWithAlbumUrl{u"https://offland.bandcamp.com/track/caaa-baaa-aaa"_s};
+const QUrl StandaloneTrackUrl{u"https://ravver.bandcamp.com/track/burial-shutta-ravver-remix"_s};
+
+constexpr int DefaultMutationIterations = 10000;
+constexpr std::uint32_t MutationSeed    = 0x5EEDB4C5U;
+
+QByteArray sampleAlbumPage()
+{
+    return tralbumPage(
+        R"({"current":{"type":"album","title":"Parallels","id":1370929774,"art_id":339985870,)"
+        R"("release_date":"15 Jan 2016 00:00:00 GMT"},"artist":"Off Land","art_id":339985870,)"
+        R"("album_release_date":"15 Jan 2016 00:00:00 GMT","url":"https://offland.bandcamp.com/album/parallels",)"
+        R"("trackinfo":[)"
+        + streamEntry(R"("id":1,"title":"Ingressive","track_num":1,"duration":1142.62)") + ','
+        + streamEntry(R"("id":2,"title":"Crossing","track_num":2,"duration":300.5)") + ','
+        + streamEntry(R"("id":3,"title":"Parallels II","track_num":3,"duration":215)") + ','
+        + streamEntry(R"("id":4,"title":"Outro","track_num":4,"duration":61.25)") + "]}");
+}
+
+QByteArray sampleTrackWithAlbumPage()
+{
+    return tralbumPage(
+        R"({"current":{"type":"track","title":"Caaa Baaa Aaa","artist":"Off Land","id":2001,"art_id":339985870,)"
+        R"("track_number":1,"release_date":"15 Jan 2016 00:00:00 GMT"},)"
+        R"("album_url":"https://offland.bandcamp.com/album/caaa-baaa-aaa","artist":"Off Land","trackinfo":[)"
+        + streamEntry(R"("id":2001,"title":"Caaa Baaa Aaa","track_num":1,"duration":614.043)") + "]}");
+}
+
+QByteArray sampleStandaloneTrackPage()
+{
+    return tralbumPage(
+        R"j({"current":{"type":"track","title":"Burial - Shutta - (Ravver Remix)","artist":"Ravver","id":3001,)j"
+        R"j("track_number":null},"album_url":null,"trackinfo":[)j"
+        + streamEntry(R"j("id":3001,"title":"Burial - Shutta - (Ravver Remix)","track_num":null,"duration":183.429)j")
+        + "]}");
+}
+
+class UrlTests : public QObject
+{
+    Q_OBJECT
+
+private slots:
+    void acceptedUrls()
+    {
+        const auto discography = parseBandcampPageUrl(u"https://dither.bandcamp.com"_s);
+        QVERIFY(discography.isValid());
+        QCOMPARE(discography.kind, BandcampPageKind::Discography);
+        QCOMPARE(discography.url, u"https://dither.bandcamp.com/music"_s);
+
+        const auto album = parseBandcampPageUrl(u"  https://offland.bandcamp.com/album/parallels?from=x#y  "_s);
+        QVERIFY(album.isValid());
+        QCOMPARE(album.kind, BandcampPageKind::Album);
+        QCOMPARE(album.url, u"https://offland.bandcamp.com/album/parallels"_s);
+
+        const auto track = parseBandcampPageUrl(u"https://ravver.bandcamp.com/track/burial-shutta-ravver-remix"_s);
+        QVERIFY(track.isValid());
+        QCOMPARE(track.kind, BandcampPageKind::Track);
+
+        // Custom domains are real Bandcamp hosts, so they are accepted.
+        const auto custom = parseBandcampPageUrl(u"https://music.example.org/album/foo"_s);
+        QVERIFY(custom.isValid());
+        QCOMPARE(custom.kind, BandcampPageKind::Album);
+    }
+
+    void rejectedUrls()
+    {
+        QVERIFY(!parseBandcampPageUrl(u"not a url"_s).isValid());
+        QVERIFY(!parseBandcampPageUrl(u"https://example.com/foo"_s).isValid());
+        QVERIFY(!parseBandcampPageUrl(u"ftp://offland.bandcamp.com/album/parallels"_s).isValid());
+        QVERIFY(!parseBandcampPageUrl(u"https://user:pw@offland.bandcamp.com/album/parallels"_s).isValid());
+        QVERIFY(!parseBandcampPageUrl({}).isValid());
+        QVERIFY(!parseBandcampPageUrl(QString(3000, u'a')).isValid());
+    }
+};
+
+class MutationTests : public QObject
+{
+    Q_OBJECT
+
+private slots:
+    void truncatedPage()
+    {
+        const QByteArray body = sampleAlbumPage();
+        // Cut inside the data-tralbum attribute so the JSON is incomplete.
+        const qsizetype attr = body.indexOf("data-tralbum=");
+        QVERIFY(attr > 0);
+        QVERIFY(!isSuccess(parseReleasePage(body.left(attr + 200), AlbumUrl)));
+        QVERIFY(!isSuccess(parseReleasePage(body.left(attr + 13), AlbumUrl)));
+    }
+
+    void invalidJson()
+    {
+        QVERIFY(!isSuccess(parseReleasePage(tralbumPage(R"({"current":{"type":"album",)"), AlbumUrl)));
+        QVERIFY(!isSuccess(parseReleasePage(tralbumPage(R"([1,2,3])"), AlbumUrl)));
+    }
+
+    void mutatedPagesNeverCrash()
+    {
+        bool ok        = false;
+        int iterations = qEnvironmentVariableIntValue("BANDCAMP_MUTATION_ITERATIONS", &ok);
+        if(!ok || iterations <= 0) {
+            iterations = DefaultMutationIterations;
+        }
+
+        QLoggingCategory::setFilterRules(u"fy.bandcamp.*=false\nfy.trace.bandcamp.*=false"_s);
+
+        std::mt19937 rng(MutationSeed);
+        runAlbumMutations(sampleAlbumPage(), iterations, rng);
+        runTrackMutations(sampleTrackWithAlbumPage(), TrackWithAlbumUrl, iterations, rng);
+        runTrackMutations(sampleStandaloneTrackPage(), StandaloneTrackUrl, iterations, rng);
+
+        QLoggingCategory::setFilterRules({});
+    }
+
+private:
+    static QByteArray mutate(QByteArray data, std::mt19937& rng)
+    {
+        static const char* const Utf8Samples[] = {"\xC3\xA9", "\xF0\x9F\x8E\xB5", "\xED\xA0\x80", "\xFF", "\xE2\x82"};
+
+        const int count = 1 + static_cast<int>(rng() % 3U);
+        for(int m = 0; m < count && !data.isEmpty(); ++m) {
+            const auto pos = static_cast<qsizetype>(rng() % static_cast<std::uint32_t>(data.size()));
+            switch(rng() % 5U) {
+                case 0:
+                    data[pos] = static_cast<char>(rng() & 0xFFU);
+                    break;
+                case 1:
+                    data.truncate(pos);
+                    break;
+                case 2: {
+                    const auto length = static_cast<qsizetype>(1 + rng() % 64U);
+                    data.insert(pos, data.mid(pos, length));
+                    break;
+                }
+                case 3:
+                    data.insert(pos, QByteArray(1, '\0'));
+                    break;
+                default:
+                    data.insert(pos, Utf8Samples[rng() % std::size(Utf8Samples)]);
+                    break;
+            }
+        }
+        return data;
+    }
+
+    static void runAlbumMutations(const QByteArray& fixture, int iterations, std::mt19937& rng)
+    {
+        for(int i = 0; i < iterations; ++i) {
+            const auto result = parseReleasePage(mutate(fixture, rng), AlbumUrl);
+            if(!isSuccess(result)) {
+                continue;
+            }
+            const auto& release = std::get<ResolutionSuccess<ReleaseCandidate>>(result).value;
+            if(const auto* album = std::get_if<AlbumCandidate>(&release)) {
+                for(const auto& track : album->tracks) {
+                    QVERIFY2(!track.durationMs.isUsable()
+                                 || (track.durationMs.value >= 0 && track.durationMs.value <= MaxDurationMs),
+                             qPrintable(QStringLiteral("iteration %1").arg(i)));
+                }
+            }
+        }
+    }
+
+    static void runTrackMutations(const QByteArray& fixture, const QUrl& url, int iterations, std::mt19937& rng)
+    {
+        for(int i = 0; i < iterations; ++i) {
+            const auto result = parseReleasePage(mutate(fixture, rng), url);
+            if(!isSuccess(result)) {
+                continue;
+            }
+            const auto& release = std::get<ResolutionSuccess<ReleaseCandidate>>(result).value;
+            if(const auto* page = std::get_if<TrackPageCandidate>(&release)) {
+                QVERIFY2(!page->track.durationMs.isUsable()
+                             || (page->track.durationMs.value >= 0 && page->track.durationMs.value <= MaxDurationMs),
+                         qPrintable(QStringLiteral("iteration %1").arg(i)));
+            }
+        }
+    }
+};
+
+class SettingsTests : public QObject
+{
+    Q_OBJECT
+
+private slots:
+    void initTestCase()
+    {
+        QVERIFY(m_dir.isValid());
+    }
+
+    void defaultsWhenMissing()
+    {
+        QSettings settings(m_dir.filePath(u"missing.ini"_s), QSettings::IniFormat);
+        const auto values = loadBandcampSettings(settings);
+        QCOMPARE(values.parallelism, DefaultParallelism);
+        QCOMPARE(values.attemptTimeoutMs, DefaultAttemptTimeoutMs);
+        QCOMPARE(values.maxAttempts, DefaultAttemptsPerPage);
+        QCOMPARE(values.attemptCooldownMs, DefaultAttemptCooldownMs);
+        QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Default);
+        QCOMPARE(values.prePlaybackRefreshWindowMinutes, DefaultRefreshWindowMinutes);
+        QVERIFY(!values.probeStreamsOnImport);
+    }
+
+    void roundTrip()
+    {
+        const auto path = m_dir.filePath(u"roundtrip.ini"_s);
+        {
+            QSettings settings(path, QSettings::IniFormat);
+            saveBandcampSettings(
+                settings, {5, 25000, BandcampDiscographyOrder::Descending, MinRefreshWindowMinutes, 7, 1500, true});
+        }
+        QSettings settings(path, QSettings::IniFormat);
+        const auto values = loadBandcampSettings(settings);
+        QCOMPARE(values.parallelism, 5);
+        QCOMPARE(values.attemptTimeoutMs, 25000);
+        QCOMPARE(values.maxAttempts, 7);
+        QCOMPARE(values.attemptCooldownMs, 1500);
+        QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Descending);
+        QCOMPARE(values.prePlaybackRefreshWindowMinutes, MinRefreshWindowMinutes);
+        QVERIFY(values.probeStreamsOnImport);
+    }
+
+    void outOfRangeIsClamped()
+    {
+        QSettings settings(m_dir.filePath(u"clamp.ini"_s), QSettings::IniFormat);
+        settings.setValue(ParallelismKey, 0);
+        settings.setValue(AttemptTimeoutKey, 500);
+        settings.setValue(MaxAttemptsKey, 0);
+        settings.setValue(AttemptCooldownKey, -1);
+        settings.setValue(DiscographyOrderKey, -4);
+        settings.setValue(PrePlaybackRefreshWindowKey, -1);
+        auto low = loadBandcampSettings(settings);
+        QCOMPARE(low.parallelism, MinParallelism);
+        QCOMPARE(low.attemptTimeoutMs, MinAttemptTimeoutMs);
+        QCOMPARE(low.maxAttempts, MinAttemptsPerPage);
+        QCOMPARE(low.attemptCooldownMs, MinAttemptCooldownMs);
+        QCOMPARE(low.discographyOrder, BandcampDiscographyOrder::Default);
+        QCOMPARE(low.prePlaybackRefreshWindowMinutes, MinRefreshWindowMinutes);
+
+        settings.setValue(ParallelismKey, 99);
+        settings.setValue(AttemptTimeoutKey, 999999999999LL);
+        settings.setValue(MaxAttemptsKey, 99);
+        settings.setValue(AttemptCooldownKey, 999999999999LL);
+        settings.setValue(DiscographyOrderKey, 99);
+        settings.setValue(PrePlaybackRefreshWindowKey, 999999999999LL);
+        auto high = loadBandcampSettings(settings);
+        QCOMPARE(high.parallelism, MaxParallelism);
+        QCOMPARE(high.attemptTimeoutMs, MaxAttemptTimeoutMs);
+        QCOMPARE(high.maxAttempts, MaxAttemptsPerPage);
+        QCOMPARE(high.attemptCooldownMs, MaxAttemptCooldownMs);
+        QCOMPARE(high.discographyOrder, BandcampDiscographyOrder::Descending);
+        QCOMPARE(high.prePlaybackRefreshWindowMinutes, MaxRefreshWindowMinutes);
+    }
+
+    void nonNumericFallsBackToDefault()
+    {
+        QSettings settings(m_dir.filePath(u"junk.ini"_s), QSettings::IniFormat);
+        settings.setValue(ParallelismKey, u"many"_s);
+        settings.setValue(AttemptTimeoutKey, u""_s);
+        settings.setValue(MaxAttemptsKey, u"few"_s);
+        settings.setValue(AttemptCooldownKey, u"soon"_s);
+        settings.setValue(DiscographyOrderKey, u"later"_s);
+        settings.setValue(PrePlaybackRefreshWindowKey, u"never"_s);
+        settings.setValue(ProbeStreamsOnImportKey, u"sometimes"_s);
+        const auto values = loadBandcampSettings(settings);
+        QCOMPARE(values.parallelism, DefaultParallelism);
+        QCOMPARE(values.attemptTimeoutMs, DefaultAttemptTimeoutMs);
+        QCOMPARE(values.maxAttempts, DefaultAttemptsPerPage);
+        QCOMPARE(values.attemptCooldownMs, DefaultAttemptCooldownMs);
+        QCOMPARE(values.discographyOrder, BandcampDiscographyOrder::Default);
+        QVERIFY(!values.probeStreamsOnImport);
+        QCOMPARE(values.prePlaybackRefreshWindowMinutes, DefaultRefreshWindowMinutes);
+    }
+
+    void refreshWindowConversionAndOptionSnapshotAreBounded()
+    {
+        QCOMPARE(refreshWindowMilliseconds(0), 0);
+        QCOMPARE(refreshWindowMilliseconds(60), 3'600'000);
+        QCOMPARE(refreshWindowMilliseconds(MaxRefreshWindowMinutes), 86'400'000);
+        QCOMPARE(refreshWindowMilliseconds(-1), MinRefreshWindowMinutes * RefreshWindowMsPerMinute);
+        QCOMPARE(refreshWindowMilliseconds(std::numeric_limits<int>::max()),
+                 MaxRefreshWindowMinutes * RefreshWindowMsPerMinute);
+
+        OperationOptions options;
+        options.parallelism                = 99;
+        options.attemptTimeoutMs           = 1;
+        options.maxAttempts                = 0;
+        options.attemptCooldownMs          = -5;
+        options.discographyOrder           = static_cast<BandcampDiscographyOrder>(99);
+        options.prePlaybackRefreshWindowMs = std::numeric_limits<qint64>::max();
+        const OperationOptions snapshot    = clampOperationOptions(options);
+        QCOMPARE(snapshot.parallelism, MaxParallelism);
+        QCOMPARE(snapshot.attemptTimeoutMs, MinAttemptTimeoutMs);
+        QCOMPARE(snapshot.maxAttempts, MinAttemptsPerPage);
+        QCOMPARE(snapshot.attemptCooldownMs, MinAttemptCooldownMs);
+        QCOMPARE(snapshot.discographyOrder, BandcampDiscographyOrder::Default);
+        QCOMPARE(snapshot.prePlaybackRefreshWindowMs, MaxRefreshWindowMinutes * RefreshWindowMsPerMinute);
+
+        options.discographyOrder             = static_cast<BandcampDiscographyOrder>(-1);
+        options.prePlaybackRefreshWindowMs   = std::numeric_limits<qint64>::min();
+        const OperationOptions lowerSnapshot = clampOperationOptions(options);
+        QCOMPARE(lowerSnapshot.discographyOrder, BandcampDiscographyOrder::Default);
+        QCOMPARE(lowerSnapshot.prePlaybackRefreshWindowMs, MinRefreshWindowMinutes * RefreshWindowMsPerMinute);
+    }
+
+private:
+    QTemporaryDir m_dir{QDir::currentPath() + u"/bandcamp-settings-XXXXXX"_s};
+};
+} // namespace
+
+// Defined in bandcamppostprocessortests.cpp.
+int runPostProcessorTests(int argc, char** argv);
+// Defined in bandcampcontracttests.cpp.
+int runAttemptSupervisorTests(int argc, char** argv);
+int runContractTests(int argc, char** argv);
+// Defined in bandcampdiagnosticstests.cpp.
+int runDiagnosticsTests(int argc, char** argv);
+// Defined in bandcampclienttests.cpp.
+int runClientTests(int argc, char** argv);
+int runServiceTests(int argc, char** argv);
+int runOrchestratorTests(int argc, char** argv);
+int runParserTests(int argc, char** argv);
+int runFooyinTrackTests(int argc, char** argv);
+int runRefreshTests(int argc, char** argv);
+int runPlaybackTests(int argc, char** argv);
+int runImportPipelineTests(int argc, char** argv);
+
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+
+    if(argc >= 2) {
+        if(qstrcmp(argv[1], "--client-tests") == 0) {
+            return runClientTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--orchestrator-tests") == 0) {
+            return runOrchestratorTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--service-tests") == 0) {
+            return runServiceTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--parser-tests") == 0) {
+            return runParserTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--settings-tests") == 0) {
+            SettingsTests tests;
+            return QTest::qExec(&tests, argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--fooyin-track-tests") == 0) {
+            return runFooyinTrackTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--refresh-tests") == 0) {
+            return runRefreshTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--playback-tests") == 0) {
+            return runPlaybackTests(argc - 1, argv + 1);
+        }
+        if(qstrcmp(argv[1], "--import-pipeline-tests") == 0) {
+            return runImportPipelineTests(argc - 1, argv + 1);
+        }
+    }
+
+    int status = 0;
+    UrlTests url;
+    status |= QTest::qExec(&url, argc, argv);
+    status |= runPostProcessorTests(argc, argv);
+    status |= runParserTests(argc, argv);
+    MutationTests mutation;
+    status |= QTest::qExec(&mutation, argc, argv);
+    SettingsTests settings;
+    status |= QTest::qExec(&settings, argc, argv);
+    status |= runContractTests(argc, argv);
+    status |= runAttemptSupervisorTests(argc, argv);
+    status |= runDiagnosticsTests(argc, argv);
+    status |= runClientTests(argc, argv);
+    status |= runOrchestratorTests(argc, argv);
+    status |= runServiceTests(argc, argv);
+    status |= runFooyinTrackTests(argc, argv);
+    status |= runRefreshTests(argc, argv);
+    status |= runPlaybackTests(argc, argv);
+    status |= runImportPipelineTests(argc, argv);
+    return status;
+}
+
+#include "bandcamptests.moc"

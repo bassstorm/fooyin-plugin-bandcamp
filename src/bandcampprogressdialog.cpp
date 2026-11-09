@@ -1,0 +1,168 @@
+#include "bandcampprogressdialog.h"
+
+#include <QDialogButtonBox>
+#include <QLabel>
+#include <QMessageBox>
+#include <QPointer>
+#include <QProgressBar>
+#include <QPushButton>
+#include <QVBoxLayout>
+
+namespace Fooyin::Bandcamp {
+BandcampProgressDialog::BandcampProgressDialog(BandcampDialogMode mode, QWidget* parent)
+    : QDialog{parent}
+    , m_mode{mode}
+    , m_status{new QLabel(mode == BandcampDialogMode::Refresh ? tr("Starting Bandcamp stream refresh…")
+                                                              : tr("Starting Bandcamp import…"),
+                          this)}
+    , m_progress{new QProgressBar(this)}
+    , m_buttons{new QDialogButtonBox(QDialogButtonBox::Cancel, this)}
+{
+    setWindowTitle(mode == BandcampDialogMode::Refresh ? tr("Bandcamp Stream Refresh") : tr("Bandcamp Import"));
+    setMinimumWidth(420);
+    m_status->setWordWrap(true);
+    m_status->setTextFormat(Qt::PlainText);
+    m_progress->setRange(0, 0);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->addWidget(m_status);
+    layout->addWidget(m_progress);
+    layout->addWidget(m_buttons);
+
+    QObject::connect(m_buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+}
+
+void BandcampProgressDialog::updateRefreshProgress(const BandcampOperationProgress& progress)
+{
+    BandcampImportProgress importProgress;
+    importProgress.operationId   = progress.operationId;
+    importProgress.requested     = progress.requested;
+    importProgress.delivered     = progress.delivered;
+    importProgress.active        = progress.active;
+    importProgress.completedWork = progress.completedWork;
+    importProgress.totalWork     = progress.totalWork;
+    switch(progress.phase) {
+        case BandcampOperationPhase::Discovering:
+            importProgress.phase = BandcampImportPhase::Discovering;
+            break;
+        case BandcampOperationPhase::Resolving:
+            importProgress.phase = BandcampImportPhase::Resolving;
+            break;
+        case BandcampOperationPhase::Finished:
+            importProgress.phase = BandcampImportPhase::Finished;
+            break;
+    }
+    updateProgress(importProgress);
+}
+
+void BandcampProgressDialog::updateProgress(const BandcampImportProgress& progress)
+{
+    const int percent = progress.totalWork <= 0
+                          ? 0
+                          : (progress.completedWork >= progress.totalWork
+                                 ? 100
+                                 : qMin(99, static_cast<int>(100.0L * progress.completedWork / progress.totalWork)));
+    switch(progress.phase) {
+        case BandcampImportPhase::Discovering:
+            m_status->setText(tr("Discovering releases…"));
+            m_progress->setRange(0, 0);
+            break;
+        case BandcampImportPhase::Resolving:
+            if(progress.totalWork == 0) {
+                m_status->setText(m_mode == BandcampDialogMode::Import ? tr("No releases to import.")
+                                                                       : tr("No releases to resolve."));
+                m_progress->setRange(0, 0);
+                m_progress->hide();
+                break;
+            }
+            m_progress->show();
+            m_progress->setRange(0, 100);
+            m_progress->setValue(percent);
+            m_status->setText(tr("Resolving releases… %1 of %2").arg(progress.completedWork).arg(progress.totalWork));
+            break;
+        case BandcampImportPhase::Probing:
+            m_progress->show();
+            m_progress->setRange(0, 100);
+            m_progress->setValue(percent);
+            m_status->setText(tr("Importing releases… %1 of %2").arg(progress.completedWork).arg(progress.totalWork));
+            break;
+        case BandcampImportPhase::Committing:
+        case BandcampImportPhase::Finished:
+            if(m_mode == BandcampDialogMode::Refresh) {
+                m_status->setText(tr("Finishing stream updates…"));
+                m_progress->setRange(0, 0);
+                break;
+            }
+            if(progress.totalWork == 0) {
+                m_status->setText(tr("No releases to import."));
+                m_progress->hide();
+                break;
+            }
+            m_progress->show();
+            m_progress->setRange(0, 100);
+            m_progress->setValue(percent);
+            m_status->setText(
+                tr("Adding releases to the playlist… %1 of %2").arg(progress.completedWork).arg(progress.totalWork));
+            break;
+    }
+}
+
+void BandcampProgressDialog::reject()
+{
+    if(!m_running) {
+        QDialog::reject();
+        return;
+    }
+
+    const QPointer<BandcampProgressDialog> guard{this};
+    const auto answer
+        = QMessageBox::question(this, windowTitle(),
+                                m_mode == BandcampDialogMode::Refresh ? tr("Cancel the running stream refresh?")
+                                                                      : tr("Cancel the running import?"),
+                                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if(guard && answer == QMessageBox::Yes) {
+        QDialog::reject();
+    }
+}
+
+void BandcampProgressDialog::finishRefresh(const BandcampRefreshSummary& summary)
+{
+    m_running = false;
+    m_status->setText(tr("Refresh finished (unique selected Bandcamp tracks): %1 updated, %2 unchanged, "
+                         "%3 failed, %4 cancelled.")
+                          .arg(summary.updated)
+                          .arg(summary.unchanged)
+                          .arg(summary.failed)
+                          .arg(summary.cancelled));
+    m_progress->hide();
+    m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Close"));
+}
+
+void BandcampProgressDialog::showIntegrationError(const QString& reason)
+{
+    m_status->setText(tr("Import stopped: %1").arg(reason));
+}
+
+void BandcampProgressDialog::finish(const BandcampImportSummary& summary)
+{
+    m_running    = false;
+    QString text = tr("Import finished: %1 added, %2 failed, %3 cancelled.")
+                       .arg(summary.added)
+                       .arg(summary.failed)
+                       .arg(summary.cancelled);
+    if(!summary.stopReason.isEmpty()) {
+        text += u'\n' + tr("Stopped: %1").arg(summary.stopReason);
+    }
+    m_status->setText(text);
+    m_progress->hide();
+    m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Close"));
+}
+
+void BandcampProgressDialog::showRejection(const ResolutionError& error)
+{
+    m_running = false;
+    m_status->setText(tr("Import could not start: %1").arg(error.reason));
+    m_progress->hide();
+    m_buttons->button(QDialogButtonBox::Cancel)->setText(tr("Close"));
+}
+} // namespace Fooyin::Bandcamp

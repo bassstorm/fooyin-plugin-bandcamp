@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  # Lets the release workflow rebuild the snapshot after its version-bump push,
+  # which does not trigger `push` workflows by itself.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+    with:
+      upload_bundle: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+      snapshot: true
+
+  publish-snapshot:
+    name: Publish snapshot
+    needs: build
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.build.outputs.version }}
+      BUNDLE: ${{ needs.build.outputs.bundle }}
+
+    steps:
+      - name: Download bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: plugin-bundle
+          path: dist
+
+      - name: Update snapshot pre-release
+        run: |
+          set -euo pipefail
+          bundle="dist/${BUNDLE}"
+          test -f "$bundle"
+          title="Snapshot ${VERSION}"
+          notes="Development build of ${GITHUB_SHA} from \`${GITHUB_REF_NAME}\`. It is updated on every push; use a versioned release for regular use."
+
+          if ! gh release view snapshot >/dev/null 2>&1; then
+            gh release create snapshot "$bundle" --prerelease --latest=false \
+              --target "$GITHUB_SHA" --title "$title" --notes "$notes"
+          else
+            gh release upload snapshot "$bundle" --clobber
+            gh api --method PATCH "repos/${GH_REPO}/git/refs/tags/snapshot" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release edit snapshot --title "$title" --notes "$notes"
+            gh release view snapshot --json assets --jq '.assets[].name' |
+              while IFS= read -r asset; do
+                if [ "$asset" != "$(basename "$bundle")" ]; then
+                  gh release delete-asset snapshot "$asset" --yes
+                fi
+              done
+          fi

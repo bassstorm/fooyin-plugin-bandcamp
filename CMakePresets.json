@@ -1,0 +1,123 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "common",
+      "hidden": true,
+      "generator": "Ninja"
+    },
+    {
+      "name": "dev",
+      "displayName": "Development build",
+      "binaryDir": "${sourceDir}/build",
+      "inherits": [ "common" ]
+    },
+    {
+      "name": "tests",
+      "displayName": "Deterministic and live tests",
+      "binaryDir": "${sourceDir}/build-tests",
+      "cacheVariables": {
+        "BANDCAMP_PLUGIN_BUILD_TESTS": "ON"
+      },
+      "inherits": [ "common" ]
+    },
+    {
+      "name": "tests-sanitize",
+      "displayName": "Deterministic and live tests with AddressSanitizer and UndefinedBehaviorSanitizer",
+      "binaryDir": "${sourceDir}/build-sanitize",
+      "cacheVariables": {
+        "BANDCAMP_PLUGIN_SANITIZE": "ON"
+      },
+      "inherits": [ "tests" ]
+    },
+    {
+      "name": "release",
+      "displayName": "Release build",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "inherits": [ "common" ]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "format",
+      "configurePreset": "dev",
+      "targets": [ "clang-format" ]
+    },
+    {
+      "name": "format-check",
+      "configurePreset": "dev",
+      "targets": [ "clang-format-check" ]
+    },
+    {
+      "name": "tests",
+      "configurePreset": "tests",
+      "targets": [ "bandcamp_deterministic_tests", "bandcamp_live_tests", "bandcamp_plugin_input_tests", "bandcamp_progress_dialog_tests" ]
+    },
+    {
+      "name": "tests-sanitize",
+      "configurePreset": "tests-sanitize",
+      "targets": [ "bandcamp_deterministic_tests", "bandcamp_live_tests", "bandcamp_plugin_input_tests", "bandcamp_progress_dialog_tests" ]
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "release-bundle",
+      "configurePreset": "release",
+      "targets": [ "package_plugin" ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "tests",
+      "configurePreset": "tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tests-sanitize",
+      "configurePreset": "tests-sanitize",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tests-ci",
+      "configurePreset": "tests-sanitize",
+      "filter": {
+        "exclude": {
+          "label": "^live$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tests-live",
+      "configurePreset": "tests",
+      "filter": {
+        "include": {
+          "label": "^live$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
