@@ -16,7 +16,7 @@ set(BANDCAMP_PLUGIN_VERSION_SUFFIX "" CACHE STRING "Suffix appended to the proje
 set(BANDCAMP_PLUGIN_VERSION "${PROJECT_VERSION}${BANDCAMP_PLUGIN_VERSION_SUFFIX}")
 
 find_package(Fooyin REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Core Network Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Widgets)
 
 # Sanitizer flags are an interface target so every consumer of the core
 # library is instrumented and linked against the sanitizer runtime.
@@ -93,7 +93,7 @@ add_library(bandcamp_fooyin STATIC
 )
 target_include_directories(bandcamp_fooyin PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(bandcamp_fooyin
-    PUBLIC bandcamp_core Fooyin::Core Qt6::Core Qt6::Widgets bandcamp_sanitize
+    PUBLIC bandcamp_core Fooyin::Core Qt6::Core Qt6::Gui Qt6::Widgets bandcamp_sanitize
 )
 
 create_fooyin_plugin(

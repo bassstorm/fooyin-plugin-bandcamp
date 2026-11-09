@@ -8,6 +8,7 @@
 #include <core/trackmetadatastore.h>
 
 #include <QHash>
+#include <QStringList>
 
 #include <memory>
 #include <optional>
@@ -89,4 +90,6 @@ void setBandcampTransport(Fooyin::Track& track, const BandcampTrack& source);
 [[nodiscard]] std::optional<qint64> bandcampStreamExpiryMs(const QString& streamUrl);
 [[nodiscard]] BandcampPersistedTransportResult readBandcampPersistedTransport(const Fooyin::Track& track, qint64 id);
 [[nodiscard]] bool bandcampRefreshNeeded(BandcampStreamExpiry expiry, qint64 nowMs, qint64 windowMs);
+[[nodiscard]] std::optional<QString> bandcampReleaseUrl(const Fooyin::Track& track);
+[[nodiscard]] QStringList bandcampReleaseUrls(const Fooyin::TrackList& tracks);
 } // namespace Fooyin::Bandcamp

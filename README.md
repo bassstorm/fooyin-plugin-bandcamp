@@ -10,6 +10,8 @@ Stream music from Bandcamp in [Fooyin](https://www.fooyin.org/).
 - **Direct streaming & link refresh**: Stream tracks directly in Fooyin.
   Expiring stream links are refreshed automatically before playback, or on
   demand from the track context menu.
+- **Open on Bandcamp**: Open the release pages of selected tracks in your
+  browser. Buying on Bandcamp is one of the best ways to support artists.
 - **Metadata cleanup & refinement**: Automatically cleans up noisy Bandcamp
   tags—stripping redundant artist prefixes from titles, filling in missing
   artist names and release dates, and fixing broken track numbers—while

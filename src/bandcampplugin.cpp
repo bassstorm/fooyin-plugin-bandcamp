@@ -1,6 +1,7 @@
 #include "bandcampplugin.h"
 
 #include "bandcampdiagnostics.h"
+#include "bandcampfooyintrack.h"
 #include "bandcampimportcontroller.h"
 #include "bandcamplogging.h"
 #include "bandcampprogressdialog.h"
@@ -29,9 +30,11 @@
 
 #include <QAction>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMessageBox>
+#include <QUrl>
 
 #include <utility>
 
@@ -47,6 +50,22 @@ protected:
         return new BandcampSettingsDialog(parent);
     }
 };
+
+void openReleasePages(const QStringList& urls)
+{
+    int failed{0};
+    for(const QString& url : urls) {
+        if(!QDesktopServices::openUrl(QUrl{url})) {
+            ++failed;
+            qCWarning(BANDCAMP_UI).noquote() << formatTraceEvent(CorrelationContext{.resourceUrl = QUrl{url}},
+                                                                 QStringLiteral("open_release_failed"), {});
+        }
+    }
+    qCInfo(BANDCAMP_UI).noquote() << formatTraceEvent(
+        CorrelationContext{}, QStringLiteral("open_release_pages_completed"),
+        {DiagnosticField::number(QStringLiteral("requested"), urls.size()),
+         DiagnosticField::number(QStringLiteral("failed"), failed)});
+}
 } // namespace
 
 void BandcampPlugin::initialise(const CorePluginContext& context)
@@ -156,22 +175,34 @@ void BandcampPlugin::initialise(const GuiPluginContext& context)
 
     QObject::connect(addUrlAction, &QAction::triggered, this, &BandcampPlugin::showAddUrlDialog);
     if(context.trackSelection) {
-        const bool registered = context.trackSelection->registerTrackContextAction(
-            this, TrackContextMenuArea::Track, Constants::Menus::Context::TrackSelection, "Bandcamp.RefreshStreams",
-            tr("Refresh Bandcamp streams"),
-            [this](QMenu* menu, const Fooyin::TrackSelection& selection) {
-                auto* action = menu->addAction(tr("Refresh Bandcamp streams"));
-                action->setEnabled(hasSelectedBandcampTracks(selection.tracks));
-                connect(action, &QAction::triggered, this,
-                        [this, tracks = selection.tracks]() { refreshSelectedTracks(tracks); });
-            },
-            Constants::Menus::Context::TrackFinalSeparator);
+        TrackSelectionController* trackSelection = context.trackSelection;
+        const bool registered
+            = trackSelection->registerTrackContextSubmenu(
+                  this, TrackContextMenuArea::Track, Constants::Menus::Context::TrackSelection, "Bandcamp.Menu",
+                  tr("Bandcamp"), Constants::Menus::Context::TrackFinalSeparator)
+           && trackSelection->registerTrackContextAction(
+               this, TrackContextMenuArea::Track, "Bandcamp.Menu", "Bandcamp.RefreshStreams", tr("Refresh"),
+               [this](QMenu* menu, const Fooyin::TrackSelection& selection) {
+                   auto* action = menu->addAction(tr("Refresh"));
+                   action->setEnabled(hasSelectedBandcampTracks(selection.tracks));
+                   connect(action, &QAction::triggered, this,
+                           [this, tracks = selection.tracks]() { refreshSelectedTracks(tracks); });
+               })
+           && trackSelection->registerTrackContextAction(
+               this, TrackContextMenuArea::Track, "Bandcamp.Menu", "Bandcamp.OpenInBrowser", tr("Open in browser"),
+               [](QMenu* menu, const Fooyin::TrackSelection& selection) {
+                   const QStringList urls = bandcampReleaseUrls(selection.tracks);
+                   auto* action           = menu->addAction(tr("Open in browser"));
+                   action->setEnabled(!urls.isEmpty());
+                   QObject::connect(action, &QAction::triggered, menu, [urls]() { openReleasePages(urls); });
+               });
         if(!registered) {
-            qCWarning(BANDCAMP_UI) << "Failed to register the Bandcamp stream refresh track context action";
+            qCWarning(BANDCAMP_UI) << "Failed to register the Bandcamp track context menu";
         }
     }
     else {
-        qCWarning(BANDCAMP_UI) << "Track selection controller unavailable; stream refresh action was not registered";
+        qCWarning(BANDCAMP_UI)
+            << "Track selection controller unavailable; Bandcamp track context menu was not registered";
     }
 }
 

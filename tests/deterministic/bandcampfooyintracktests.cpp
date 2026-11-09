@@ -415,6 +415,7 @@ private slots:
     void cancellationDuringPlaylistCreationDoesNotInsert();
     void cancellationDuringInsertionDefersSummaryAndCountsAcceptedBlock();
     void deletingControllerFromIntegrationErrorWithdrawsResolution();
+    void resolvesUniqueBandcampReleaseUrls();
 };
 
 void FooyinTrackTests::canonicalTrackUriRoundTrips()
@@ -2256,6 +2257,27 @@ void FooyinTrackTests::deletingControllerFromIntegrationErrorWithdrawsResolution
     QVERIFY(!finished);
     QCOMPARE(playlists.createCalls, 0);
     QVERIFY(playlists.blocks.isEmpty());
+}
+
+void FooyinTrackTests::resolvesUniqueBandcampReleaseUrls()
+{
+    Fooyin::Track local;
+    local.setFilePath(u"/music/local.flac"_s);
+
+    Fooyin::Track nonCanonical = project(standaloneTrack(44));
+    nonCanonical.setExtraProperty(BandcampSourceUrlProperty, u"https://artist.bandcamp.com/album/parent?utm=x"_s);
+
+    Fooyin::Track foreignPath = project(standaloneTrack(46));
+    foreignPath.setFilePath(u"/music/copied.flac"_s);
+
+    QVERIFY(!bandcampReleaseUrl(local).has_value());
+    QVERIFY(!bandcampReleaseUrl(nonCanonical).has_value());
+    QVERIFY(!bandcampReleaseUrl(foreignPath).has_value());
+
+    const Fooyin::TrackList tracks{project(memberTrack(42)),     local,
+                                   project(memberTrack(43)),     nonCanonical,
+                                   project(standaloneTrack(45)), project(memberTrack(46))};
+    QCOMPARE(bandcampReleaseUrls(tracks), (QStringList{AlbumSource, TrackSource}));
 }
 
 int runFooyinTrackTests(int argc, char** argv)

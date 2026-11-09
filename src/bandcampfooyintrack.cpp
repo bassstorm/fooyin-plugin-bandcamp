@@ -18,6 +18,15 @@ int sourceBitDepth(const QString& encoding, int depth)
     // Lossy decoders report PCM precision, not a source bit depth.
     return encoding == u"Lossy"_s ? -1 : depth;
 }
+
+std::optional<BandcampPageUrl> canonicalReleaseSource(const QString& text)
+{
+    auto source = parseBandcampPageUrl(text);
+    if(!source.isValid() || source.kind == BandcampPageKind::Discography || source.url != text) {
+        return std::nullopt;
+    }
+    return source;
+}
 } // namespace
 
 BandcampResolvedTrackLookup::BandcampResolvedTrackLookup(const BandcampResolvedData& data)
@@ -197,9 +206,8 @@ BandcampPersistedTransportResult readBandcampPersistedTransport(const Fooyin::Tr
         return BandcampTransportFailure{
             QStringLiteral("The selected track has inconsistent Bandcamp identity or provider state.")};
     }
-    const QString sourceText = properties.value(BandcampSourceUrlProperty);
-    const auto source        = parseBandcampPageUrl(sourceText);
-    if(!source.isValid() || source.kind == BandcampPageKind::Discography || source.url != sourceText) {
+    const auto source = canonicalReleaseSource(properties.value(BandcampSourceUrlProperty));
+    if(!source) {
         return BandcampTransportFailure{QStringLiteral("The selected track has no canonical release source.")};
     }
     const QString streamText = properties.value(BandcampStreamUrlProperty);
@@ -220,12 +228,38 @@ BandcampPersistedTransportResult readBandcampPersistedTransport(const Fooyin::Tr
             expiry.state = BandcampExpiryState::Invalid;
         }
     }
-    return BandcampPersistedTransport{source, streamText, expiry};
+    return BandcampPersistedTransport{*source, streamText, expiry};
 }
 
 bool bandcampRefreshNeeded(BandcampStreamExpiry expiry, qint64 nowMs, qint64 windowMs)
 {
     return expiry.state != BandcampExpiryState::Valid || expiry.milliseconds <= nowMs
         || expiry.milliseconds - nowMs < windowMs;
+}
+
+std::optional<QString> bandcampReleaseUrl(const Fooyin::Track& track)
+{
+    if(!parseBandcampTrackUri(track.filepath())) {
+        return std::nullopt;
+    }
+    const auto source = canonicalReleaseSource(track.extraProperties().value(BandcampSourceUrlProperty));
+    if(!source) {
+        return std::nullopt;
+    }
+    return source->url;
+}
+
+QStringList bandcampReleaseUrls(const Fooyin::TrackList& tracks)
+{
+    QStringList urls;
+    QSet<QString> seen;
+    for(const Fooyin::Track& track : tracks) {
+        const auto url = bandcampReleaseUrl(track);
+        if(url && !seen.contains(*url)) {
+            seen.insert(*url);
+            urls.append(*url);
+        }
+    }
+    return urls;
 }
 } // namespace Fooyin::Bandcamp
