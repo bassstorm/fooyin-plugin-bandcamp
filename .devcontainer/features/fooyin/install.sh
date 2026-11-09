@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Installs Fooyin at the requested ref to /usr/local, where find_package(Fooyin) finds it
-# without Fooyin_ROOT. Build dependencies come from that ref's ci/ubuntu-depends.sh, so no
-# package list is kept here. The source clone stays at SRC_DIR to read Fooyin code.
 set -eu
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -9,47 +6,42 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-REQUESTED="${VERSION:-latest}"
-REPO_URL="https://github.com/fooyin/fooyin.git"
+VERSION="${VERSION:-latest}"
 SRC_DIR="/usr/local/src/fooyin"
 
-if [ "$REQUESTED" = "latest" ]; then
-    REF="$(curl -fsSL https://api.github.com/repos/fooyin/fooyin/releases/latest \
-        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')"
-    if [ -z "$REF" ]; then
-        echo "Could not resolve the latest Fooyin release." >&2
-        exit 1
-    fi
+apt-get update
+apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build pkg-config ca-certificates curl git xz-utils jq \
+    qt6-base-dev libqt6svg6 libqt6sql6-sqlite \
+    libavcodec60 libavfilter9 libavformat60 libavutil58 libswresample4 \
+    libicu74 libtag1v5 libarchive13t64 zlib1g libqcoro6core0t64 libqcoro6network0t64
+
+if [ "$VERSION" = "latest" ]; then
+    RELEASE_DATA="$(curl -fsSL https://api.github.com/repos/fooyin/fooyin/releases/latest)"
+    TAG="$(printf '%s' "$RELEASE_DATA" | jq -er .tag_name)"
+    VER="${TAG#v}"
 else
-    REF="$REQUESTED"
+    TAG="v${VERSION#v}"
+    VER="${VERSION#v}"
+    RELEASE_DATA="$(curl -fsSL "https://api.github.com/repos/fooyin/fooyin/releases/tags/${TAG}")"
 fi
 
-echo "Building Fooyin ${REF}"
-
-BUILD_DIR="$(mktemp -d)"
-trap 'rm -rf "$BUILD_DIR"' EXIT
+SDK_URL="$(printf '%s' "$RELEASE_DATA" | jq -er '.assets[] | select(.name | test("^fooyin-sdk-.*-linux-x64.*\\.tar\\.xz$")) | .browser_download_url')"
+SDK_ARCHIVE="/tmp/fooyin-sdk-${VER}.tar.xz"
+trap 'rm -f "$SDK_ARCHIVE"; rm -rf /var/lib/apt/lists/*' EXIT
 
 export GIT_TERMINAL_PROMPT=0
 rm -rf "$SRC_DIR"
 mkdir -p "$(dirname "$SRC_DIR")"
-git clone --depth 1 --branch "$REF" --recurse-submodules --shallow-submodules \
-    "$REPO_URL" "$SRC_DIR"
+git clone --depth 1 --branch "$TAG" "https://github.com/fooyin/fooyin.git" "$SRC_DIR"
 chmod -R a+rX "$SRC_DIR"
 
-(cd "$SRC_DIR" && bash ci/ubuntu-depends.sh)
+curl -fsSL "$SDK_URL" -o "$SDK_ARCHIVE"
+tar -xJf "$SDK_ARCHIVE" -C /usr/local --strip-components=1
 
-cmake -S "$SRC_DIR" -B "$BUILD_DIR" -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DINSTALL_HEADERS=ON \
-    -DBUILD_PLUGINS=OFF \
-    -DBUILD_TRANSLATIONS=OFF \
-    -DBUILD_ALSA=OFF \
-    -DBUILD_TESTING=OFF
-
-cmake --build "$BUILD_DIR" --parallel "$(nproc)"
-cmake --install "$BUILD_DIR"
+printf '%s\n' /usr/local/lib/fooyin > /etc/ld.so.conf.d/fooyin.conf
 ldconfig
+rm -f "$SDK_ARCHIVE"
 rm -rf /var/lib/apt/lists/*
 
-echo "Installed Fooyin ${REF} to /usr/local (source kept in ${SRC_DIR})"
+echo "Installed Fooyin ${TAG} SDK to /usr/local (source kept in ${SRC_DIR})"

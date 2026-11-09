@@ -25,16 +25,17 @@ Download the `.fyplugin` bundle from a release, then install it in Fooyin via
 **Settings → Plugins → Install…** and select the file.
 
 > [NOTE]
-> Currently only `linux-x64` is officially supported. It is the only platform
-> that is actively used and tested.
+> Requires a Fooyin release compatible with plugin interface
+> `org.fooyin.fooyin.plugin/2`. Currently only `linux-x64` is officially
+> supported; it is the only platform that is actively used and tested.
 
 ## Building from source
 
 ### Requirements
 
-- CMake 3.21 or newer and a C++23 compiler.
-- Qt 6 development files: Core and Network.
-- Fooyin development files (set `Fooyin_ROOT` if not installed system-wide).
+- CMake 3.21 or newer, Ninja, and a C++23 compiler.
+- Qt 6 development files: Core, Network, and Widgets.
+- A compatible Fooyin SDK (set `Fooyin_ROOT` if it is not installed system-wide).
 
 ### Build
 

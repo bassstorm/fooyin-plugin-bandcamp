@@ -1,6 +1,6 @@
 {
     "id": "clang-format",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "name": "clang-format",
     "description": "Installs the clang-format release used by the repository's formatting targets and CI",
     "documentationURL": "https://github.com/bassstorm/fooyin-plugin-bandcamp/tree/main/.devcontainer"
