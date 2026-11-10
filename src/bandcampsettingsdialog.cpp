@@ -31,7 +31,7 @@ BandcampSettingsDialog::BandcampSettingsDialog(QWidget* parent)
 
     auto* orderLabel = new QLabel(tr("Discography order") + u":"_s, this);
     m_discographyOrder->addItems({tr("Default"), tr("Unsorted"), tr("Ascending"), tr("Descending")});
-    m_discographyOrder->setToolTip(tr("Default currently uses the unsorted listing order"));
+    m_discographyOrder->setToolTip(tr("Release order by date when resolving discography."));
 
     auto* refreshLabel = new QLabel(tr("Stream refresh window") + u":"_s, this);
     m_refreshWindow->setRange(MinRefreshWindowMinutes, MaxRefreshWindowMinutes);
